@@ -61,20 +61,22 @@ Agent: 3 relevant memories (4ms):
        3. User prefers passport.js over custom auth
 ```
 
-**Facts stay current.** When something changes — you moved cities, your
-project switched frameworks, your 5K time improved — the agent tracks
-the update and knows which version is current. Old facts aren't deleted;
-they're linked in a version chain so the agent can see the full history.
+**Facts stay current.** When a new memory is similar to an existing one
+but the content has changed — your 5K time improved, you moved cities,
+the project switched frameworks — the engine detects the overlap via
+embedding similarity, marks the old version superseded, and links them
+in a chain. The agent sees both but knows which is current.
+([How version detection works →](docs/plans/semantic-memory-engine.md#3-version-chains-for-knowledge-updates))
 
-How it works:
-- Hybrid retrieval: vector similarity + keyword search, fused with
-  reciprocal rank fusion
-- Local embeddings (bge-base-en-v1.5, 768d) — ~5ms recall, runs on CPU
-- Version chains for knowledge updates, temporal indexing for event dates
-- Structured user profile (7 categories) updated by agents and background
-  consolidation
-- Human-readable markdown exports alongside the database — you can
-  always inspect and edit what the system knows
+Under the hood:
+- **Hybrid retrieval** — vector similarity + keyword search, merged
+  with [reciprocal rank fusion](https://plg.uwaterloo.ca/~gvcormac/cormacksigir09-rrf.pdf)
+- **Local embeddings** — bge-base-en-v1.5 (768d), runs on CPU, ~5ms
+  per recall
+- **Version chains** — similarity ≥ 0.80 with different content
+  triggers an update link. Old facts stay accessible but ranked lower
+- **Human-readable exports** — structured profile and project knowledge
+  are always inspectable as markdown alongside the database
 
 [Architecture →](docs/plans/semantic-memory-engine.md) ·
 [Three-tier design →](docs/three-tier-memory.md)

@@ -1981,9 +1981,8 @@ async function main() {
   backend.onEvent((ev: BackendEvent) => {
     switch (ev.type) {
       case 'chat_delta': {
-        // Clear any running animations
+        // Clear thinking animation (but keep rowing — it stops on chat_complete)
         if ((S as any)._thinkInterval) { clearInterval((S as any)._thinkInterval); (S as any)._thinkInterval = null }
-        stopRowingAnimation()
         // If streamingMd was finalized (tool use turn), start a new one for post-tool response
         if (!streamingMd) {
           S.buf = []  // Reset buffer — previous text is already in the finalized MD
@@ -2038,7 +2037,8 @@ async function main() {
         // Show rowing animation in the activity indicator (above input bar)
         startRowingAnimation(tc)
         ;(S as any)._currentToolColor = tc
-        rebuildView(); break
+        scrollToBottom()
+        break
       }
       case 'tool_result': {
         // Don't stop animation — keep rowing between tool result and next API call
@@ -2063,7 +2063,8 @@ async function main() {
           resultParts.push(t`${dim(fg(tc.fg)(bg(tc.bg)(moreLine.slice(0, w))))}`)
         }
         addToolBlock(joinStyled(...resultParts))
-        renderer.requestRender(); break
+        scrollToBottom()
+        break
       }
       case 'turn_complete':
         // Keep rowing if more turns coming (tool_use means another API call follows)
