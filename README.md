@@ -28,6 +28,35 @@ You re-explain context every time. Charon is different:
 
 ---
 
+## Session Grid & Agent Bridge
+
+<!-- TODO: screenshot of session grid -->
+
+Run agents from any framework — Hermes, pi, your own — and manage them
+all from one terminal. Charon's Boat wraps any agent in a tmux session
+and registers it with the session grid:
+
+```bash
+charons-boat wrap -- hermes           # wrap hermes
+charons-boat wrap --name review -- pi # wrap pi-agent
+```
+
+Every wrapped agent appears in the session grid (F3). Monitor status,
+switch between agents, see what's running across projects.
+
+**Memory bridge** — Charon can import memory from compatible agents.
+Hermes uses the same `§`-delimited markdown format for `MEMORY.md` and
+`USER.md`, and stores sessions in SQLite with FTS5. A Hermes agent's
+accumulated knowledge can be indexed into Charon's semantic memory,
+making it searchable alongside native Charon conversations.
+
+> **Coming next:** Real-time tmux capture in the session grid, visual
+> notifications when any agent needs approval or intervention, and
+> remote agent connectivity so you can monitor agents running on other
+> machines from one Charon instance.
+
+---
+
 ## Screenshots
 
 <!-- TODO: Replace with actual screenshots of the three views -->
