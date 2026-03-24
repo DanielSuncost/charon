@@ -1802,7 +1802,7 @@ async function main() {
         ;(S as any)._pickerActive = true
       }
       if (v.startsWith('/')) backend.sendCommand(v)
-      else { const expanded = expandPasteMarkers(v); S.streaming = true; S.streamStartTs = Date.now(); S.buf = []; startRowingAnimation(); backend.sendChat(expanded) }
+      else { const expanded = expandPasteMarkers(v); S.streaming = true; S.streamStartTs = Date.now(); S.buf = []; startRowingAnimation(); scrollToBottom(); backend.sendChat(expanded) }
       rebuildView(); updateStatus()
       return
     }
@@ -2041,7 +2041,7 @@ async function main() {
         rebuildView(); break
       }
       case 'tool_result': {
-        stopRowingAnimation()
+        // Don't stop animation — keep rowing between tool result and next API call
         const c = (ev.content as string) || '', e = ev.is_error as boolean
         const tc = (S as any)._currentToolColor || { bg: '#151520', fg: '#a5b4fc' }
         const w = Math.max(40, (process.stdout?.columns || 80) - 4)
@@ -2066,9 +2066,13 @@ async function main() {
         renderer.requestRender(); break
       }
       case 'turn_complete':
-        stopRowingAnimation()
+        // Keep rowing if more turns coming (tool_use means another API call follows)
+        if ((ev.stop_reason as string) === 'tool_use') {
+          startRowingAnimation()  // restart animation for next API call
+        } else {
+          stopRowingAnimation()
+        }
         if ((S as any)._thinkInterval) { clearInterval((S as any)._thinkInterval); (S as any)._thinkInterval = null }
-        // streamingMd should already be finalized by tool_call handler, but just in case:
         if (streamingMd && S.buf.length) { finishStreaming(); S.buf=[] }
         rebuildView(); break
       case 'chat_complete':
