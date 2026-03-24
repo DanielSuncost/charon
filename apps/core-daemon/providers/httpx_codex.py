@@ -1,0 +1,301 @@
+"""Codex Responses API provider — talks to chatgpt.com/backend-api/codex/responses.
+
+Codex OAuth tokens (from ChatGPT Plus/Pro subscriptions) do NOT work with
+the standard api.openai.com endpoint. They use a different API at chatgpt.com
+that requires JWT account ID extraction and special headers.
+
+Based on pi-agent's openai-codex-responses.ts and Hermes's codex integration.
+"""
+from __future__ import annotations
+
+import base64
+import json
+import os
+import time
+import uuid
+from pathlib import Path
+from typing import Any, AsyncIterator
+
+import httpx
+
+from . import Message, ModelInfo, StreamDelta, ToolCall, Usage
+
+CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex/responses'
+MAX_RETRIES = 2
+BASE_DELAY_MS = 1500
+
+
+def _extract_account_id(token: str) -> str:
+    """Extract chatgpt_account_id from the JWT token."""
+    try:
+        parts = token.split('.')
+        if len(parts) != 3:
+            raise ValueError('Invalid JWT')
+        # Add padding for base64
+        payload_b64 = parts[1] + '=' * (4 - len(parts[1]) % 4)
+        payload = json.loads(base64.b64decode(payload_b64))
+        account_id = payload.get('https://api.openai.com/auth', {}).get('chatgpt_account_id')
+        if not account_id:
+            raise ValueError('No account ID in token')
+        return account_id
+    except Exception as e:
+        raise ValueError(f'Failed to extract accountId from Codex token: {e}')
+
+
+def _convert_messages_to_input(messages: list[Message]) -> list[dict]:
+    """Convert Charon messages to Responses API input format.
+
+    The Responses API uses a flat item list, not nested content arrays.
+    Each item is a top-level object with a 'type' field.
+    """
+    result = []
+    id_map: dict[str, str] = {}  # maps original IDs to fc_ prefixed IDs
+    for msg in messages:
+        if msg.role == 'user':
+            content = msg.content if isinstance(msg.content, str) else json.dumps(msg.content)
+            result.append({
+                'type': 'message',
+                'role': 'user',
+                'content': [{'type': 'input_text', 'text': content}],
+            })
+        elif msg.role == 'assistant':
+            # Text output as a message item
+            if isinstance(msg.content, str) and msg.content:
+                result.append({
+                    'type': 'message',
+                    'role': 'assistant',
+                    'content': [{'type': 'output_text', 'text': msg.content}],
+                })
+            # Function calls as separate top-level items
+            for tc in msg.tool_calls:
+                # Codex requires IDs starting with 'fc_'
+                call_id = tc.id
+                if not call_id.startswith('fc_'):
+                    call_id = f'fc_{call_id}'
+                    id_map[tc.id] = call_id
+                result.append({
+                    'type': 'function_call',
+                    'id': call_id,
+                    'call_id': call_id,
+                    'name': tc.name,
+                    'arguments': json.dumps(tc.arguments) if isinstance(tc.arguments, dict) else str(tc.arguments),
+                })
+        elif msg.role == 'tool_result':
+            content = msg.content if isinstance(msg.content, str) else json.dumps(msg.content)
+            # Map tool_call_id to the fc_ version if it was remapped
+            call_id = msg.tool_call_id or ''
+            call_id = id_map.get(call_id, call_id)
+            if not call_id.startswith('fc_'):
+                call_id = f'fc_{call_id}'
+            result.append({
+                'type': 'function_call_output',
+                'call_id': call_id,
+                'output': content,
+            })
+    return result
+
+
+def _convert_tools(tools: list[dict] | None) -> list[dict] | None:
+    """Convert Charon tool defs to Responses API format."""
+    if not tools:
+        return None
+    result = []
+    for t in tools:
+        result.append({
+            'type': 'function',
+            'name': t.get('name', ''),
+            'description': t.get('description', ''),
+            'parameters': t.get('input_schema', {}),
+        })
+    return result
+
+
+class HttpxCodexProvider:
+    """Codex Responses API provider using httpx."""
+
+    def __init__(self, api_key: str, refresh_token: str | None = None,
+                 auth_store_path: str | None = None, timeout: float = 300.0):
+        self._api_key = api_key
+        self._refresh_token = refresh_token
+        self._auth_store_path = auth_store_path
+        self._timeout = timeout
+        self._account_id: str | None = None
+
+    def _get_account_id(self) -> str:
+        if not self._account_id:
+            self._account_id = _extract_account_id(self._api_key)
+        return self._account_id
+
+    def _build_headers(self) -> dict[str, str]:
+        account_id = self._get_account_id()
+        return {
+            'Authorization': f'Bearer {self._api_key}',
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream',
+            'chatgpt-account-id': account_id,
+            'originator': 'charon',
+            'User-Agent': 'charon/0.1',
+            'OpenAI-Beta': 'responses=experimental',
+        }
+
+    async def stream(
+        self,
+        messages: list[Message],
+        model: ModelInfo,
+        system_prompt: str,
+        tools: list[dict] | None = None,
+        thinking_level: str = 'off',
+        max_tokens: int = 16384,
+    ) -> AsyncIterator[StreamDelta]:
+        if not self._api_key:
+            yield StreamDelta(type='error', error='No Codex API key configured')
+            return
+
+        # Build request body in Responses API format
+        input_items = _convert_messages_to_input(messages)
+        api_tools = _convert_tools(tools)
+
+        body: dict[str, Any] = {
+            'model': model.model_id,
+            'instructions': system_prompt or '',
+            'input': input_items,
+            'store': False,
+            'stream': True,
+        }
+
+        if api_tools:
+            body['tools'] = api_tools
+            body['tool_choice'] = 'auto'
+            body['parallel_tool_calls'] = True
+
+        # Reasoning config
+        if thinking_level != 'off':
+            effort_map = {'minimal': 'low', 'low': 'low', 'medium': 'medium', 'high': 'high'}
+            effort = effort_map.get(thinking_level, 'medium')
+            body['reasoning'] = {'effort': effort, 'summary': 'auto'}
+
+        headers = self._build_headers()
+
+        # Retry loop for transient errors
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                async with httpx.AsyncClient(timeout=self._timeout) as client:
+                    async with client.stream('POST', CODEX_BASE_URL, json=body, headers=headers) as response:
+                        if response.status_code != 200:
+                            error_body = await response.aread()
+                            error_text = error_body.decode('utf-8', errors='replace')
+                            try:
+                                err_json = json.loads(error_text)
+                                error_text = err_json.get('error', {}).get('message', error_text)
+                            except Exception:
+                                if '<html' in error_text.lower():
+                                    error_text = f'HTTP {response.status_code}'
+
+                            if response.status_code in (429, 502, 503) and attempt < MAX_RETRIES:
+                                import asyncio
+                                await asyncio.sleep(BASE_DELAY_MS / 1000 * (2 ** attempt))
+                                continue
+
+                            yield StreamDelta(type='error', error=f'Codex HTTP {response.status_code}: {error_text[:200]}')
+                            return
+
+                        # Parse SSE stream
+                        input_tokens = 0
+                        output_tokens = 0
+                        current_tool_calls: dict[str, dict] = {}
+
+                        async for raw_line in response.aiter_lines():
+                            line = raw_line.strip()
+                            if not line or line.startswith(':'):
+                                continue
+                            if not line.startswith('data: '):
+                                continue
+                            data_str = line[6:]
+                            if data_str == '[DONE]':
+                                break
+
+                            try:
+                                event = json.loads(data_str)
+                            except json.JSONDecodeError:
+                                continue
+
+                            event_type = event.get('type', '')
+
+                            # Text output
+                            if event_type == 'response.output_text.delta':
+                                text = event.get('delta', '')
+                                if text:
+                                    yield StreamDelta(type='text', text=text)
+
+                            # Function call
+                            elif event_type == 'response.function_call_arguments.delta':
+                                item_id = event.get('item_id', '')
+                                delta = event.get('delta', '')
+                                if item_id not in current_tool_calls:
+                                    current_tool_calls[item_id] = {'id': item_id, 'name': '', 'args': ''}
+                                current_tool_calls[item_id]['args'] += delta
+
+                            elif event_type == 'response.output_item.added':
+                                item = event.get('item', {})
+                                if item.get('type') == 'function_call':
+                                    item_id = item.get('id', '')
+                                    current_tool_calls[item_id] = {
+                                        'id': item.get('call_id', item_id),
+                                        'name': item.get('name', ''),
+                                        'args': '',
+                                    }
+
+                            elif event_type == 'response.output_item.done':
+                                item = event.get('item', {})
+                                if item.get('type') == 'function_call':
+                                    item_id = item.get('id', '')
+                                    tc_data = current_tool_calls.get(item_id, {})
+                                    name = tc_data.get('name') or item.get('name', '')
+                                    args_str = tc_data.get('args') or item.get('arguments', '{}')
+                                    try:
+                                        args = json.loads(args_str)
+                                    except Exception:
+                                        args = {'raw': args_str}
+                                    call_id = tc_data.get('id') or item.get('call_id', item_id)
+                                    yield StreamDelta(
+                                        type='tool_call',
+                                        tool_call=ToolCall(id=call_id, name=name, arguments=args),
+                                    )
+
+                            # Reasoning (thinking)
+                            elif event_type == 'response.reasoning_summary_text.delta':
+                                text = event.get('delta', '')
+                                if text:
+                                    yield StreamDelta(type='thinking', text=text)
+
+                            # Response complete
+                            elif event_type in ('response.completed', 'response.done'):
+                                resp_obj = event.get('response', {})
+                                usage = resp_obj.get('usage', {})
+                                input_tokens = usage.get('input_tokens', 0)
+                                output_tokens = usage.get('output_tokens', 0)
+
+                        yield StreamDelta(
+                            type='done',
+                            text=json.dumps({
+                                'usage': {
+                                    'input_tokens': input_tokens,
+                                    'output_tokens': output_tokens,
+                                    'total_tokens': input_tokens + output_tokens,
+                                },
+                                'stop_reason': 'end_turn',
+                            }),
+                        )
+                        return  # success
+
+            except httpx.ConnectError as e:
+                if attempt < MAX_RETRIES:
+                    import asyncio
+                    await asyncio.sleep(BASE_DELAY_MS / 1000 * (2 ** attempt))
+                    continue
+                yield StreamDelta(type='error', error=f'Connection failed: {e}')
+            except httpx.TimeoutException:
+                yield StreamDelta(type='error', error=f'Request timed out after {self._timeout}s')
+            except Exception as e:
+                yield StreamDelta(type='error', error=f'Codex error: {e}')
+            return

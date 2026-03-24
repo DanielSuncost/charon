@@ -76,41 +76,48 @@ class ChatBackend:
         self._session_tasks: list[dict] = []
 
     def _load_tasks_from_ledger(self, agent_id: str | None = None) -> None:
-        """Populate _session_tasks from the task ledger on resume.
+        """Populate _session_tasks from conversation history on resume.
 
-        Reads completed tasks from working memory / task queue so the
-        info pane shows what this agent already did in prior sessions.
-        Uses _bound_agent_id (the real agent) over the session ID since
-        working memory is stored per-agent, not per-session.
+        Only loads tasks from the CURRENT session's conversation, not the
+        entire agent history. This keeps the task pane scoped to what
+        happened in this session.
         """
         try:
-            from task_ledger import get_agent_ledger
-            # Prefer the bound agent ID (e.g. AG-0005) over the session ID
-            # (e.g. session-85ec2a-...) because task ledger data is keyed by agent
-            lookup_id = getattr(self, '_bound_agent_id', None) or agent_id
-            if not lookup_id:
+            # Load from the conversation store for this specific session
+            from conversation_store import load_conversation
+            session_id = agent_id or self._active_agent_id
+            if not session_id:
                 return
-            entries = get_agent_ledger(
-                STATE_DIR, lookup_id,
-                limit=50, include_pending=False,
-            )
+            messages = load_conversation(STATE_DIR, session_id)
+            if not messages:
+                return
+
+            # Extract user messages as task entries
+            entries = []
+            for msg in messages:
+                if msg.get('role') == 'user':
+                    content = msg.get('content', '')
+                    if isinstance(content, str) and content.strip() and not content.startswith('/'):
+                        entries.append({
+                            'title': content[:100],
+                            'ts': msg.get('timestamp', 0),
+                        })
             tasks = []
-            for e in reversed(entries):  # ledger is newest-first, we want chronological
-                ts_epoch = 0.0
-                if e.get('ts'):
+            for e in entries:
+                ts_epoch = e.get('ts', 0)
+                if isinstance(ts_epoch, str):
                     try:
                         from datetime import datetime
-                        dt = datetime.fromisoformat(e['ts'])
-                        ts_epoch = dt.timestamp()
+                        ts_epoch = datetime.fromisoformat(ts_epoch).timestamp()
                     except Exception:
-                        pass
+                        ts_epoch = 0
                 summary = e.get('title', '')
                 short = summary[:25].split('\n')[0]
                 if len(summary) > 25:
                     short = short[:22] + '...'
                 tasks.append({
-                    'task_id': e.get('task_id', ''),
-                    'instruction': '',
+                    'task_id': f'resumed-{len(tasks)}',
+                    'instruction': summary,
                     'summary': summary,
                     'short': short,
                     'detail': summary,
@@ -1429,12 +1436,10 @@ class ChatBackend:
                     {'id': 'claude-3-5-haiku-20241022', 'desc': 'Haiku 3.5'},
                 ],
                 'codex': [
-                    {'id': 'o3', 'desc': 'Most capable reasoning'},
-                    {'id': 'o4-mini', 'desc': 'Fast reasoning'},
-                    {'id': 'o3-mini', 'desc': 'Efficient reasoning'},
-                    {'id': 'gpt-4.1', 'desc': 'Latest GPT-4'},
-                    {'id': 'gpt-4o', 'desc': 'Fast, multimodal'},
-                    {'id': 'codex-mini-latest', 'desc': 'Code-optimized'},
+                    {'id': 'gpt-5.4', 'desc': 'GPT 5.4 — most capable (recommended)'},
+                    {'id': 'gpt-5', 'desc': 'GPT 5'},
+                    # Note: o3, o4-mini, gpt-4.1, gpt-4o, codex-mini etc. are NOT supported
+                    # with Codex OAuth (ChatGPT subscription). Only gpt-5 family works.
                 ],
                 'lmstudio': [],  # dynamic — detected from LM Studio
                 'api': [],
@@ -1479,10 +1484,19 @@ class ChatBackend:
 
             onboarding['model'] = arg
             onboarding['provider_model'] = arg
-            onboarding['step'] = 'project'
+
+            # Auto-complete if project is already set (from previous setup or default)
+            project = str(onboarding.get('project') or '').strip()
+            if not project:
+                project = str(ROOT)
+                onboarding['project'] = project
+
+            onboarding['complete'] = True
+            onboarding['step'] = 'done'
             self._save_onboarding(onboarding)
             self.engine = None
-            emit({'type': 'status', 'message': f'✓ Model set to {arg}. Now run /setup project <path> or /setup complete', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'✓ Model set to {arg}. Setup complete.', 'request_id': request_id})
+            self._on_setup_complete(onboarding, request_id)
         elif subcmd == 'shade-provider':
             if not arg:
                 # Show shade provider picker

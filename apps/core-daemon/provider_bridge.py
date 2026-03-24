@@ -36,6 +36,9 @@ CONTEXT_WINDOWS = {
     'o4-mini': 200000,
     'o3-mini': 200000,
     'codex-mini-latest': 200000,
+    # GPT-5 family
+    'gpt-5': 200000,
+    'gpt-5.4': 200000,
     # Local (conservative defaults)
     'qwen3-30b-a3b': 65536,
 }
@@ -397,6 +400,17 @@ def create_provider_and_model(state_dir: Path) -> tuple[Provider, ModelInfo, boo
         provider = HttpxOpenAIProvider(
             base_url=config.get('base_url') or 'http://127.0.0.1:1234/v1',
             api_key=config['api_key'],
+        )
+    elif provider_name == 'openai' and config.get('provider_raw') == 'codex':
+        # Codex OAuth uses chatgpt.com/backend-api/codex/responses (not api.openai.com)
+        from providers.httpx_codex import HttpxCodexProvider
+        raw = config.get('provider_raw', 'codex')
+        refresh_token = _get_refresh_token(state_dir, raw)
+        auth_store = str(state_dir / 'auth' / 'auth.json')
+        provider = HttpxCodexProvider(
+            api_key=config['api_key'],
+            refresh_token=refresh_token,
+            auth_store_path=auth_store,
         )
     else:
         # OpenAI or any OpenAI-compatible

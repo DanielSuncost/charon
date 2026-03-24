@@ -102,6 +102,10 @@ def summarize_fast(
     # Combine: instruction + actions
     if instr_short and len(instr_short) < 60:
         return f'{instr_short} → {action_text}'
+    if instr_short:
+        # Long instruction — use first meaningful sentence
+        first_line = instr_short.split('\n')[0].strip()[:60]
+        return f'{first_line} → {action_text}'
     return action_text
 
 

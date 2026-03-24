@@ -543,25 +543,25 @@ async function main() {
       // Frame 1: oar forward, lantern bright
       () => joinStyled(
         t`${fg(spark)('  .*')}`, t`${fg(lanternBright)('◈')}`, t`${fg(spark)('·.          ')}`, '\n',
-        '    ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)(' ╱')}`, '          ', '\n',
+        '     ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)(' ╱')}`, '         ', '\n',
         t`${fg(water)('  ≈')}`, t`${fg(waveD)('~')}`, t`${fg(hull)('╘')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('▬')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('╛')}`, t`${fg(waveD)('~')}`, t`${fg(water)('≈')}`, t`${fg(waveD)('~~  ')}`,
       ),
       // Frame 2: oar vertical, lantern orange
       () => joinStyled(
         t`${fg(spark)('  .·')}`, t`${fg(lanternDim)('◈')}`, t`${fg(spark)('*.          ')}`, '\n',
-        '    ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)(' │')}`, '          ', '\n',
+        '     ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)(' │')}`, '         ', '\n',
         t`${fg(waveD)(' ~')}`, t`${fg(water)('≈')}`, t`${fg(hull)('╘')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('▬')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('╛')}`, t`${fg(water)('≈')}`, t`${fg(waveD)('~')}`, t`${fg(water)('≈   ')}`,
       ),
       // Frame 3: oar back, lantern bright
       () => joinStyled(
         t`${fg(spark)('   *')}`, t`${fg(lanternBright)('◈')}`, t`${fg(lanternGlow)('˙')}`, '          ', '\n',
-        '    ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)('  ╲')}`, '         ', '\n',
+        '     ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)('  ╲')}`, '        ', '\n',
         t`${fg(water)(' ≈')}`, t`${fg(waveD)('~')}`, t`${fg(water)('≈')}`, t`${fg(hull)('╘')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('▬')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('╛')}`, t`${fg(waveD)('~')}`, t`${fg(water)('≈   ')}`,
       ),
       // Frame 4: oar vertical, lantern dim
       () => joinStyled(
         t`${fg(spark)('  ·')}`, t`${fg(lanternDim)('◈')}`, t`${fg(spark)(' *.         ')}`, '\n',
-        '    ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)(' │')}`, '          ', '\n',
+        '     ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)(' │')}`, '         ', '\n',
         t`${fg(waveD)('  ~')}`, t`${fg(water)('≈')}`, t`${fg(hull)('╘')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('▬')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('╛')}`, t`${fg(water)('≈')}`, t`${fg(waveD)('~~  ')}`,
       ),
     ]

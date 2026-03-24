@@ -415,6 +415,7 @@ try:
 except (ImportError, Exception):
     _HAS_BROWSER = False
 from tools.shade_tool import SHADE_TOOL_DEF, execute_spawn_shade
+from tools.judge_loop_tool import JUDGE_LOOP_TOOL_DEF, execute_judge_loop
 
 # Recall tool — optional, only loads if sqlite-vec and sentence-transformers are installed
 try:
@@ -427,7 +428,8 @@ ALL_TOOL_DEFS = [
     READ_TOOL_DEF, BASH_TOOL_DEF, EDIT_TOOL_DEF, WRITE_TOOL_DEF,
     USER_MODEL_TOOL_DEF, PROJECT_KNOWLEDGE_TOOL_DEF,
     HTTP_TOOL_DEF, GIT_TOOL_DEF,
-    SHADE_TOOL_DEF, SPAWN_BATCH_TOOL_DEF, SEARCH_TOOL_DEF, WEB_TOOL_DEF,
+    SHADE_TOOL_DEF, SPAWN_BATCH_TOOL_DEF, JUDGE_LOOP_TOOL_DEF,
+    SEARCH_TOOL_DEF, WEB_TOOL_DEF,
 ] + ([BROWSER_TOOL_DEF] if _HAS_BROWSER else []) + ([RECALL_TOOL_DEF] if _HAS_RECALL else [])
 
 TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
@@ -441,6 +443,7 @@ TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
     'Git': execute_git,
     'SpawnShade': execute_spawn_shade,
     'SpawnBatch': execute_spawn_batch,
+    'SpawnJudgeLoop': execute_judge_loop,
     'Search': execute_search,
     'Web': execute_web,
     **(({'Browser': execute_browser} if _HAS_BROWSER else {})),

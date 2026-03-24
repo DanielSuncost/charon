@@ -15,6 +15,12 @@
 Other agent frameworks give you one agent, one session, no memory.
 You re-explain context every time. Charon is different:
 
+- **Judge Loops.** Give any task a quality bar and Charon iterates
+  toward it autonomously. Spawn a Judge — aesthetic, quantitative,
+  test-based, or LLM-scored — and an implementation loop that refines
+  until the score converges. Optimize RL reward, tighten prose, hit
+  a latency target, or raise test coverage, all with the same primitive.
+  [How it works →](#judge-loops)
 - **Real memory.** Every conversation is indexed locally. Agents recall
   past discussions by meaning, know when facts have changed, and learn
   your preferences once across all agents and projects. Scores
@@ -54,6 +60,120 @@ making it searchable alongside native Charon conversations.
 > notifications when any agent needs approval or intervention, and
 > remote agent connectivity so you can monitor agents running on other
 > machines from one Charon instance.
+
+---
+
+## Judge Loops
+
+Most agent frameworks run once and hand you the result. If it's wrong,
+you re-prompt. Charon closes the loop: define a quality signal, and the
+agent iterates until it converges.
+
+```
+You: "Optimize my RL trainer. Metric is mean episode reward from
+      evaluate.py — higher is better. Only touch train.py and model.py.
+      100 iterations max."
+
+Charon: ⚙ JudgeLoop  metric=mean_episode_reward  direction=maximize
+        [baseline]  142.7
+        [iter  1]   148.3  cosine LR schedule                    KEPT ✓
+        [iter  2]   145.1  batch size 64→128                     discarded
+        [iter  3]   162.8  GAE lambda 0.95→0.98                  KEPT ✓
+        ...
+        [iter 19]   194.2  cosine LR + GAE 0.98 + wider net      KEPT ✓
+        [iter 20]   191.0  orthogonal init                       discarded
+
+        Converged — best: 194.2 (+36.1%), restored to iteration 19.
+```
+
+That's the quantitative case. The same primitive handles anything with a
+score:
+
+### Judge Taxonomy
+
+| Type | Signal | Example |
+|------|--------|---------|
+| **Performance** | Benchmark numbers (latency, throughput, reward) | "Get p99 under 50ms" |
+| **Correctness** | Test pass rate | "Fix these 12 failing tests" |
+| **Coverage** | % from coverage tool | "Get store.py to 90% coverage" |
+| **Aesthetic** | LLM scores 1–10 against a rubric | "Rewrite this README for clarity" |
+| **Conciseness** | Token count, info density | "Compress this module" |
+| **Compliance** | Lint/schema violations | "Zero type errors" |
+| **Win/Loss** | Head-to-head comparison | "Which implementation handles edge cases better" |
+| **Regression** | Δ from saved baseline | "Refactor without breaking anything" |
+| **Security** | Vulnerability count | "Harden this endpoint" |
+| **Composite** | Weighted mix of the above | "Fast, correct, and readable" |
+
+### How It Works
+
+A Judge Loop is a shade contract with three new concepts:
+
+1. **A Judge** — scores each iteration (a command, a test suite, or an
+   LLM with a rubric). Returns a number and a critique.
+2. **A Score History** — tracks every iteration's score, what changed,
+   and whether it was kept or rolled back. Detects plateaus,
+   regressions, and oscillation.
+3. **Convergence Criteria** — stop when the target is hit, the budget
+   runs out, or improvements flatline.
+
+Each iteration: snapshot → shade implements one change → judge scores →
+keep or rollback → feed critique to next iteration. Shades get fresh
+context each round — no conversation bloat.
+
+```
+implement ──► judge ──► keep/rollback ──► implement ──► judge ──► ...
+     │                       │                               │
+     └── score: 142.7        └── score: 162.8                └── converged ✓
+```
+
+### Aesthetic Judges
+
+For subjective tasks, the Judge is an LLM with a rubric:
+
+```
+You: "Rewrite the README to be clearer. Score yourself on structure,
+      conciseness, and approachability. Iterate until you hit 8/10."
+
+Charon: ⚙ JudgeLoop  judge=aesthetic  rubric="structure, conciseness,
+                      approachability"  target=8.0
+        [iter 1]  5.0/10  "Good structure but verbose, examples unclear"
+        [iter 2]  7.0/10  "Tighter, but install section assumes too much"
+        [iter 3]  8.5/10  "Clear, concise, good examples. Target met ✓"
+```
+
+The rubric is freeform text. The Judge shade interprets it and returns a
+numeric score plus written feedback. The feedback is injected into the
+next implementer's context so it knows exactly what to fix.
+
+### Composite Judges
+
+Combine multiple signals with weights:
+
+```python
+judge = CompositeJudge([
+    (QuantitativeJudge("pytest tests/ -x", parse="pass_rate"), 0.5),
+    (QuantitativeJudge("python bench.py --p99", parse="float"), 0.3),
+    (AestheticJudge(rubric="code readability"), 0.2),
+])
+```
+
+### Convergence & Safety
+
+- **Checkpoints** before every iteration (shadow git — doesn't pollute
+  your repo). Rollback on regression.
+- **Budgets**: max iterations, max wall time, max consecutive failures.
+- **Plateau detection**: if the last N iterations all got discarded,
+  the loop stops or asks for new direction.
+- **Constraint checks**: run tests / linting before measuring the
+  metric. If constraints fail, rollback without scoring.
+- **User steering**: pause, resume, adjust the program, extend budget,
+  or stop early — anytime.
+
+### Procedures (Learning from Loops)
+
+Successful iterations are captured as **procedures** — reusable
+knowledge stored in semantic memory. Next time you optimize something
+similar, the agent starts with what worked before instead of guessing.
 
 ---
 
@@ -161,8 +281,9 @@ All provider communication uses raw httpx — zero SDK dependencies.
 
 ## Tools
 
-14 built-in: Read, Write, Edit, Bash, Git, Http, Search, Recall,
-UserModel, ProjectKnowledge, SpawnShade, SpawnBatch, Web, Browser.
+15 built-in: Read, Write, Edit, Bash, Git, Http, Search, Recall,
+UserModel, ProjectKnowledge, SpawnShade, SpawnBatch, SpawnJudgeLoop,
+Web, Browser.
 
 Plus a dynamic loader: drop a `.py` file in `.charon/tools/` and
 it's available after `/tools reload`. Or tell the agent to build
@@ -212,6 +333,8 @@ charon/
 │   ├── agent_runtime.py           # Task execution with summarization
 │   ├── shade_orchestrator.py      # Sequential shade contracts
 │   ├── batch_orchestrator.py      # Parallel shade swarms
+│   ├── judge_engine.py            # Judge Loop: iterative optimization with scoring
+│   ├── checkpoint_manager.py      # Shadow git snapshots for safe rollback
 │   ├── autonomous.py              # Goal-driven self-assignment
 │   ├── consolidation.py           # Background user model learning
 │   ├── user_model_structured.py   # 7-category structured user profile
@@ -235,6 +358,9 @@ the art cloud-hosted: 81.6%). Retrieval accuracy: 98.5% at R@10.
 
 ### Done
 
+- **Judge Loops** — iterative optimization with pluggable scoring
+  (quantitative, aesthetic, correctness, composite), convergence
+  detection, checkpoint/rollback, and procedure capture
 - Semantic memory with hybrid vector + keyword search, version chains,
   temporal indexing, auto-injected context, and on-demand recall
 - Structured user model (7 categories) with background consolidation
@@ -250,6 +376,7 @@ the art cloud-hosted: 81.6%). Retrieval accuracy: 98.5% at R@10.
 
 ### Planned
 
+- Procedural memory (auto-capture and retrieve multi-step approaches)
 - Rust TUI
 - Per-agent provider config
 - Contract templates (learned shade patterns)
@@ -286,6 +413,8 @@ the art cloud-hosted: 81.6%). Retrieval accuracy: 98.5% at R@10.
 | [Semantic Memory Engine](docs/plans/semantic-memory-engine.md) | Hybrid retrieval, LongMemEval benchmark |
 | [Three-Tier Memory](docs/three-tier-memory.md) | Context hierarchy design |
 | [User Model Schema](docs/plans/user-model-schema-design.md) | 7-category structured profile |
+| [Judge Loops](docs/plans/procedure-learning-and-optimization-loops.md) | Iterative optimization with pluggable judges |
+| [Judge Loop Scenario](docs/plans/optimization-loop-scenario-spec.md) | End-to-end worked example |
 | [Autonomous Work](docs/plans/autonomous-goal-driven-work.md) | Goal states, self-assignment |
 | [System Prompt Design](docs/plans/agent-system-prompt-memory-design.md) | Layered prompt assembly |
 | [Master Plan](docs/plans/MASTER_PLAN.md) | Build phases and architecture |

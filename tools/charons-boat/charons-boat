@@ -264,11 +264,20 @@ case "${1:-help}" in
   status) cmd_status ;;
   stop) cmd_stop ;;
   revoke) cmd_revoke ;;
+  stream)
+    # Stream tmux sessions as JSON lines over stdio.
+    # This is the command the local Rust TUI calls via SSH:
+    #   ssh user@remote charons-boat stream
+    shift
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    exec python3 "${SCRIPT_DIR}/boat_stream.py" "$@"
+    ;;
   help|--help|-h)
     echo "charons-boat — Universal agent session bridge for Charon"
     echo ""
     echo "Usage:"
     echo "  charons-boat wrap [--name NAME] -- <command>  Wrap command in tmux"
+    echo "  charons-boat stream                           Stream sessions (JSON over stdio)"
     echo "  charons-boat serve [--generate-code]          Start for remote access"
     echo "  charons-boat register                         Register current tmux session"
     echo "  charons-boat status                           Show status"
@@ -279,6 +288,7 @@ case "${1:-help}" in
     echo "  charons-boat wrap -- pi                       # Wrap pi-agent"
     echo "  charons-boat wrap --name myhermes -- hermes   # Wrap hermes"
     echo "  charons-boat serve --generate-code            # Enable remote access"
+    echo "  ssh remote charons-boat stream                # Stream from remote"
     ;;
   *) echo "Unknown command: $1. Run 'charons-boat help' for usage."; exit 1 ;;
 esac
