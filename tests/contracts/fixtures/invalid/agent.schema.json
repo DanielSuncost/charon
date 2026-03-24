@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0",
+  "id": "agent-1",
+  "name": "Builder",
+  "specialization": "generalist",
+  "project": "charon",
+  "status": "busy",
+  "capabilities": [
+    "code"
+  ],
+  "link_scope": "local",
+  "node_id": "node-main",
+  "created_at": "2026-03-15T23:00:00Z",
+  "updated_at": "2026-03-15T23:10:00Z",
+  "last_heartbeat": "2026-03-15T23:10:01Z"
+}

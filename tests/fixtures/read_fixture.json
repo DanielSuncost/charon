@@ -1,0 +1,139 @@
+{
+  "_comment": "Test fixtures for the Read tool (execute_read). Error messages are sourced from tools/__init__.py:execute_read. offset is 1-indexed; limit caps the number of lines returned.",
+  "tool": "Read",
+  "cases": [
+    {
+      "id": "read_simple_file",
+      "description": "Reading an existing plain-text file returns its full content without error.",
+      "input": {
+        "path": "tests/fixtures/sample_data/hello.txt"
+      },
+      "setup": "Create file at tests/fixtures/sample_data/hello.txt with content:\n  Line 1: Hello, Charon!\n  Line 2: This is a fixture.\n  Line 3: End of file.",
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "Hello, Charon!",
+          "This is a fixture.",
+          "End of file."
+        ]
+      }
+    },
+    {
+      "id": "read_nonexistent_file",
+      "description": "Reading a path that does not exist must return an error with 'not found' in the message.",
+      "input": {
+        "path": "tests/fixtures/sample_data/does_not_exist.txt"
+      },
+      "setup": null,
+      "expected": {
+        "is_error": true,
+        "content_contains": [
+          "not found"
+        ]
+      }
+    },
+    {
+      "id": "read_with_offset_and_limit",
+      "description": "Reading with offset=3 and limit=2 returns only lines 3–4 of the file, plus pagination metadata.",
+      "input": {
+        "path": "tests/fixtures/sample_data/numbered.txt",
+        "offset": 3,
+        "limit": 2
+      },
+      "setup": "Create file at tests/fixtures/sample_data/numbered.txt with 10 lines:\n  line 1\n  line 2\n  line 3\n  line 4\n  line 5\n  line 6\n  line 7\n  line 8\n  line 9\n  line 10",
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "line 3",
+          "line 4",
+          "Showing lines 3-4 of 10"
+        ],
+        "content_not_contains": [
+          "line 1",
+          "line 2",
+          "line 5"
+        ]
+      }
+    },
+    {
+      "id": "read_empty_path",
+      "description": "Passing an empty string as path must return an error because path is required.",
+      "input": {
+        "path": ""
+      },
+      "setup": null,
+      "expected": {
+        "is_error": true,
+        "content_contains": [
+          "path is required"
+        ]
+      }
+    },
+    {
+      "id": "read_directory_path",
+      "description": "Passing a path that resolves to a directory (not a regular file) must return an error.",
+      "input": {
+        "path": "tests/fixtures/sample_data"
+      },
+      "setup": "Ensure directory tests/fixtures/sample_data exists (created by other cases).",
+      "expected": {
+        "is_error": true,
+        "content_contains": [
+          "not a file"
+        ]
+      }
+    },
+    {
+      "id": "read_unicode_content",
+      "description": "Reading a UTF-8 file that contains multi-byte unicode characters (CJK, emoji, accented letters) returns them intact.",
+      "input": {
+        "path": "tests/fixtures/sample_data/unicode.txt"
+      },
+      "setup": "Create file at tests/fixtures/sample_data/unicode.txt with content:\n  Héllo Wörld\n  日本語テスト\n  Emoji: 🚀🌍\n  Arabic: مرحبا\n  Greek: Ελληνικά",
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "Héllo Wörld",
+          "日本語テスト",
+          "🚀🌍",
+          "مرحبا",
+          "Ελληνικά"
+        ]
+      }
+    },
+    {
+      "id": "read_offset_beyond_eof",
+      "description": "Using an offset larger than the total line count returns an empty body but no error, with pagination metadata referencing the real line count.",
+      "input": {
+        "path": "tests/fixtures/sample_data/short.txt",
+        "offset": 999
+      },
+      "setup": "Create file at tests/fixtures/sample_data/short.txt with exactly 3 lines:\n  alpha\n  beta\n  gamma",
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "of 3"
+        ],
+        "content_not_contains": [
+          "alpha",
+          "beta",
+          "gamma"
+        ]
+      }
+    },
+    {
+      "id": "read_absolute_path",
+      "description": "Passing an absolute (rather than relative) path resolves correctly and returns file content.",
+      "input": {
+        "path": "/tmp/charon_fixture_absolute_test.txt"
+      },
+      "setup": "Create /tmp/charon_fixture_absolute_test.txt with content: absolute path content",
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "absolute path content"
+        ]
+      }
+    }
+  ]
+}

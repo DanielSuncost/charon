@@ -1,0 +1,102 @@
+{
+  "": "charon/contracts/rlm-node.schema.json",
+  "title": "Charon RLM Node",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "parent_id",
+    "root_task_id",
+    "objective",
+    "depth",
+    "budget",
+    "usage",
+    "status",
+    "output_ref"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "parent_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "root_task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 1
+    },
+    "depth": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_depth",
+        "max_tokens",
+        "max_seconds"
+      ],
+      "properties": {
+        "max_depth": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tokens",
+        "seconds"
+      ],
+      "properties": {
+        "tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "seconds": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "running",
+        "completed",
+        "failed",
+        "halted_budget"
+      ]
+    },
+    "output_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

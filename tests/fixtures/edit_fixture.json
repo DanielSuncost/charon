@@ -1,0 +1,124 @@
+{
+  "cases": [
+    {
+      "id": "simple_success",
+      "description": "Simple successful single-line edit replaces the target text and reports success",
+      "input": {
+        "path": "src/config.py",
+        "oldText": "VERSION = \"1.0.0\"",
+        "newText": "VERSION = \"1.1.0\""
+      },
+      "setup": {
+        "file": "src/config.py",
+        "content": "# Charon configuration\nVERSION = \"1.0.0\"\nDEBUG = False\n"
+      },
+      "expected": {
+        "is_error": false,
+        "content_contains": ["Successfully edited"],
+        "file_contains": ["VERSION = \"1.1.0\"", "# Charon configuration", "DEBUG = False"]
+      }
+    },
+    {
+      "id": "old_text_not_found",
+      "description": "Edit fails with an error when oldText does not appear anywhere in the file",
+      "input": {
+        "path": "src/config.py",
+        "oldText": "VERSION = \"9.9.9\"",
+        "newText": "VERSION = \"10.0.0\""
+      },
+      "setup": {
+        "file": "src/config.py",
+        "content": "# Charon configuration\nVERSION = \"1.0.0\"\nDEBUG = False\n"
+      },
+      "expected": {
+        "is_error": true,
+        "content_contains": ["not found", "src/config.py"]
+      }
+    },
+    {
+      "id": "multiple_matches",
+      "description": "Edit fails with an error (including match count) when oldText appears more than once",
+      "input": {
+        "path": "src/utils.py",
+        "oldText": "pass",
+        "newText": "raise NotImplementedError"
+      },
+      "setup": {
+        "file": "src/utils.py",
+        "content": "def foo():\n    pass\n\ndef bar():\n    pass\n"
+      },
+      "expected": {
+        "is_error": true,
+        "content_contains": ["2 times", "src/utils.py"]
+      }
+    },
+    {
+      "id": "file_not_found",
+      "description": "Edit fails when the target file does not exist on disk",
+      "input": {
+        "path": "src/nonexistent.py",
+        "oldText": "def main():",
+        "newText": "def run():"
+      },
+      "setup": {
+        "file": null,
+        "content": null
+      },
+      "expected": {
+        "is_error": true,
+        "content_contains": ["not found", "src/nonexistent.py"]
+      }
+    },
+    {
+      "id": "preserves_surrounding_content",
+      "description": "A successful edit leaves all lines before and after the changed region intact",
+      "input": {
+        "path": "src/router.py",
+        "oldText": "    return \"/v1\"",
+        "newText": "    return \"/v2\""
+      },
+      "setup": {
+        "file": "src/router.py",
+        "content": "import os\n\n\ndef get_prefix():\n    return \"/v1\"\n\n\ndef health_check():\n    return {\"status\": \"ok\"}\n"
+      },
+      "expected": {
+        "is_error": false,
+        "content_contains": ["Successfully edited"],
+        "file_contains": [
+          "import os",
+          "def get_prefix():",
+          "    return \"/v2\"",
+          "def health_check():",
+          "{\"status\": \"ok\"}"
+        ]
+      }
+    },
+    {
+      "id": "multiline_block_replacement",
+      "description": "Edit correctly replaces a multiline block of code in one operation",
+      "input": {
+        "path": "src/agent.py",
+        "oldText": "    def run(self):\n        # TODO: implement\n        return None",
+        "newText": "    def run(self):\n        self._setup()\n        result = self._execute()\n        self._teardown()\n        return result"
+      },
+      "setup": {
+        "file": "src/agent.py",
+        "content": "class Agent:\n    def __init__(self, name):\n        self.name = name\n\n    def run(self):\n        # TODO: implement\n        return None\n\n    def stop(self):\n        pass\n"
+      },
+      "expected": {
+        "is_error": false,
+        "content_contains": ["Successfully edited"],
+        "file_contains": [
+          "class Agent:",
+          "def __init__(self, name):",
+          "    def run(self):",
+          "self._setup()",
+          "self._execute()",
+          "self._teardown()",
+          "return result",
+          "def stop(self):"
+        ]
+      }
+    }
+  ]
+}

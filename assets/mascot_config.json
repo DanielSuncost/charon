@@ -1,0 +1,34 @@
+{
+  "sprite_path": "assets/lantern_wraith_terminal_sprite_v2.json",
+  "anchor": "top-left",
+  "offset_cols": 0,
+  "offset_rows": 0,
+  "z_index": 10,
+  "clip_to_viewport": true,
+  "allow_overlap_with_text": true,
+  "reserved_region": {
+    "cols": 999,
+    "rows": 999
+  },
+  "opacity_mode": "glyph-only",
+  "render": {
+    "theme_mode": "dark",
+    "scale_x": 1.0,
+    "scale_y": 1.0,
+    "glow_enabled": true
+  },
+  "tiny_title": {
+    "path": "assets/title_ascii_mid.txt",
+    "fg": [
+      176,
+      146,
+      62
+    ]
+  },
+  "tiny_title_source": {
+    "x": 10,
+    "y": 16,
+    "w": 54,
+    "h": 4
+  }
+}

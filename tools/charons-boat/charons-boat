@@ -1,0 +1,284 @@
+#!/usr/bin/env bash
+# charons-boat — Universal agent session bridge for Charon
+#
+# Usage:
+#   charons-boat wrap -- <command>     Wrap a command in tmux + register
+#   charons-boat serve [--generate-code]  Start daemon for remote connections
+#   charons-boat register              Register current tmux session with Charon
+#   charons-boat status                Show status
+#   charons-boat stop                  Stop daemon
+#   charons-boat revoke                Revoke all pairing keys
+#
+# The wrap command is the most common entry point:
+#   charons-boat wrap -- pi            # wraps pi-agent
+#   charons-boat wrap -- hermes        # wraps hermes
+#   charons-boat wrap --name myagent -- opencode
+
+set -euo pipefail
+
+BOAT_DIR="${HOME}/.charon/boats"
+BOAT_SOCK="${HOME}/.charon/boat.sock"
+BOAT_PID="${HOME}/.charon/boat.pid"
+BOAT_KEYS="${HOME}/.charon/boat-keys"
+
+mkdir -p "$BOAT_DIR" "$BOAT_KEYS" 2>/dev/null || true
+
+# ── Helpers ──────────────────────────────────────────────────────────
+
+generate_code() {
+  local part1 part2
+  part1=$(head -c 4 /dev/urandom | xxd -p | tr '[:lower:]' '[:upper:]' | head -c 4)
+  part2=$(head -c 4 /dev/urandom | xxd -p | tr '[:lower:]' '[:upper:]' | head -c 4)
+  echo "CHARON-${part1}-${part2}"
+}
+
+get_tmux_session() {
+  if [ -n "${TMUX:-}" ]; then
+    tmux display-message -p '#S' 2>/dev/null || echo ""
+  else
+    echo ""
+  fi
+}
+
+is_in_tmux() {
+  [ -n "${TMUX:-}" ]
+}
+
+# ── Commands ─────────────────────────────────────────────────────────
+
+cmd_wrap() {
+  local name=""
+  local cmd_args=()
+
+  # Parse arguments
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name) name="$2"; shift 2 ;;
+      --) shift; cmd_args=("$@"); break ;;
+      *) cmd_args=("$@"); break ;;
+    esac
+  done
+
+  if [ ${#cmd_args[@]} -eq 0 ]; then
+    echo "Usage: charons-boat wrap [--name NAME] -- <command> [args...]"
+    exit 1
+  fi
+
+  # Generate session name
+  if [ -z "$name" ]; then
+    name="boat-$(echo "${cmd_args[0]}" | tr -cd '[:alnum:]-' | head -c 20)-$$"
+  fi
+
+  if is_in_tmux; then
+    # Already in tmux — just register and run
+    echo "⛵ Already in tmux session: $(get_tmux_session)"
+    cmd_register --name "$name" --agent-cmd "${cmd_args[*]}"
+    exec "${cmd_args[@]}"
+  else
+    # Create tmux session and run command inside it
+    local session_name="boat-${name}"
+    echo "⛵ Wrapping in tmux session: ${session_name}"
+
+    # Register before creating session
+    local reg_file="${BOAT_DIR}/${session_name}.json"
+    cat > "$reg_file" << EOF
+{
+  "session": "${session_name}",
+  "command": "${cmd_args[*]}",
+  "name": "${name}",
+  "pid": $$,
+  "created": "$(date -Iseconds)",
+  "status": "starting"
+}
+EOF
+
+    # Create detached session, then attach
+    tmux new-session -d -s "$session_name" "${cmd_args[*]}"
+
+    # Update registration
+    cat > "$reg_file" << EOF
+{
+  "session": "${session_name}",
+  "command": "${cmd_args[*]}",
+  "name": "${name}",
+  "pid": $$,
+  "created": "$(date -Iseconds)",
+  "status": "running"
+}
+EOF
+
+    echo "⛵ Session registered. Attaching..."
+    echo ""
+    tmux attach -t "$session_name"
+  fi
+}
+
+cmd_register() {
+  local name="" agent_cmd=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name) name="$2"; shift 2 ;;
+      --agent-cmd) agent_cmd="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+
+  local session
+  session=$(get_tmux_session)
+  if [ -z "$session" ]; then
+    echo "Error: not inside a tmux session"
+    exit 1
+  fi
+
+  [ -z "$name" ] && name="$session"
+
+  local reg_file="${BOAT_DIR}/${session}.json"
+  cat > "$reg_file" << EOF
+{
+  "session": "${session}",
+  "command": "${agent_cmd}",
+  "name": "${name}",
+  "pid": $$,
+  "created": "$(date -Iseconds)",
+  "status": "running"
+}
+EOF
+
+  echo "⛵ Registered tmux session: ${session}"
+}
+
+cmd_serve() {
+  local code=""
+  local gen_code=false
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --generate-code) gen_code=true; shift ;;
+      --code) code="$2"; shift 2 ;;
+      --from-extension) shift ;; # no-op, for pi-agent extension compat
+      *) shift ;;
+    esac
+  done
+
+  if $gen_code || [ -z "$code" ]; then
+    code=$(generate_code)
+  fi
+
+  # Save code for validation
+  echo "$code" > "${BOAT_KEYS}/current-code"
+  chmod 600 "${BOAT_KEYS}/current-code"
+
+  # Register current session if in tmux
+  if is_in_tmux; then
+    cmd_register
+  fi
+
+  echo "⛵ charons-boat active"
+  echo ""
+  echo "  Pairing code: ${code}"
+  echo ""
+  echo "  On your local Charon, run:"
+  echo "    /link $(whoami)@$(hostname) --code ${code}"
+  echo ""
+  echo "  Boat will keep running in the background."
+  echo ""
+
+  # In a full implementation, this would start a daemon that:
+  # 1. Listens on boat.sock for incoming connections
+  # 2. Validates pairing codes
+  # 3. Proxies tmux capture/send commands
+  # For now, the pairing code is stored and validated by Charon over SSH
+
+  echo "$$" > "$BOAT_PID"
+
+  # List discoverable sessions
+  echo "  Discoverable sessions:"
+  if command -v tmux >/dev/null 2>&1; then
+    tmux list-sessions -F '    #{session_name} (#{session_windows} windows)' 2>/dev/null || echo "    (none)"
+  else
+    echo "    (tmux not found)"
+  fi
+}
+
+cmd_status() {
+  echo "⛵ charons-boat status"
+  echo ""
+
+  # Show registered sessions
+  if [ -d "$BOAT_DIR" ] && ls "$BOAT_DIR"/*.json >/dev/null 2>&1; then
+    echo "  Registered sessions:"
+    for f in "$BOAT_DIR"/*.json; do
+      local name session status
+      name=$(python3 -c "import json; print(json.load(open('$f')).get('name','?'))" 2>/dev/null || echo "?")
+      session=$(python3 -c "import json; print(json.load(open('$f')).get('session','?'))" 2>/dev/null || echo "?")
+      status=$(python3 -c "import json; print(json.load(open('$f')).get('status','?'))" 2>/dev/null || echo "?")
+      echo "    ${name} → tmux:${session} (${status})"
+    done
+  else
+    echo "  No registered sessions"
+  fi
+
+  echo ""
+
+  # Show pairing status
+  if [ -f "${BOAT_KEYS}/current-code" ]; then
+    echo "  Pairing code: $(cat "${BOAT_KEYS}/current-code")"
+  else
+    echo "  No active pairing code"
+  fi
+
+  echo ""
+
+  # Show tmux sessions
+  echo "  All tmux sessions:"
+  if command -v tmux >/dev/null 2>&1; then
+    tmux list-sessions -F '    #{session_name} (#{session_windows} windows, #{?session_attached,attached,detached})' 2>/dev/null || echo "    (none running)"
+  else
+    echo "    (tmux not installed)"
+  fi
+}
+
+cmd_stop() {
+  if [ -f "$BOAT_PID" ]; then
+    local pid
+    pid=$(cat "$BOAT_PID")
+    kill "$pid" 2>/dev/null && echo "⛵ Boat daemon stopped (pid ${pid})" || echo "⛵ Daemon not running"
+    rm -f "$BOAT_PID"
+  else
+    echo "⛵ No daemon running"
+  fi
+}
+
+cmd_revoke() {
+  rm -rf "$BOAT_KEYS"/*
+  echo "⛵ All pairing keys revoked"
+}
+
+# ── Main ─────────────────────────────────────────────────────────────
+
+case "${1:-help}" in
+  wrap) shift; cmd_wrap "$@" ;;
+  serve) shift; cmd_serve "$@" ;;
+  register) shift; cmd_register "$@" ;;
+  status) cmd_status ;;
+  stop) cmd_stop ;;
+  revoke) cmd_revoke ;;
+  help|--help|-h)
+    echo "charons-boat — Universal agent session bridge for Charon"
+    echo ""
+    echo "Usage:"
+    echo "  charons-boat wrap [--name NAME] -- <command>  Wrap command in tmux"
+    echo "  charons-boat serve [--generate-code]          Start for remote access"
+    echo "  charons-boat register                         Register current tmux session"
+    echo "  charons-boat status                           Show status"
+    echo "  charons-boat stop                             Stop daemon"
+    echo "  charons-boat revoke                           Revoke pairing keys"
+    echo ""
+    echo "Examples:"
+    echo "  charons-boat wrap -- pi                       # Wrap pi-agent"
+    echo "  charons-boat wrap --name myhermes -- hermes   # Wrap hermes"
+    echo "  charons-boat serve --generate-code            # Enable remote access"
+    ;;
+  *) echo "Unknown command: $1. Run 'charons-boat help' for usage."; exit 1 ;;
+esac

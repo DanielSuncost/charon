@@ -1,0 +1,23 @@
+[project]
+name = "charon"
+version = "0.1.0"
+description = "A single-user agent operating system"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+
+dependencies = [
+    "httpx>=0.28",
+    "browser-use>=0.12",
+    "playwright>=1.50",
+    "sqlite-vec>=0.1.6",
+    "sentence-transformers>=5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.backends._legacy:_Backend"

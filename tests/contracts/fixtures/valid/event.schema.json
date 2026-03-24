@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "id": "evt-1",
+  "ts": "2026-03-15T23:05:00Z",
+  "event_type": "agent_intervention",
+  "actor_type": "agent",
+  "actor_id": "agent-1",
+  "correlation_id": "corr-1",
+  "payload": {
+    "content": "Intervene to enforce schema-first flow"
+  },
+  "signature": null,
+  "conversation_id": "conv-1",
+  "message_id": "msg-2",
+  "parent_message_id": "msg-1",
+  "intervention_of_message_id": "msg-1",
+  "causation_id": "msg-1",
+  "branch_label": "schema-guard"
+}

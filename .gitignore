@@ -1,0 +1,30 @@
+# Archive — dead code kept locally for reference
+.archive/
+
+# Dependencies
+node_modules/
+package-lock.json
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Runtime state
+.charon_state/
+.charon/
+*.db
+*.log
+
+# Build artifacts
+apps/tui/opentui/dist/
+
+# Benchmark data and results (large files)
+data/
+results/
+
+# Top-level npm (local dev tool, not a project dep)
+package.json
+
+# OS
+.DS_Store

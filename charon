@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+# charon — Launch the Charon Agent Operating System
+#
+# Usage:
+#   charon              Start the TUI
+#   charon chat         Direct CLI chat (no TUI)
+#   charon setup        Run setup/onboarding
+#   charon status       Show current config
+#   charon agents       List agents
+#   charon --help       Show help
+
+set -euo pipefail
+
+# Resolve symlinks to find the real project root
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+CHARON_ROOT="$(cd "$(dirname "$SOURCE")" && pwd)"
+TUI_DIR="${CHARON_ROOT}/apps/tui/opentui"
+
+case "${1:-}" in
+  chat)
+    shift
+    exec python3 "${CHARON_ROOT}/scripts/charon_chat.py" "$@"
+    ;;
+  setup)
+    shift
+    exec python3 "${CHARON_ROOT}/scripts/charon_agents.py" setup "$@"
+    ;;
+  status)
+    exec python3 "${CHARON_ROOT}/scripts/charon_agents.py" setup status
+    ;;
+  agents|list)
+    exec python3 "${CHARON_ROOT}/scripts/charon_agents.py" list
+    ;;
+  --help|-h|help)
+    echo "Charon — Agent Operating System"
+    echo ""
+    echo "Usage:"
+    echo "  charon                       Launch the TUI (fresh session)"
+    echo "  charon --resume              Resume most recent session"
+    echo "  charon --agent AG-0005       New session bound to a specific agent"
+    echo "  charon --provider codex      Start with a specific provider"
+    echo "  charon chat                  Direct CLI chat (no TUI)"
+    echo "  charon setup                 Run setup/onboarding"
+    echo "  charon status                Show current config"
+    echo "  charon agents                List agents"
+    echo ""
+    echo "TUI Controls:"
+    echo "  F1  Chat view"
+    echo "  F2  Dashboard"
+    echo "  F3  Session Grid"
+    echo "  /   Show command menu"
+    exit 0
+    ;;
+  --resume=*|--resume)
+    # Resume a previous conversation
+    if [[ "$1" == "--resume="* ]]; then
+      export CHARON_RESUME="${1#--resume=}"
+    else
+      export CHARON_RESUME="${2:-latest}"
+      shift
+    fi
+    shift
+    ;& # fall through to TUI launch
+  --agent|--agent=*)
+    # --agent AG-0005 or --agent=AG-0005
+    # Start a new session tied to a specific agent (shares its memory/specialization)
+    if [[ "$1" == "--agent="* ]]; then
+      export CHARON_AGENT="${1#--agent=}"
+    else
+      export CHARON_AGENT="${2:-}"
+      shift
+    fi
+    shift
+    ;& # fall through to TUI launch
+  --provider|--provider=*)
+    # --provider codex or --provider=codex
+    if [[ "$1" == "--provider="* ]]; then
+      export CHARON_PROVIDER="${1#--provider=}"
+    else
+      export CHARON_PROVIDER="${2:-}"
+      shift
+    fi
+    shift
+    ;& # fall through to TUI launch
+  claude-code|codex|lmstudio|opencode|api)
+    # Launch TUI with a specific provider (shorthand)
+    export CHARON_PROVIDER="${1:-}"
+    if [[ "$1" =~ ^(claude-code|codex|lmstudio|opencode|api)$ ]]; then
+      shift
+    fi
+    ;& # fall through to TUI launch
+  --tmux)
+    # Force tmux wrapping
+    export CHARON_USE_TMUX=1
+    shift
+    ;& # fall through
+  --no-tmux)
+    # Force direct launch (no tmux wrapping)
+    export CHARON_NO_TMUX=1
+    shift
+    ;& # fall through
+  "")
+    # Default: launch TUI
+    if ! command -v bun &>/dev/null; then
+      echo "Error: Bun is required for the Charon TUI."
+      echo "Install: curl -fsSL https://bun.sh/install | bash"
+      echo ""
+      echo "Alternatively, use CLI mode: charon chat"
+      exit 1
+    fi
+
+    # Ensure dependencies are installed
+    if [ ! -d "${TUI_DIR}/node_modules" ]; then
+      echo "Installing TUI dependencies..."
+      (cd "${TUI_DIR}" && bun install)
+    fi
+
+    # Warn if other Charon sessions are already running
+    # (multiple sessions with OAuth providers can cause token refresh races)
+    existing_backends=$(pgrep -f "chat_backend.py" 2>/dev/null | wc -l)
+    if [ "$existing_backends" -gt 0 ]; then
+      echo "⚠ ${existing_backends} other Charon session(s) detected."
+      echo "  Multiple sessions sharing OAuth tokens (claude-code/codex) may"
+      echo "  cause intermittent errors. Use local models or API keys for"
+      echo "  multiple simultaneous sessions."
+      echo ""
+    fi
+
+    # Check Python dependencies
+    if ! python3 -c "import httpx" 2>/dev/null; then
+      echo "Installing Python dependencies..."
+      if command -v uv &>/dev/null; then
+        uv pip install -r "${CHARON_ROOT}/requirements.txt"
+      else
+        python3 -m pip install -r "${CHARON_ROOT}/requirements.txt" 2>/dev/null || true
+      fi
+    fi
+
+    # Tmux-native mode: run TUI inside a tmux session
+    # This enables:
+    # - Multiple terminals attaching to the same session
+    # - Session persistence (detach instead of kill)
+    # - Session grid can capture live content
+    # Tmux wrapping: opt-in via --tmux flag or CHARON_USE_TMUX=1
+    # NEVER nest tmux — if already inside tmux, run directly
+    if [ "${TMUX:-}" != "" ]; then
+      exec bun "${TUI_DIR}/src/index.ts"
+    fi
+    if [ "${CHARON_USE_TMUX:-}" = "1" ] && command -v tmux &>/dev/null; then
+
+      # Determine session name
+      if [ -n "${CHARON_SESSION:-}" ]; then
+        # Explicit session name — attach if exists, create if not
+        SESSION_NAME="$CHARON_SESSION"
+        if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+          exec tmux attach-session -t "$SESSION_NAME"
+        fi
+      else
+        # Auto-generate unique session name: charon-01, charon-02, etc.
+        SESSION_NUM=1
+        while tmux has-session -t "charon-$(printf '%02d' $SESSION_NUM)" 2>/dev/null; do
+          SESSION_NUM=$((SESSION_NUM + 1))
+        done
+        SESSION_NAME="charon-$(printf '%02d' $SESSION_NUM)"
+      fi
+
+      # Create new session with TUI running inside it
+      # Pass through env vars
+      TMUX_ENV="CHARON_SESSION_NAME='$SESSION_NAME'"
+      [ -n "${CHARON_PROVIDER:-}" ] && TMUX_ENV="$TMUX_ENV CHARON_PROVIDER='$CHARON_PROVIDER'"
+      [ -n "${CHARON_RESUME:-}" ] && TMUX_ENV="$TMUX_ENV CHARON_RESUME='$CHARON_RESUME'"
+
+      # Get current terminal size for tmux session
+      TERM_COLS=$(tput cols 2>/dev/null || echo 120)
+      TERM_ROWS=$(tput lines 2>/dev/null || echo 40)
+
+      # Create session at the correct size from the start
+      tmux new-session -d -s "$SESSION_NAME" -x "$TERM_COLS" -y "$TERM_ROWS" \
+        "env $TMUX_ENV CHARON_NO_TMUX=1 bun '${TUI_DIR}/src/index.ts'; echo ''; echo '  Session ended. Press Enter to close.'; read"
+      exec tmux attach-session -t "$SESSION_NAME"
+    fi
+
+    # Fallback: direct launch (no tmux available or CHARON_NO_TMUX=1)
+    exec bun "${TUI_DIR}/src/index.ts"
+    ;;
+  *)
+    # Pass through to charon_agents.py
+    exec python3 "${CHARON_ROOT}/scripts/charon_agents.py" "$@"
+    ;;
+esac

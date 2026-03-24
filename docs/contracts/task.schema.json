@@ -1,0 +1,87 @@
+{
+  "": "charon/contracts/task.schema.json",
+  "title": "Charon Task",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "title",
+    "instruction",
+    "owner_agent_id",
+    "project",
+    "priority",
+    "status",
+    "created_at",
+    "updated_at",
+    "result_summary"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "instruction": {
+      "type": "string",
+      "minLength": 1
+    },
+    "owner_agent_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "project": {
+      "type": "string",
+      "minLength": 1
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "urgent"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "in_progress",
+        "completed",
+        "failed",
+        "blocked"
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "result_summary": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "parent_task_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "escalation_required": {
+      "type": "boolean"
+    }
+  }
+}

@@ -1,0 +1,208 @@
+{
+  "cases": [
+    {
+      "id": "get_200_json",
+      "description": "GET request returns 200 with a JSON body. The tool should surface the status line, content-type header, and parsed body. is_error must be false because status < 400.",
+      "input": {
+        "url": "http://mock.local/api/users/42",
+        "method": "GET",
+        "timeout": 10
+      },
+      "mock_response": {
+        "status_code": 200,
+        "headers": {
+          "Content-Type": "application/json",
+          "Content-Length": "72"
+        },
+        "body": "{\"id\": 42, \"name\": \"Ada Lovelace\", \"email\": \"ada@example.com\", \"active\": true}"
+      },
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "HTTP 200",
+          "content-type: application/json",
+          "\"id\": 42",
+          "\"name\": \"Ada Lovelace\""
+        ]
+      }
+    },
+    {
+      "id": "post_201_created",
+      "description": "POST request with a JSON body returns 201 Created. The tool should auto-inject Content-Type: application/json when the body is valid JSON and no content-type header is supplied. is_error must be false.",
+      "input": {
+        "url": "http://mock.local/api/users",
+        "method": "POST",
+        "body": "{\"name\": \"Grace Hopper\", \"email\": \"grace@example.com\"}",
+        "timeout": 10
+      },
+      "mock_response": {
+        "status_code": 201,
+        "headers": {
+          "Content-Type": "application/json",
+          "Location": "/api/users/99"
+        },
+        "body": "{\"id\": 99, \"name\": \"Grace Hopper\", \"email\": \"grace@example.com\", \"active\": true}"
+      },
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "HTTP 201",
+          "location: /api/users/99",
+          "\"id\": 99",
+          "\"name\": \"Grace Hopper\""
+        ]
+      }
+    },
+    {
+      "id": "get_404_not_found",
+      "description": "GET request for a missing resource returns 404. The tool surfaces the status code and body but sets is_error=true because status >= 400. The caller can inspect the body for detail.",
+      "input": {
+        "url": "http://mock.local/api/users/9999",
+        "method": "GET",
+        "timeout": 10
+      },
+      "mock_response": {
+        "status_code": 404,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"error\": \"not_found\", \"message\": \"User 9999 does not exist\"}"
+      },
+      "expected": {
+        "is_error": true,
+        "content_contains": [
+          "HTTP 404",
+          "not_found",
+          "User 9999 does not exist"
+        ]
+      }
+    },
+    {
+      "id": "timeout_error",
+      "description": "Request to a non-routable host exceeds the timeout. The tool catches httpx.TimeoutException and returns a ToolResult with is_error=true and a message indicating the timeout duration.",
+      "input": {
+        "url": "http://10.255.255.1/api/health",
+        "method": "GET",
+        "timeout": 1
+      },
+      "mock_response": {
+        "status_code": null,
+        "headers": {},
+        "body": null,
+        "_simulate": "timeout"
+      },
+      "expected": {
+        "is_error": true,
+        "content_contains": [
+          "Error",
+          "timed out",
+          "1"
+        ]
+      }
+    },
+    {
+      "id": "get_custom_headers",
+      "description": "GET request with custom Authorization and Accept headers. The mock verifies the headers are forwarded; the response contains JSON that requires the correct Accept header to be served.",
+      "input": {
+        "url": "http://mock.local/api/reports/monthly",
+        "method": "GET",
+        "headers": {
+          "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test",
+          "Accept": "application/json",
+          "X-Request-ID": "req-abc-123"
+        },
+        "timeout": 10
+      },
+      "mock_response": {
+        "status_code": 200,
+        "headers": {
+          "Content-Type": "application/json",
+          "X-RateLimit-Remaining": "42"
+        },
+        "body": "{\"report\": \"monthly\", \"rows\": 512, \"generated_at\": \"2026-03-21T00:00:00Z\"}"
+      },
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "HTTP 200",
+          "x-ratelimit-remaining: 42",
+          "\"report\": \"monthly\"",
+          "\"rows\": 512"
+        ]
+      }
+    },
+    {
+      "id": "delete_204_no_body",
+      "description": "DELETE request returns 204 No Content with an empty body. The tool should surface the 204 status line with no body text. is_error must be false because status < 400.",
+      "input": {
+        "url": "http://mock.local/api/users/42",
+        "method": "DELETE",
+        "timeout": 10
+      },
+      "mock_response": {
+        "status_code": 204,
+        "headers": {},
+        "body": ""
+      },
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "HTTP 204"
+        ]
+      }
+    },
+    {
+      "id": "get_500_server_error",
+      "description": "GET request triggers a 500 Internal Server Error. The tool sets is_error=true (status >= 400) and the body contains the upstream error detail. Tests that 5xx responses are treated as errors just like 4xx.",
+      "input": {
+        "url": "http://mock.local/api/jobs/run",
+        "method": "GET",
+        "timeout": 10
+      },
+      "mock_response": {
+        "status_code": 500,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"error\": \"internal_server_error\", \"message\": \"Database connection pool exhausted\"}"
+      },
+      "expected": {
+        "is_error": true,
+        "content_contains": [
+          "HTTP 500",
+          "internal_server_error",
+          "Database connection pool exhausted"
+        ]
+      }
+    },
+    {
+      "id": "put_200_updated",
+      "description": "PUT request replaces an existing resource and the server returns 200 with the updated representation. Verifies that a body is sent with PUT and the response is parsed correctly.",
+      "input": {
+        "url": "http://mock.local/api/users/42",
+        "method": "PUT",
+        "body": "{\"name\": \"Ada Lovelace\", \"email\": \"ada.updated@example.com\", \"active\": false}",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "timeout": 10
+      },
+      "mock_response": {
+        "status_code": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"id\": 42, \"name\": \"Ada Lovelace\", \"email\": \"ada.updated@example.com\", \"active\": false}"
+      },
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "HTTP 200",
+          "\"id\": 42",
+          "\"active\": false",
+          "ada.updated@example.com"
+        ]
+      }
+    }
+  ]
+}

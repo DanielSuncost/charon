@@ -1,0 +1,104 @@
+{
+  "cases": [
+    {
+      "id": "simple_echo",
+      "description": "Simple echo command returns the echoed string with no error",
+      "input": {
+        "command": "echo 'hello charon'"
+      },
+      "expected": {
+        "is_error": false,
+        "content_contains": ["hello charon"]
+      }
+    },
+    {
+      "id": "nonzero_exit_code",
+      "description": "Command with a non-zero exit code is treated as an error",
+      "input": {
+        "command": "exit 1"
+      },
+      "expected": {
+        "is_error": true,
+        "content_contains": []
+      }
+    },
+    {
+      "id": "nonzero_exit_with_output",
+      "description": "Command that prints a message and then exits non-zero surfaces that output in the error result",
+      "input": {
+        "command": "echo 'fatal: not a git repository' && exit 128"
+      },
+      "expected": {
+        "is_error": true,
+        "content_contains": ["fatal: not a git repository"]
+      }
+    },
+    {
+      "id": "timeout_exceeded",
+      "description": "Command that exceeds the timeout produces an error mentioning 'timed out'",
+      "input": {
+        "command": "sleep 10",
+        "timeout": 1
+      },
+      "expected": {
+        "is_error": true,
+        "content_contains": ["timed out"]
+      }
+    },
+    {
+      "id": "empty_command",
+      "description": "Passing an empty string as the command returns an error requiring a command",
+      "input": {
+        "command": ""
+      },
+      "expected": {
+        "is_error": true,
+        "content_contains": ["command is required"]
+      }
+    },
+    {
+      "id": "stderr_captured",
+      "description": "Output written to stderr is captured and included in the returned content",
+      "input": {
+        "command": "echo 'this goes to stderr' >&2"
+      },
+      "expected": {
+        "is_error": false,
+        "content_contains": ["this goes to stderr"]
+      }
+    },
+    {
+      "id": "pipe_and_transform",
+      "description": "Multi-command pipeline (echo piped through tr for uppercase) works end-to-end",
+      "input": {
+        "command": "echo 'hello world' | tr 'a-z' 'A-Z'"
+      },
+      "expected": {
+        "is_error": false,
+        "content_contains": ["HELLO WORLD"]
+      }
+    },
+    {
+      "id": "write_and_read_file",
+      "description": "Command writes a value to a temp file, reads it back, and the value appears in output",
+      "input": {
+        "command": "tmpfile=$(mktemp) && echo 'charon-test-value' > \"$tmpfile\" && cat \"$tmpfile\" && rm -f \"$tmpfile\""
+      },
+      "expected": {
+        "is_error": false,
+        "content_contains": ["charon-test-value"]
+      }
+    },
+    {
+      "id": "missing_executable",
+      "description": "Attempting to run a command that does not exist exits non-zero and stderr describes the failure",
+      "input": {
+        "command": "__charon_no_such_command__ --help"
+      },
+      "expected": {
+        "is_error": true,
+        "content_contains": ["not found"]
+      }
+    }
+  ]
+}

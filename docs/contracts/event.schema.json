@@ -1,0 +1,123 @@
+{
+  "": "charon/contracts/event.schema.json",
+  "title": "Charon Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "ts",
+    "event_type",
+    "actor_type",
+    "actor_id",
+    "correlation_id",
+    "payload",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ts": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "loop_start",
+        "loop_idle",
+        "loop_halt",
+        "loop_exit",
+        "agent_created",
+        "agent_assigned",
+        "agent_status_changed",
+        "task_created",
+        "task_started",
+        "task_succeeded",
+        "task_failed",
+        "remote_link_enrolled",
+        "remote_link_revoked",
+        "remote_command_dispatched",
+        "remote_command_ack",
+        "internal_worker_spawned",
+        "internal_worker_completed",
+        "internal_worker_failed",
+        "rlm_node_started",
+        "rlm_node_completed",
+        "rlm_budget_exceeded",
+        "agent_message",
+        "agent_intervention",
+        "agent_backtrack"
+      ]
+    },
+    "actor_type": {
+      "type": "string",
+      "enum": [
+        "user",
+        "agent",
+        "node",
+        "system",
+        "internal_worker"
+      ]
+    },
+    "actor_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "correlation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "payload": {
+      "type": "object"
+    },
+    "signature": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "conversation_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "message_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "parent_message_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "intervention_of_message_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "causation_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "branch_label": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

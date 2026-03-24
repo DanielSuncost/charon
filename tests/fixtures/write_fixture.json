@@ -1,0 +1,113 @@
+{
+  "cases": [
+    {
+      "id": "write_new_file",
+      "description": "Write content to a new file that does not yet exist. The tool should create the file and return a success message.",
+      "input": {
+        "path": "output/hello.txt",
+        "content": "Hello, Charon!"
+      },
+      "setup": "Target file output/hello.txt does not exist; output/ directory exists.",
+      "expected": {
+        "is_error": false,
+        "content_contains": ["Successfully wrote"],
+        "file_content": "Hello, Charon!"
+      }
+    },
+    {
+      "id": "write_nested_dirs",
+      "description": "Write a file whose intermediate parent directories do not exist. The tool should create all missing directories automatically before writing.",
+      "input": {
+        "path": "a/b/c/deep_file.txt",
+        "content": "nested directory content"
+      },
+      "setup": "None of the directories a/, a/b/, or a/b/c/ exist.",
+      "expected": {
+        "is_error": false,
+        "content_contains": ["Successfully wrote"],
+        "file_content": "nested directory content"
+      }
+    },
+    {
+      "id": "write_overwrite_existing",
+      "description": "Write to a path that already holds a file. The tool should overwrite the existing content entirely with the new content.",
+      "input": {
+        "path": "exist.txt",
+        "content": "brand new content"
+      },
+      "setup": "File exist.txt already exists with content 'original content'.",
+      "expected": {
+        "is_error": false,
+        "content_contains": ["Successfully wrote"],
+        "file_content": "brand new content"
+      }
+    },
+    {
+      "id": "write_empty_content",
+      "description": "Write an empty string to a new file. The tool should succeed and produce a zero-byte file.",
+      "input": {
+        "path": "empty.txt",
+        "content": ""
+      },
+      "setup": "Target file empty.txt does not exist.",
+      "expected": {
+        "is_error": false,
+        "content_contains": ["Successfully wrote"],
+        "file_content": ""
+      }
+    },
+    {
+      "id": "write_empty_path",
+      "description": "Attempt to write with an empty string as the path. The tool should reject the input and return an error.",
+      "input": {
+        "path": "",
+        "content": "this should never land anywhere"
+      },
+      "expected": {
+        "is_error": true,
+        "content_contains": []
+      }
+    },
+    {
+      "id": "write_unicode_special_chars",
+      "description": "Write a file containing unicode characters, emoji, and special symbols. The tool should preserve all characters exactly as given.",
+      "input": {
+        "path": "unicode_test.txt",
+        "content": "日本語テスト\n中文测试\nΕλληνικά\n🚀 emoji support ✅\nSpecial: <>&\"'\\n\\t\n"
+      },
+      "setup": "Target file unicode_test.txt does not exist.",
+      "expected": {
+        "is_error": false,
+        "content_contains": ["Successfully wrote"],
+        "file_content": "日本語テスト\n中文测试\nΕλληνικά\n🚀 emoji support ✅\nSpecial: <>&\"'\\n\\t\n"
+      }
+    },
+    {
+      "id": "write_multiline_code",
+      "description": "Write a multi-line Python source file. Verifies that newlines and indentation are preserved faithfully.",
+      "input": {
+        "path": "src/snippet.py",
+        "content": "def greet(name: str) -> str:\n    \"\"\"Return a greeting string.\"\"\"\n    return f\"Hello, {name}!\"\n\n\nif __name__ == \"__main__\":\n    print(greet(\"world\"))\n"
+      },
+      "setup": "Directory src/ exists; snippet.py does not.",
+      "expected": {
+        "is_error": false,
+        "content_contains": ["Successfully wrote"],
+        "file_content": "def greet(name: str) -> str:\n    \"\"\"Return a greeting string.\"\"\"\n    return f\"Hello, {name}!\"\n\n\nif __name__ == \"__main__\":\n    print(greet(\"world\"))\n"
+      }
+    },
+    {
+      "id": "write_large_content",
+      "description": "Write a file with a large block of repeated content (~10 KB). Ensures the tool handles non-trivial payload sizes without error.",
+      "input": {
+        "path": "large_file.txt",
+        "content": "AAAAAAAAAA BBBBBBBBBB CCCCCCCCCC DDDDDDDDDD EEEEEEEEEE FFFFFFFFFF GGGGGGGGGG HHHHHHHHHH IIIIIIIIII JJJJJJJJJJ\nAAAAAAAAAA BBBBBBBBBB CCCCCCCCCC DDDDDDDDDD EEEEEEEEEE FFFFFFFFFF GGGGGGGGGG HHHHHHHHHH IIIIIIIIII JJJJJJJJJJ\nAAAAAAAAAA BBBBBBBBBB CCCCCCCCCC DDDDDDDDDD EEEEEEEEEE FFFFFFFFFF GGGGGGGGGG HHHHHHHHHH IIIIIIIIII JJJJJJJJJJ\nAAAAAAAAAA BBBBBBBBBB CCCCCCCCCC DDDDDDDDDD EEEEEEEEEE FFFFFFFFFF GGGGGGGGGG HHHHHHHHHH IIIIIIIIII JJJJJJJJJJ\nAAAAAAAAAA BBBBBBBBBB CCCCCCCCCC DDDDDDDDDD EEEEEEEEEE FFFFFFFFFF GGGGGGGGGG HHHHHHHHHH IIIIIIIIII JJJJJJJJJJ\nAAAAAAAAAA BBBBBBBBBB CCCCCCCCCC DDDDDDDDDD EEEEEEEEEE FFFFFFFFFF GGGGGGGGGG HHHHHHHHHH IIIIIIIIII JJJJJJJJJJ\nAAAAAAAAAA BBBBBBBBBB CCCCCCCCCC DDDDDDDDDD EEEEEEEEEE FFFFFFFFFF GGGGGGGGGG HHHHHHHHHH IIIIIIIIII JJJJJJJJJJ\nAAAAAAAAAA BBBBBBBBBB CCCCCCCCCC DDDDDDDDDD EEEEEEEEEE FFFFFFFFFF GGGGGGGGGG HHHHHHHHHH IIIIIIIIII JJJJJJJJJJ\nAAAAAAAAAA BBBBBBBBBB CCCCCCCCCC DDDDDDDDDD EEEEEEEEEE FFFFFFFFFF GGGGGGGGGG HHHHHHHHHH IIIIIIIIII JJJJJJJJJJ\nAAAAAAAAAA BBBBBBBBBB CCCCCCCCCC DDDDDDDDDD EEEEEEEEEE FFFFFFFFFF GGGGGGGGGG HHHHHHHHHH IIIIIIIIII JJJJJJJJJJ\n"
+      },
+      "setup": "Target file large_file.txt does not exist.",
+      "expected": {
+        "is_error": false,
+        "content_contains": ["Successfully wrote"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "": "charon/contracts/node-link.schema.json",
+  "title": "Charon Node Link",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "node_id",
+    "display_name",
+    "base_url",
+    "trust_state",
+    "enrollment_method",
+    "key_fingerprint",
+    "scopes",
+    "created_at",
+    "updated_at",
+    "last_seen"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "node_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "display_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "base_url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "trust_state": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "trusted",
+        "revoked"
+      ]
+    },
+    "enrollment_method": {
+      "type": "string",
+      "enum": [
+        "pairing_code",
+        "key_file"
+      ]
+    },
+    "key_fingerprint": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scopes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "view",
+          "control",
+          "admin"
+        ]
+      },
+      "uniqueItems": true,
+      "minItems": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_seen": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

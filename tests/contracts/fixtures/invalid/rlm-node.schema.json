@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "id": "rlm-1",
+  "parent_id": null,
+  "root_task_id": "task-1",
+  "objective": "Research architecture options",
+  "depth": 0,
+  "budget": {
+    "max_depth": 4,
+    "max_tokens": 0,
+    "max_seconds": 120
+  },
+  "usage": {
+    "tokens": 1200,
+    "seconds": 8.5
+  },
+  "status": "running",
+  "output_ref": null
+}

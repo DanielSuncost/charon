@@ -1,0 +1,91 @@
+{
+  "": "charon/contracts/agent.schema.json",
+  "title": "Charon Agent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "specialization",
+    "project",
+    "status",
+    "capabilities",
+    "link_scope",
+    "node_id",
+    "created_at",
+    "updated_at",
+    "last_heartbeat"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "specialization": {
+      "type": "string",
+      "pattern": "^(generalist|project:.+)$"
+    },
+    "project": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "idle",
+        "running",
+        "blocked",
+        "error",
+        "stopped"
+      ]
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "link_scope": {
+      "type": "string",
+      "enum": [
+        "local",
+        "remote"
+      ]
+    },
+    "node_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "last_heartbeat": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "internal_worker_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "last_internal_worker_event": {
+      "type": "string"
+    }
+  }
+}

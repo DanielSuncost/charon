@@ -1,0 +1,206 @@
+{
+  "_comment": "Test fixture for the Charon Git tool (apps/core-daemon/tools/git_tool.py). Each case maps directly to a supported action in execute_git(). 'content_contains' strings are substrings expected anywhere in ToolResult.content.",
+  "cases": [
+    {
+      "id": "status-clean",
+      "description": "status action on a repo with no uncommitted changes should report the branch name and a clean working tree.",
+      "input": {
+        "action": "status"
+      },
+      "setup": "Initialise a bare git repo, create an initial commit so HEAD exists, leave working tree untouched.",
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "Branch:",
+          "nothing to commit"
+        ]
+      }
+    },
+    {
+      "id": "status-dirty",
+      "description": "status action when there are unstaged modifications should list the changed file(s) with a status flag (e.g. 'M' for modified).",
+      "input": {
+        "action": "status"
+      },
+      "setup": "Initialise a git repo with at least one committed file, then modify that file without staging the change.",
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "Branch:",
+          "M "
+        ]
+      }
+    },
+    {
+      "id": "diff-changes",
+      "description": "diff action shows the stat summary and the actual diff hunks for modified tracked files.",
+      "input": {
+        "action": "diff",
+        "lines": 80
+      },
+      "setup": "Initialise a repo with a committed file (e.g. README.md). Append a line to that file so there is an unstaged diff to display.",
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "@@",
+          "+"
+        ]
+      }
+    },
+    {
+      "id": "diff-specific-file",
+      "description": "diff action with a specific file path in 'files' should scope the diff output to that file only.",
+      "input": {
+        "action": "diff",
+        "files": ["README.md"],
+        "lines": 50
+      },
+      "setup": "Initialise a repo with README.md and another_file.txt both committed. Modify both files. The diff should only mention README.md.",
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "README.md"
+        ]
+      }
+    },
+    {
+      "id": "commit-success",
+      "description": "commit action with a non-empty message auto-stages all changes, creates a commit, and returns the git commit summary line.",
+      "input": {
+        "action": "commit",
+        "message": "feat: add initial agent contract definitions"
+      },
+      "setup": "Initialise a repo with a configured user.email and user.name. Create or modify a tracked file so there is something to stage and commit.",
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "feat: add initial agent contract definitions"
+        ]
+      }
+    },
+    {
+      "id": "commit-no-changes",
+      "description": "commit action when the working tree is already clean should return a human-readable message instead of an error, because there is nothing to commit.",
+      "input": {
+        "action": "commit",
+        "message": "chore: attempt commit on clean tree"
+      },
+      "setup": "Initialise a repo and create an initial commit. Do not modify any files afterwards so the working tree is clean.",
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "Nothing to commit"
+        ]
+      }
+    },
+    {
+      "id": "commit-empty-message",
+      "description": "commit action with an empty or blank message should fail immediately with a validation error before touching the index.",
+      "input": {
+        "action": "commit",
+        "message": ""
+      },
+      "setup": "Any valid git repository (the error is triggered before git is invoked).",
+      "expected": {
+        "is_error": true,
+        "content_contains": [
+          "Error:",
+          "commit message is required"
+        ]
+      }
+    },
+    {
+      "id": "branch-create",
+      "description": "branch action with a new branch name creates that branch and switches to it, returning a confirmation message.",
+      "input": {
+        "action": "branch",
+        "branch": "feature/shade-orchestrator-v2"
+      },
+      "setup": "Initialise a repo with at least one commit so that a branch can be created from HEAD.",
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "Created and switched to branch:",
+          "feature/shade-orchestrator-v2"
+        ]
+      }
+    },
+    {
+      "id": "branch-list",
+      "description": "branch action with no branch name lists all local (and remote-tracking) branches.",
+      "input": {
+        "action": "branch"
+      },
+      "setup": "Initialise a repo with at least one commit and two local branches (e.g. main and feature/x).",
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "main"
+        ]
+      }
+    },
+    {
+      "id": "checkout-existing",
+      "description": "checkout action with the name of an existing branch switches HEAD to that branch and returns a confirmation.",
+      "input": {
+        "action": "checkout",
+        "branch": "main"
+      },
+      "setup": "Initialise a repo with a main branch and a feature branch. Start on the feature branch so that checking out main is a real switch.",
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "Switched to:",
+          "main"
+        ]
+      }
+    },
+    {
+      "id": "checkout-no-branch",
+      "description": "checkout action when branch param is absent or empty should fail with a validation error.",
+      "input": {
+        "action": "checkout"
+      },
+      "setup": "Any valid git repository.",
+      "expected": {
+        "is_error": true,
+        "content_contains": [
+          "Error:",
+          "branch name is required"
+        ]
+      }
+    },
+    {
+      "id": "log-recent-commits",
+      "description": "log action returns the current branch name followed by one-line commit entries for recent commits.",
+      "input": {
+        "action": "log",
+        "lines": 10
+      },
+      "setup": "Initialise a repo and create at least three commits with distinct messages so the log is non-trivial.",
+      "expected": {
+        "is_error": false,
+        "content_contains": [
+          "Branch:",
+          "feat:"
+        ]
+      }
+    },
+    {
+      "id": "unknown-action",
+      "description": "Passing an unrecognised action string should return an error listing the valid actions.",
+      "input": {
+        "action": "rebase"
+      },
+      "setup": "Any valid git repository.",
+      "expected": {
+        "is_error": true,
+        "content_contains": [
+          "Error:",
+          "Unknown action",
+          "rebase"
+        ]
+      }
+    }
+  ]
+}
