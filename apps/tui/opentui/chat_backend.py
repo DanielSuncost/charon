@@ -75,16 +75,23 @@ class ChatBackend:
         self._notified_batches: set[str] = set()
         self._session_tasks: list[dict] = []
 
-    def _load_tasks_from_ledger(self, agent_id: str) -> None:
+    def _load_tasks_from_ledger(self, agent_id: str | None = None) -> None:
         """Populate _session_tasks from the task ledger on resume.
 
         Reads completed tasks from working memory / task queue so the
         info pane shows what this agent already did in prior sessions.
+        Uses _bound_agent_id (the real agent) over the session ID since
+        working memory is stored per-agent, not per-session.
         """
         try:
             from task_ledger import get_agent_ledger
+            # Prefer the bound agent ID (e.g. AG-0005) over the session ID
+            # (e.g. session-85ec2a-...) because task ledger data is keyed by agent
+            lookup_id = getattr(self, '_bound_agent_id', None) or agent_id
+            if not lookup_id:
+                return
             entries = get_agent_ledger(
-                STATE_DIR, agent_id,
+                STATE_DIR, lookup_id,
                 limit=50, include_pending=False,
             )
             tasks = []

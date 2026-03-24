@@ -543,25 +543,25 @@ async function main() {
       // Frame 1: oar forward, lantern bright
       () => joinStyled(
         t`${fg(spark)('  .*')}`, t`${fg(lanternBright)('◈')}`, t`${fg(spark)('·.          ')}`, '\n',
-        t`${fg(water)('  ≈ ')}`, t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)(' ╱')}`, t`${fg(water)('   ≈     ')}`, '\n',
+        '    ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)(' ╱')}`, '          ', '\n',
         t`${fg(water)('  ≈')}`, t`${fg(waveD)('~')}`, t`${fg(hull)('╘')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('▬')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('╛')}`, t`${fg(waveD)('~')}`, t`${fg(water)('≈')}`, t`${fg(waveD)('~~  ')}`,
       ),
       // Frame 2: oar vertical, lantern orange
       () => joinStyled(
         t`${fg(spark)('  .·')}`, t`${fg(lanternDim)('◈')}`, t`${fg(spark)('*.          ')}`, '\n',
-        t`${fg(water)('  ≈ ')}`, t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)(' │')}`, t`${fg(water)('   ≈     ')}`, '\n',
+        '    ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)(' │')}`, '          ', '\n',
         t`${fg(waveD)(' ~')}`, t`${fg(water)('≈')}`, t`${fg(hull)('╘')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('▬')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('╛')}`, t`${fg(water)('≈')}`, t`${fg(waveD)('~')}`, t`${fg(water)('≈   ')}`,
       ),
       // Frame 3: oar back, lantern bright
       () => joinStyled(
-        t`${fg(spark)('   *')}`, t`${fg(lanternBright)('◈')}`, t`${fg(lanternGlow)('˙')}`, t`${fg(spark)('         ')}`, '\n',
-        t`${fg(water)('  ≈ ')}`, t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)('  ╲')}`, t`${fg(water)('  ≈     ')}`, '\n',
+        t`${fg(spark)('   *')}`, t`${fg(lanternBright)('◈')}`, t`${fg(lanternGlow)('˙')}`, '          ', '\n',
+        '    ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)('  ╲')}`, '         ', '\n',
         t`${fg(water)(' ≈')}`, t`${fg(waveD)('~')}`, t`${fg(water)('≈')}`, t`${fg(hull)('╘')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('▬')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('╛')}`, t`${fg(waveD)('~')}`, t`${fg(water)('≈   ')}`,
       ),
       // Frame 4: oar vertical, lantern dim
       () => joinStyled(
         t`${fg(spark)('  ·')}`, t`${fg(lanternDim)('◈')}`, t`${fg(spark)(' *.         ')}`, '\n',
-        t`${fg(water)('  ≈ ')}`, t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)(' │')}`, t`${fg(water)('   ≈     ')}`, '\n',
+        '    ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)(' │')}`, '          ', '\n',
         t`${fg(waveD)('  ~')}`, t`${fg(water)('≈')}`, t`${fg(hull)('╘')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('▬')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('╛')}`, t`${fg(water)('≈')}`, t`${fg(waveD)('~~  ')}`,
       ),
     ]
@@ -2490,12 +2490,15 @@ async function main() {
   function updateInfoPane() {
     if (!S.infoPaneOpen || S.view !== 'chat') {
       infoPaneBox.width = 0
+      chatScroll.width = '100%'
       return
     }
     const termW = renderer.terminalWidth || 80
-    if (termW < 100) { infoPaneBox.width = 0; return }
+    if (termW < 100) { infoPaneBox.width = 0; chatScroll.width = '100%'; return }
     const paneW = Math.min(28, Math.floor(termW * 0.25))
     infoPaneBox.width = paneW
+    // Shrink chat to make room for the pane
+    chatScroll.width = `${100 - Math.ceil(paneW * 100 / termW)}%`
 
     const info = S.sessionInfo || {}
     const tasks = info.tasks || []
