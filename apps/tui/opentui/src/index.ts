@@ -1208,7 +1208,7 @@ async function main() {
       return
     }
 
-    const termW = process.stdout.columns || 80
+    const termW = renderer.terminalWidth || process.stdout.columns || 80
 
     // ── Line 1: Agent info (left) | Provider/Model (right) ──
     // Left: agent ID, project, cwd, role
@@ -1286,10 +1286,11 @@ async function main() {
 
       if (showCon) line2Parts.push(t`${dim(fg(conColor)(' 🧠'))}`)
       if (showAuto) line2Parts.push(t`${dim(fg(autoColor)(' ⚡'))}`)
-      const fmtTok = (n: number) => n >= 10000 ? `${(n/1000).toFixed(1)}k` : n >= 1000 ? `${(n/1000).toFixed(1)}k` : `${n}`
+      const fmtTok = (n: number) => n >= 1000000 ? `${(n/1000000).toFixed(1)}M` : n >= 1000 ? `${(n/1000).toFixed(1)}k` : `${n}`
       const ctxColor = S.contextPct > 80 ? '#ef4444' : S.contextPct > 50 ? '#f59e0b' : '#4a4a5e'
-      line2Parts.push(t`${fg('#4a4a5e')(` ↑${fmtTok(S.tokensIn)} ↓${fmtTok(S.tokensOut)}`)}`)
-      line2Parts.push(t`${fg(ctxColor)(` ctx:${S.contextPct}%`)}`)
+      const lastIn = (S as any).lastCallIn || 0
+      line2Parts.push(t`${fg('#4a4a5e')(` ctx:${fmtTok(lastIn)}`)}`)
+      line2Parts.push(t`${fg(ctxColor)(` ${S.contextPct}%`)}`)
       if (S.showTimestamps) line2Parts.push(t`${fg('#4a4a5e')('  ⏱')}`)
     } else {
       line2Parts.push(t`${fg('#4a4a5e')('  type / for commands')}`)
@@ -2329,8 +2330,12 @@ async function main() {
         rebuildView(); updateStatus(); break
       }
       case 'usage': {
-        S.tokensIn += (ev.input_tokens as number) || 0
-        S.tokensOut += (ev.output_tokens as number) || 0
+        const inTok = (ev.input_tokens as number) || 0
+        const outTok = (ev.output_tokens as number) || 0
+        S.tokensIn += inTok
+        S.tokensOut += outTok
+        ;(S as any).lastCallIn = inTok
+        ;(S as any).lastCallOut = outTok
         S.contextPct = (ev.context_pct as number) ?? S.contextPct
         updateStatus()
         renderer.requestRender()

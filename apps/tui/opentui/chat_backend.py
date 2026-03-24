@@ -75,6 +75,48 @@ class ChatBackend:
         self._notified_batches: set[str] = set()
         self._session_tasks: list[dict] = []
 
+    def _load_tasks_from_ledger(self, agent_id: str) -> None:
+        """Populate _session_tasks from the task ledger on resume.
+
+        Reads completed tasks from working memory / task queue so the
+        info pane shows what this agent already did in prior sessions.
+        """
+        try:
+            from task_ledger import get_agent_ledger
+            entries = get_agent_ledger(
+                STATE_DIR, agent_id,
+                limit=50, include_pending=False,
+            )
+            tasks = []
+            for e in reversed(entries):  # ledger is newest-first, we want chronological
+                ts_epoch = 0.0
+                if e.get('ts'):
+                    try:
+                        from datetime import datetime
+                        dt = datetime.fromisoformat(e['ts'])
+                        ts_epoch = dt.timestamp()
+                    except Exception:
+                        pass
+                summary = e.get('title', '')
+                short = summary[:25].split('\n')[0]
+                if len(summary) > 25:
+                    short = short[:22] + '...'
+                tasks.append({
+                    'task_id': e.get('task_id', ''),
+                    'instruction': '',
+                    'summary': summary,
+                    'short': short,
+                    'detail': summary,
+                    'tokens_in': 0,
+                    'tokens_out': 0,
+                    'tool_calls': 0,
+                    'turns': 0,
+                    'ts': ts_epoch,
+                })
+            self._session_tasks = tasks
+        except Exception:
+            pass
+
     def _ensure_engine(self) -> tuple[ConversationEngine | None, str]:
         """Create or return the conversation engine.
         Returns (engine, error_message).
@@ -177,6 +219,7 @@ class ChatBackend:
                 saved = load_conversation(STATE_DIR, self._active_agent_id)
                 if saved:
                     self.engine.messages = [dict_to_message(m) for m in saved]
+                    self._load_tasks_from_ledger(self._active_agent_id)
                     emit({
                         'type': 'conversation_restored',
                         'messages': saved,
@@ -635,11 +678,17 @@ class ChatBackend:
                             engine, _ = self._ensure_engine()
                             if engine:
                                 engine.messages = [dict_to_message(m) for m in saved]
+                            self._load_tasks_from_ledger(arg)
                             emit({
                                 'type': 'conversation_restored',
                                 'messages': saved,
                                 'count': len(saved),
                                 'agent_id': arg,
+                            })
+                            # Push session info so task pane updates immediately
+                            emit({
+                                'type': 'refresh',
+                                'payload': {'session_info': self._get_session_info()},
                             })
                         else:
                             emit({'type': 'error', 'error': f'No saved conversation for {arg}', 'request_id': request_id})
@@ -2349,6 +2398,7 @@ class ChatBackend:
                         requested_resume = convos[0]['agent_id']
                 if requested_resume and requested_resume != 'latest':
                     self._active_agent_id = requested_resume
+                    self._load_tasks_from_ledger(requested_resume)
                     emit({'type': 'status', 'message': f'Resuming conversation with {requested_resume}...'})
             except Exception:
                 pass
