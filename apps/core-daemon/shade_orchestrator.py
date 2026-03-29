@@ -155,6 +155,8 @@ def create_contract(
     expected_outputs: list[str] | None = None,
     scope: list[str] | None = None,
     phase_specs: list[dict] | None = None,
+    contract_type: str = '',
+    metadata: dict | None = None,
 ) -> dict:
     contracts = load_contracts(state_dir)
     cid = _contract_id()
@@ -175,6 +177,8 @@ def create_contract(
         'constraints': [str(x).strip() for x in (constraints or []) if str(x).strip()],
         'expected_outputs': [str(x).strip() for x in (expected_outputs or []) if str(x).strip()],
         'scope': [str(x).strip() for x in (scope or []) if str(x).strip()],
+        'contract_type': str(contract_type or '').strip(),
+        'metadata': metadata or {},
         'phase_count': len(phases),
         'phases': phases,
         'current_phase_id': phases[0]['phase_id'] if phases else None,

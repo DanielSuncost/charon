@@ -20,6 +20,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from embedding_client import embed_texts as _embed_texts_via_client, get_embedding_dim as _get_embedding_dim_via_client
+
 
 # ── Constants ───────────────────────────────────────────────────────
 
@@ -78,43 +80,25 @@ class ScoredMemory:
     version_chain: list[Memory] = field(default_factory=list)
 
 
-# ── Embedding model (lazy singleton) ───────────────────────────────
-
-_model = None
-_model_dim: int | None = None
+# ── Embedding backend (shared worker by default) ───────────────────
 
 
-def _get_model():
-    """Lazy-load the sentence transformer model and detect its dimension."""
-    global _model, _model_dim, EMBEDDING_DIM
-    if _model is None:
-        from sentence_transformers import SentenceTransformer
-        _model = SentenceTransformer(EMBEDDING_MODEL)
-        # Detect dimension from a probe embedding
-        probe = _model.encode("dim probe", normalize_embeddings=True)
-        _model_dim = len(probe)
-        EMBEDDING_DIM = _model_dim
-    return _model
+def get_embedding_dim(state_dir: Path) -> int:
+    """Return embedding dimension, using the shared embedding worker by default."""
+    global EMBEDDING_DIM
+    if EMBEDDING_DIM is None:
+        EMBEDDING_DIM = _get_embedding_dim_via_client(state_dir)
+    return int(EMBEDDING_DIM)
 
 
-def get_embedding_dim() -> int:
-    """Return the embedding dimension of the loaded model."""
-    if _model_dim is not None:
-        return _model_dim
-    _get_model()
-    return _model_dim  # type: ignore[return-value]
+def embed(texts: list[str], state_dir: Path) -> list[list[float]]:
+    """Embed a batch of texts through the shared worker."""
+    return _embed_texts_via_client(state_dir, texts)
 
 
-def embed(texts: list[str]) -> list[list[float]]:
-    """Embed a batch of texts. Returns list of float vectors."""
-    model = _get_model()
-    embeddings = model.encode(texts, normalize_embeddings=True)
-    return [e.tolist() for e in embeddings]
-
-
-def embed_one(text: str) -> list[float]:
+def embed_one(text: str, state_dir: Path) -> list[float]:
     """Embed a single text."""
-    return embed([text])[0]
+    return embed([text], state_dir)[0]
 
 
 def _serialize_vec(vec: list[float]) -> bytes:
@@ -226,7 +210,7 @@ class MemoryEngine:
 
         # vec0 virtual table — must be created separately (not in executescript)
         # Dimension is detected from the model at load time.
-        dim = get_embedding_dim()
+        dim = get_embedding_dim(self.state_dir)
         try:
             db.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS memory_vec USING vec0(embedding float[{dim}])")
         except Exception:
@@ -273,7 +257,7 @@ class MemoryEngine:
         db = self._get_db()
         now = _now()
         mem_id = _uuid()
-        vec = embed_one(content)
+        vec = embed_one(content, self.state_dir)
 
         # Check for near-duplicate
         existing = self._find_similar(vec, container_tag=container_tag, threshold=DEDUP_THRESHOLD, limit=1)
@@ -410,7 +394,7 @@ class MemoryEngine:
         """Hybrid recall: vector + FTS5 + reciprocal rank fusion."""
         t0 = time.monotonic()
 
-        query_vec = embed_one(query)
+        query_vec = embed_one(query, self.state_dir)
         vec_results = self._search_vec(
             query_vec, container_tag=container_tag, tier=tier,
             limit=limit * 2, temporal_range=temporal_range

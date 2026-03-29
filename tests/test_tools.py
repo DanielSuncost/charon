@@ -178,6 +178,33 @@ class TestBashTool:
         assert not result.is_error
         assert 'err' in result.content
 
+    def test_interactive_sudo_is_rejected(self, tmp_path):
+        result = execute_bash({'command': 'sudo apt update'}, _ctx(tmp_path))
+        assert result.is_error
+        assert 'interactive sudo is not supported' in result.content.lower()
+        assert result.details['needs_interactive_sudo'] is True
+
+    def test_non_interactive_sudo_is_allowed_to_run(self, tmp_path):
+        result = execute_bash({'command': 'sudo -n true'}, _ctx(tmp_path))
+        assert result.details['command'] == 'sudo -n true'
+        assert 'interactive sudo is not supported' not in result.content.lower()
+
+    def test_foreground_gui_like_command_is_blocked(self, tmp_path):
+        result = execute_bash({'command': 'uv run python3 gpu_monitor.py | head -10'}, _ctx(tmp_path))
+        assert result.is_error
+        assert result.details['persistent_foreground_blocked'] is True
+        assert 'long-running foreground command' in result.content.lower()
+
+    def test_timeout_wrapper_allows_persistent_command(self, tmp_path):
+        result = execute_bash({'command': 'timeout 1s python3 server.py'}, _ctx(tmp_path))
+        assert result.details['command'] == 'timeout 1s python3 server.py'
+        assert 'persistent_foreground_blocked' not in result.details
+
+    def test_background_wrapper_allows_persistent_command(self, tmp_path):
+        result = execute_bash({'command': 'nohup python3 gpu_monitor.py >/tmp/gpu.log 2>&1 &'}, _ctx(tmp_path))
+        assert result.details['command'] == 'nohup python3 gpu_monitor.py >/tmp/gpu.log 2>&1 &'
+        assert 'persistent_foreground_blocked' not in result.details
+
 
 class TestToolRegistry:
     def test_all_tools_defined(self):

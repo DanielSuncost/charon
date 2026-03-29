@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import re
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -35,6 +38,68 @@ class ToolContext:
     max_output_lines: int = 2000
     shell_timeout: int = 120
     scope: list[str] | None = None  # shade scope restriction (list of allowed path prefixes)
+    on_tool_output: Callable[[str, str], None] | None = None  # (tool_name, chunk)
+
+
+_active_bash_lock = threading.Lock()
+_active_bash_proc: subprocess.Popen[str] | None = None
+_active_bash_meta: dict[str, Any] = {}
+_active_bash_abort = threading.Event()
+
+
+def _set_active_bash(proc: subprocess.Popen[str] | None, meta: dict[str, Any] | None = None) -> None:
+    with _active_bash_lock:
+        global _active_bash_proc, _active_bash_meta
+        _active_bash_proc = proc
+        _active_bash_meta = dict(meta or {})
+        if proc is None:
+            _active_bash_abort.clear()
+
+
+def _clear_active_bash(proc: subprocess.Popen[str] | None = None) -> None:
+    with _active_bash_lock:
+        global _active_bash_proc, _active_bash_meta
+        if proc is not None and _active_bash_proc is not proc:
+            return
+        _active_bash_proc = None
+        _active_bash_meta = {}
+        _active_bash_abort.clear()
+
+
+def _kill_process_tree(proc: subprocess.Popen[str]) -> None:
+    try:
+        if os.name != 'nt':
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except Exception:
+                proc.kill()
+        else:
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(proc.pid)], capture_output=True, text=True, timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+def abort_running_bash() -> bool:
+    with _active_bash_lock:
+        proc = _active_bash_proc
+        if not proc or proc.poll() is not None:
+            return False
+        _active_bash_abort.set()
+    _kill_process_tree(proc)
+    return True
+
+
+def get_active_bash_info() -> dict[str, Any]:
+    with _active_bash_lock:
+        proc = _active_bash_proc
+        meta = dict(_active_bash_meta)
+        meta['running'] = bool(proc and proc.poll() is None)
+        if proc:
+            meta['pid'] = proc.pid
+        return meta
 
 
 # -- Truncation helper --------------------------------------------------------
@@ -56,6 +121,100 @@ def truncate_output(text: str, max_lines: int = 2000, max_bytes: int = 50_000) -
         truncated = True
 
     return result, truncated
+
+
+def _managed_processes_path(ctx: ToolContext) -> Path:
+    base = ctx.state_dir or (ctx.project_root / '.charon_state')
+    base.mkdir(parents=True, exist_ok=True)
+    return base / 'managed_processes.json'
+
+
+def _managed_logs_dir(ctx: ToolContext) -> Path:
+    base = ctx.state_dir or (ctx.project_root / '.charon_state')
+    d = base / 'process_logs'
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _load_managed_processes(ctx: ToolContext) -> dict[str, Any]:
+    path = _managed_processes_path(ctx)
+    if not path.exists():
+        return {'processes': {}}
+    try:
+        data = json.loads(path.read_text())
+        if isinstance(data, dict) and isinstance(data.get('processes'), dict):
+            return data
+    except Exception:
+        pass
+    return {'processes': {}}
+
+
+def _save_managed_processes(ctx: ToolContext, data: dict[str, Any]) -> None:
+    path = _managed_processes_path(ctx)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def _is_pid_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
+def _signal_managed_pid(pid: int, sig: int = signal.SIGTERM) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        if os.name != 'nt':
+            try:
+                os.killpg(pid, sig)
+            except Exception:
+                os.kill(pid, sig)
+        else:
+            if sig == signal.SIGKILL:
+                subprocess.run(['taskkill', '/F', '/T', '/PID', str(pid)], capture_output=True, text=True, timeout=5)
+            else:
+                subprocess.run(['taskkill', '/T', '/PID', str(pid)], capture_output=True, text=True, timeout=5)
+        return True
+    except Exception:
+        return False
+
+
+def _refresh_managed_processes(ctx: ToolContext) -> dict[str, Any]:
+    data = _load_managed_processes(ctx)
+    changed = False
+    for proc_id, entry in list((data.get('processes') or {}).items()):
+        pid = int(entry.get('pid', 0) or 0)
+        running = _is_pid_running(pid)
+        log_path = Path(str(entry.get('log_path') or ''))
+        exit_code = entry.get('exit_code')
+        if log_path.exists() and exit_code is None:
+            try:
+                tail = '\n'.join(log_path.read_text(encoding='utf-8', errors='replace').splitlines()[-20:])
+                m = re.search(r'__CHARON_EXIT_CODE__=(\d+)', tail)
+                if m:
+                    entry['exit_code'] = int(m.group(1))
+                    exit_code = entry['exit_code']
+                    changed = True
+            except Exception:
+                pass
+        if exit_code is not None:
+            running = False
+        if entry.get('status') == 'running' and not running:
+            entry['status'] = 'exited' if exit_code == 0 else 'failed'
+            entry['exited_at'] = time.time()
+            changed = True
+        entry['running'] = running
+    if changed:
+        _save_managed_processes(ctx, data)
+    return data
 
 
 # -- Read tool ----------------------------------------------------------------
@@ -306,13 +465,63 @@ def execute_edit(params: dict, ctx: ToolContext) -> ToolResult:
 
 # -- Bash tool ----------------------------------------------------------------
 
+
+def detect_foreground_persistent_command(command: str) -> tuple[bool, str]:
+    """Detect commands that are likely to run indefinitely in the foreground.
+
+    These commands are a poor fit for the synchronous Bash tool because they
+    block the agent until timeout and make the UI look hung.
+    """
+    cmd = command.strip()
+    if not cmd:
+        return False, ''
+
+    # Detached/background launches of GUI-style apps are still a poor fit for
+    # the synchronous Bash tool: they often appear hung while the shell waits,
+    # especially when combined with follow-up sleep/ps/log inspection.
+    gui_launch = re.search(
+        r'\b(uv\s+run\s+python\d*|python\d*)\s+[^\n|;&]*\b[a-z0-9_.-]*(gui|monitor|server|daemon|watch)\.py\b',
+        cmd,
+        re.IGNORECASE,
+    )
+    if re.search(r'\b(nohup|setsid)\b', cmd, re.IGNORECASE) and gui_launch:
+        return True, 'detached launch of a long-running Python app via Bash tool'
+    if gui_launch and re.search(r'(^|\n|[;&])\s*(sleep\b|ps\b|pgrep\b|pkill\b|grep\b|head\b|tail\b|cat\b)', cmd, re.IGNORECASE):
+        return True, 'launching a long-running app and then polling/logging in one Bash call'
+
+    # Explicitly bounded or detached commands are allowed.
+    if re.search(r'(^|[;&|()]\s*)(timeout|nohup|setsid|tmux|screen)\b', cmd):
+        return False, ''
+    if re.search(r'\bdisown\b', cmd):
+        return False, ''
+    if re.search(r'(^|\s)&\s*$', cmd):
+        return False, ''
+
+    persistent_patterns = [
+        (r'\bpython\d*\s+[^\n|;&]*\b[a-z0-9_.-]*(gui|monitor|server|daemon|watch)\.py\b', 'foreground Python app'),
+        (r'\buv\s+run\s+python\d*\s+[^\n|;&]*\b[a-z0-9_.-]*(gui|monitor|server|daemon|watch)\.py\b', 'foreground Python app via uv'),
+        (r'\b(streamlit|gradio|jupyter\s+lab|jupyter\s+notebook|uvicorn|gunicorn|flask\s+run)\b', 'foreground app server'),
+        (r'\b(npm|pnpm|yarn|bun)\s+(run\s+)?(dev|start|serve|watch)\b', 'foreground dev server'),
+        (r'\b(tail\s+-f|watch\s+|top\b|htop\b|nvtop\b)\b', 'interactive or continuous terminal program'),
+    ]
+    for pattern, reason in persistent_patterns:
+        if re.search(pattern, cmd, re.IGNORECASE):
+            return True, reason
+
+    if '| head' in cmd and re.search(r'\b(gui|monitor|server|daemon|watch)\b', cmd, re.IGNORECASE):
+        return True, 'piping a likely long-running process into head'
+
+    return False, ''
+
+
 BASH_TOOL_DEF = {
     'name': 'Bash',
     'description': (
-        'Execute a bash command in the current working directory. '
+        'Execute a short-lived bash command in the current working directory. '
         'Returns stdout and stderr. Output is truncated to last 2000 lines '
         'or 50KB (whichever is hit first). If truncated, full output is saved '
-        'to a temp file. Optionally provide a timeout in seconds.'
+        'to a temp file. Optionally provide a timeout in seconds. '
+        'Do not use this for GUI apps, monitors, servers, watchers, or detached/background jobs — use RunProcess for those.'
     ),
     'input_schema': {
         'type': 'object',
@@ -338,21 +547,135 @@ def execute_bash(params: dict, ctx: ToolContext) -> ToolResult:
     if not command:
         return ToolResult(content='Error: command is required', is_error=True)
 
+    is_persistent, persistent_reason = detect_foreground_persistent_command(command)
+    if is_persistent:
+        return ToolResult(
+            content=(
+                'Error: this looks like a long-running foreground command, which Charon will not run via the Bash tool because it makes the UI appear hung.\n\n'
+                f'Detected: {persistent_reason}.\n\n'
+                'Use one of these patterns instead:\n'
+                '  1. Bounded smoke test: timeout 3s <command>\n'
+                '  2. Managed background run: RunProcess(command=...)\n'
+                '  3. Run it in tmux/screen if you want to keep it alive interactively\n\n'
+                'For GUI apps, prefer testing imports/startup checks rather than launching the full app in the foreground.'
+            ),
+            is_error=True,
+            details={'command': command, 'persistent_foreground_blocked': True},
+        )
+
+    has_sudo = bool(re.search(r'(^|[;&|()]\s*)sudo\b', command))
+    sudo_non_interactive = bool(re.search(r'(^|[;&|()]\s*)sudo\s+(?:-n|--non-interactive)\b', command))
+    if has_sudo and not sudo_non_interactive:
+        return ToolResult(
+            content=(
+                'Error: interactive sudo is not supported inside the Charon TUI.\n\n'
+                'Use one of these secure flows instead:\n'
+                '  1. In a normal terminal, refresh sudo credentials with: sudo -v\n'
+                '  2. Then rerun the command here as: sudo -n ...\n'
+                '  3. For automation, prefer a tightly scoped sudoers NOPASSWD rule for the exact command.\n\n'
+                'Charon intentionally refuses to collect or forward your password.'
+            ),
+            is_error=True,
+            details={'command': command, 'needs_interactive_sudo': True},
+        )
+
+    popen: subprocess.Popen[str] | None = None
+    start_ts = time.time()
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    chunks_lock = threading.Lock()
+
+    def _emit_chunk(tool_name: str, chunk: str) -> None:
+        if ctx.on_tool_output and chunk:
+            try:
+                ctx.on_tool_output(tool_name, chunk)
+            except Exception:
+                pass
+
+    def _reader(stream, store: list[str], label: str) -> None:
+        try:
+            while True:
+                chunk = stream.read(1024)
+                if not chunk:
+                    break
+                with chunks_lock:
+                    store.append(chunk)
+                _emit_chunk('Bash', chunk)
+        except Exception:
+            pass
+
     try:
-        proc = subprocess.run(
+        popen = subprocess.Popen(
             ['bash', '-c', command],
             cwd=str(ctx.project_root),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=int(timeout),
+            bufsize=1,
+            start_new_session=(os.name != 'nt'),
         )
-    except subprocess.TimeoutExpired:
+        _set_active_bash(popen, {
+            'command': command,
+            'cwd': str(ctx.project_root),
+            'started_at': start_ts,
+            'agent_id': ctx.agent_id,
+        })
+
+        timed_out = False
+        aborted = False
+        t_out = threading.Thread(target=_reader, args=(popen.stdout, stdout_chunks, 'stdout'), daemon=True) if popen.stdout else None
+        t_err = threading.Thread(target=_reader, args=(popen.stderr, stderr_chunks, 'stderr'), daemon=True) if popen.stderr else None
+        if t_out: t_out.start()
+        if t_err: t_err.start()
+
+        while True:
+            rc = popen.poll()
+            if rc is not None:
+                break
+            if _active_bash_abort.is_set():
+                aborted = True
+                _kill_process_tree(popen)
+                break
+            if timeout and (time.time() - start_ts) >= float(timeout):
+                timed_out = True
+                _kill_process_tree(popen)
+                break
+            time.sleep(0.1)
+
+        try:
+            popen.wait(timeout=2)
+        except Exception:
+            pass
+        if t_out: t_out.join(timeout=1)
+        if t_err: t_err.join(timeout=1)
+        with chunks_lock:
+            stdout = ''.join(stdout_chunks)
+            stderr = ''.join(stderr_chunks)
+        proc = type('Completed', (), {
+            'stdout': stdout,
+            'stderr': stderr,
+            'returncode': popen.returncode,
+        })()
+    except Exception as e:
+        if popen is not None:
+            _clear_active_bash(popen)
+        return ToolResult(content=f'Error executing command: {e}', is_error=True)
+    finally:
+        if popen is not None:
+            _clear_active_bash(popen)
+
+    if aborted:
+        return ToolResult(
+            content='Error: command aborted',
+            is_error=True,
+            details={'command': command, 'aborted': True},
+        )
+    if timed_out:
         return ToolResult(
             content=f'Error: command timed out after {timeout}s',
             is_error=True,
+            details={'command': command, 'timed_out': True},
         )
-    except Exception as e:
-        return ToolResult(content=f'Error executing command: {e}', is_error=True)
 
     output = ''
     if proc.stdout:
@@ -382,6 +705,22 @@ def execute_bash(params: dict, ctx: ToolContext) -> ToolResult:
         'truncated': truncated,
     }
 
+    if has_sudo and proc.returncode != 0:
+        sudo_err = output.lower()
+        if (
+            'a password is required' in sudo_err
+            or 'terminal is required' in sudo_err
+            or 'a terminal is required' in sudo_err
+            or 'sudo:' in sudo_err
+        ):
+            output = (
+                (output + '\n\n') if output else ''
+            ) + (
+                'Hint: run `sudo -v` in a normal terminal first, then retry with `sudo -n ...`. '
+                'For repeatable automation, prefer a tightly scoped NOPASSWD sudoers rule.'
+            )
+            details['sudo_auth_failed'] = True
+
     if proc.returncode != 0:
         return ToolResult(
             content=output or f'Command failed with exit code {proc.returncode}',
@@ -391,6 +730,232 @@ def execute_bash(params: dict, ctx: ToolContext) -> ToolResult:
         )
 
     return ToolResult(content=output, truncated=truncated, details=details)
+
+
+# -- Managed process tools ----------------------------------------------------
+
+RUN_PROCESS_TOOL_DEF = {
+    'name': 'RunProcess',
+    'description': (
+        'Start a long-running background process and track it. '
+        'Use this instead of Bash for GUI apps, monitors, servers, or detached jobs. '
+        'Returns a process_id you can use with ProcessStatus, ProcessLogs, and StopProcess.'
+    ),
+    'input_schema': {
+        'type': 'object',
+        'properties': {
+            'command': {'type': 'string', 'description': 'Shell command to run in the background'},
+            'cwd': {'type': 'string', 'description': 'Optional working directory'},
+            'name': {'type': 'string', 'description': 'Optional human-friendly process name'},
+        },
+        'required': ['command'],
+    },
+}
+
+PROCESS_STATUS_TOOL_DEF = {
+    'name': 'ProcessStatus',
+    'description': 'Show status for one managed process, or list all managed processes if no process_id is given.',
+    'input_schema': {
+        'type': 'object',
+        'properties': {
+            'process_id': {'type': 'string', 'description': 'Managed process id'},
+        },
+        'required': [],
+    },
+}
+
+PROCESS_LOGS_TOOL_DEF = {
+    'name': 'ProcessLogs',
+    'description': 'Read recent logs from a managed background process.',
+    'input_schema': {
+        'type': 'object',
+        'properties': {
+            'process_id': {'type': 'string', 'description': 'Managed process id'},
+            'lines': {'type': 'number', 'description': 'Number of trailing log lines to read (default 80)'},
+        },
+        'required': ['process_id'],
+    },
+}
+
+STOP_PROCESS_TOOL_DEF = {
+    'name': 'StopProcess',
+    'description': 'Stop a managed background process by id.',
+    'input_schema': {
+        'type': 'object',
+        'properties': {
+            'process_id': {'type': 'string', 'description': 'Managed process id'},
+            'force': {'type': 'boolean', 'description': 'Use SIGKILL / forceful stop if true'},
+        },
+        'required': ['process_id'],
+    },
+}
+
+
+def execute_run_process(params: dict, ctx: ToolContext) -> ToolResult:
+    command = str(params.get('command') or '').strip()
+    cwd_str = str(params.get('cwd') or '').strip()
+    name = str(params.get('name') or '').strip()
+    if not command:
+        return ToolResult(content='Error: command is required', is_error=True)
+
+    cwd = Path(cwd_str).expanduser() if cwd_str else ctx.project_root
+    if not cwd.is_absolute():
+        cwd = (ctx.project_root / cwd).resolve()
+    if not cwd.exists():
+        return ToolResult(content=f'Error: cwd does not exist: {cwd}', is_error=True)
+
+    proc_id = f'proc-{int(time.time() * 1000)}'
+    log_path = _managed_logs_dir(ctx) / f'{proc_id}.log'
+    logf = open(log_path, 'a', encoding='utf-8')
+    wrapped_command = (
+        f'{{ {command}; }}; '
+        'code=$?; '
+        'printf "\n__CHARON_EXIT_CODE__=%s\n" "$code"; '
+        'exit "$code"'
+    )
+    try:
+        proc = subprocess.Popen(
+            ['bash', '-c', wrapped_command],
+            cwd=str(cwd),
+            stdout=logf,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=(os.name != 'nt'),
+        )
+    except Exception as e:
+        logf.close()
+        return ToolResult(content=f'Error starting process: {e}', is_error=True)
+    finally:
+        try:
+            logf.close()
+        except Exception:
+            pass
+
+    def _watch_process() -> None:
+        try:
+            proc.wait()
+        except Exception:
+            pass
+        try:
+            data2 = _refresh_managed_processes(ctx)
+            entry2 = (data2.get('processes') or {}).get(proc_id)
+            if entry2 and entry2.get('status') == 'running':
+                entry2['running'] = False
+                entry2['status'] = 'exited' if entry2.get('exit_code', 1) == 0 else 'failed'
+                entry2['exited_at'] = time.time()
+                _save_managed_processes(ctx, data2)
+        except Exception:
+            pass
+
+    threading.Thread(target=_watch_process, daemon=True).start()
+
+    data = _load_managed_processes(ctx)
+    entry = {
+        'process_id': proc_id,
+        'name': name or command[:60],
+        'command': command,
+        'wrapped_command': wrapped_command,
+        'cwd': str(cwd),
+        'pid': proc.pid,
+        'status': 'running',
+        'running': True,
+        'started_at': time.time(),
+        'log_path': str(log_path),
+        'agent_id': ctx.agent_id,
+        'exit_code': None,
+    }
+    data.setdefault('processes', {})[proc_id] = entry
+    _save_managed_processes(ctx, data)
+    return ToolResult(
+        content=(
+            f'Started managed process `{proc_id}`\n'
+            f'PID: {proc.pid}\n'
+            f'CWD: {cwd}\n'
+            f'Log: {log_path}\n'
+            f'Command: {command}'
+        ),
+        details=entry,
+    )
+
+
+
+def execute_process_status(params: dict, ctx: ToolContext) -> ToolResult:
+    proc_id = str(params.get('process_id') or '').strip()
+    data = _refresh_managed_processes(ctx)
+    procs = data.get('processes', {}) or {}
+    if proc_id:
+        entry = procs.get(proc_id)
+        if not entry:
+            return ToolResult(content=f'Error: unknown process_id: {proc_id}', is_error=True)
+        lines = [
+            f'Process `{proc_id}`',
+            f"Name: {entry.get('name', '')}",
+            f"Status: {entry.get('status', 'unknown')}",
+            f"PID: {entry.get('pid', '')}",
+            f"Exit code: {entry.get('exit_code', '')}",
+            f"CWD: {entry.get('cwd', '')}",
+            f"Log: {entry.get('log_path', '')}",
+            f"Command: {entry.get('command', '')}",
+        ]
+        return ToolResult(content='\n'.join(lines), details=entry)
+
+    if not procs:
+        return ToolResult(content='No managed processes.')
+    rows = []
+    for key, entry in sorted(procs.items(), key=lambda kv: kv[1].get('started_at', 0), reverse=True):
+        exit_suffix = f" exit={entry.get('exit_code')}" if entry.get('exit_code') is not None else ''
+        rows.append(f"{key}  [{entry.get('status', 'unknown')}]  pid={entry.get('pid', '')}{exit_suffix}  {entry.get('name', '')}")
+    return ToolResult(content='\n'.join(rows), details={'count': len(rows)})
+
+
+
+def execute_process_logs(params: dict, ctx: ToolContext) -> ToolResult:
+    proc_id = str(params.get('process_id') or '').strip()
+    lines = int(params.get('lines', 80) or 80)
+    data = _refresh_managed_processes(ctx)
+    entry = (data.get('processes') or {}).get(proc_id)
+    if not entry:
+        return ToolResult(content=f'Error: unknown process_id: {proc_id}', is_error=True)
+    log_path = Path(str(entry.get('log_path') or ''))
+    if not log_path.exists():
+        return ToolResult(content=f'No log file yet for `{proc_id}`.', is_error=True)
+    try:
+        all_lines = log_path.read_text(encoding='utf-8', errors='replace').splitlines()
+        text = '\n'.join(all_lines[-max(1, lines):])
+        text, truncated = truncate_output(text, ctx.max_output_lines, ctx.max_output_bytes)
+        return ToolResult(content=text or '(no log output)', truncated=truncated, details=entry)
+    except Exception as e:
+        return ToolResult(content=f'Error reading logs: {e}', is_error=True)
+
+
+
+def execute_stop_process(params: dict, ctx: ToolContext) -> ToolResult:
+    proc_id = str(params.get('process_id') or '').strip()
+    force = bool(params.get('force', False))
+    data = _refresh_managed_processes(ctx)
+    entry = (data.get('processes') or {}).get(proc_id)
+    if not entry:
+        return ToolResult(content=f'Error: unknown process_id: {proc_id}', is_error=True)
+    pid = int(entry.get('pid', 0) or 0)
+    if not _is_pid_running(pid):
+        entry['status'] = 'exited'
+        entry['running'] = False
+        _save_managed_processes(ctx, data)
+        return ToolResult(content=f'Process `{proc_id}` is already stopped.', details=entry)
+
+    ok = _signal_managed_pid(pid, signal.SIGKILL if force else signal.SIGTERM)
+    if not ok:
+        return ToolResult(content=f'Error: failed to stop process `{proc_id}`', is_error=True)
+
+    time.sleep(0.2)
+    if force is False and _is_pid_running(pid):
+        _signal_managed_pid(pid, signal.SIGKILL)
+        time.sleep(0.2)
+    entry['running'] = _is_pid_running(pid)
+    entry['status'] = 'stopped' if not entry['running'] else 'running'
+    entry['stopped_at'] = time.time()
+    _save_managed_processes(ctx, data)
+    return ToolResult(content=f"Stopped process `{proc_id}` ({'force' if force else 'graceful'}).", details=entry)
 
 
 # -- Tool registry ------------------------------------------------------------
@@ -404,6 +969,14 @@ from tools.git_tool import GIT_TOOL_DEF, execute_git
 from tools.batch_tool import SPAWN_BATCH_TOOL_DEF, execute_spawn_batch
 from tools.search_tool import SEARCH_TOOL_DEF, execute_search
 from tools.web_tool import WEB_TOOL_DEF, execute_web
+from tools.paper_tool import PAPER_TOOL_DEF, execute_paper
+from tools.source_discovery_tool import SOURCE_DISCOVERY_TOOL_DEF, execute_source_discovery
+from tools.research_tool import RESEARCH_TOOL_DEF, execute_research
+from tools.x_tool import X_TOOL_DEF, execute_x
+from tools.cron_tool import CRON_TOOL_DEF, execute_cron
+from tools.skills_tool import SKILLS_TOOL_DEF, execute_skills
+from tools.execute_code_tool import EXECUTE_CODE_TOOL_DEF, execute_execute_code
+from tools.clarify_tool import CLARIFY_TOOL_DEF, execute_clarify
 
 # Browser tool — optional, only loads if playwright is installed
 # Suppress stdout/stderr during import (browser-use loads ML models noisily)
@@ -426,10 +999,12 @@ except (ImportError, Exception):
 
 ALL_TOOL_DEFS = [
     READ_TOOL_DEF, BASH_TOOL_DEF, EDIT_TOOL_DEF, WRITE_TOOL_DEF,
+    RUN_PROCESS_TOOL_DEF, PROCESS_STATUS_TOOL_DEF, PROCESS_LOGS_TOOL_DEF, STOP_PROCESS_TOOL_DEF,
     USER_MODEL_TOOL_DEF, PROJECT_KNOWLEDGE_TOOL_DEF,
     HTTP_TOOL_DEF, GIT_TOOL_DEF,
     SHADE_TOOL_DEF, SPAWN_BATCH_TOOL_DEF, JUDGE_LOOP_TOOL_DEF,
-    SEARCH_TOOL_DEF, WEB_TOOL_DEF,
+    SEARCH_TOOL_DEF, WEB_TOOL_DEF, PAPER_TOOL_DEF, SOURCE_DISCOVERY_TOOL_DEF, RESEARCH_TOOL_DEF, X_TOOL_DEF,
+    CRON_TOOL_DEF, SKILLS_TOOL_DEF, EXECUTE_CODE_TOOL_DEF, CLARIFY_TOOL_DEF,
 ] + ([BROWSER_TOOL_DEF] if _HAS_BROWSER else []) + ([RECALL_TOOL_DEF] if _HAS_RECALL else [])
 
 TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
@@ -437,6 +1012,10 @@ TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
     'Bash': execute_bash,
     'Edit': execute_edit,
     'Write': execute_write,
+    'RunProcess': execute_run_process,
+    'ProcessStatus': execute_process_status,
+    'ProcessLogs': execute_process_logs,
+    'StopProcess': execute_stop_process,
     'UserModel': execute_user_model,
     'ProjectKnowledge': execute_project_knowledge,
     'Http': execute_http,
@@ -446,6 +1025,14 @@ TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
     'SpawnJudgeLoop': execute_judge_loop,
     'Search': execute_search,
     'Web': execute_web,
+    'Paper': execute_paper,
+    'SourceDiscovery': execute_source_discovery,
+    'Research': execute_research,
+    'X': execute_x,
+    'Cron': execute_cron,
+    'Skills': execute_skills,
+    'ExecuteCode': execute_execute_code,
+    'Clarify': execute_clarify,
     **(({'Browser': execute_browser} if _HAS_BROWSER else {})),
     **(({'Recall': execute_recall} if _HAS_RECALL else {})),
 }

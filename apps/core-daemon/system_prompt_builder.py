@@ -102,6 +102,7 @@ def _build_identity(agent: dict, task: dict) -> str:
         '- You share **project knowledge** with other agents on the same project.\n'
         '- You can see what other agents are working on and coordinate to avoid conflicts.\n'
         '- You can capture ideas with /idea for the backlog, and query goals with /goals.'
+        '- Use `/browser show [--save]`, `/browser hide [--save]`, or `/browser status` to control browser visibility.'
     )
     lines.append('')
     lines.append(
@@ -117,6 +118,12 @@ def _build_identity(agent: dict, task: dict) -> str:
         '- You need details not in your current context\n'
         '- The user asks about something you should know but don\'t see in your memory snapshot\n'
         'The Recall tool finds memories by meaning, not just keywords — describe what you\'re looking for.'
+    )
+    lines.append('')
+    lines.append(
+        '**Important:** Memory snapshots are summaries of prior work, not live conversation turns. '
+        'Do not behave as if a previous session is still in progress unless this session\'s actual conversation history shows that. '
+        'If the user starts a fresh session with something like "hello", respond normally and do not continue an unfinished reply from memory.'
     )
     return '\n'.join(lines)
 
@@ -235,15 +242,18 @@ def _build_working_memory(state_dir: Path, agent_id: str) -> str:
         return ''
 
     recent = notes[-5:]
-    lines = ['# Working Memory']
+    lines = [
+        '# Working Memory',
+        '(Past task summaries only. These are not live turns from the current conversation; use them as background context, not as something to continue verbatim.)',
+    ]
     for n in recent:
         ts = str(n.get('ts', ''))[:16] if n.get('ts') else ''
         summary = str(n.get('summary', '')).strip()
         if summary:
             prefix = f'[{ts}] ' if ts else ''
-            lines.append(f'- {prefix}{summary[:200]}')
+            lines.append(f'- Past task summary {prefix}{summary[:200]}')
 
-    return '\n'.join(lines) if len(lines) > 1 else ''
+    return '\n'.join(lines) if len(lines) > 2 else ''
 
 
 def _build_recall_context(state_dir: Path, agent_id: str = '') -> str:
@@ -398,14 +408,20 @@ def _build_tools(tools: list[dict] | None = None) -> str:
 {tool_list}
 
 Guidelines:
-- Use Bash for file operations like ls, grep, find
+- Use Bash for short-lived shell commands like ls, grep, find, git status, pytest, or bounded smoke tests.
+- Do NOT use Bash for GUI apps, monitors, servers, dev watchers, nohup flows, or background jobs. Use RunProcess for those.
+- After starting a managed process, use ProcessStatus / ProcessLogs / StopProcess to inspect and control it.
 - Use Read to examine files before editing. You must use this tool instead of cat or sed.
 - Use Edit for precise changes (oldText must match exactly)
 - Use Write only for new files or complete rewrites
 - When summarizing your actions, output plain text directly
 - Be concise in your responses
 - Show file paths clearly when working with files
-- When you need the full file, continue with offset until complete"""
+- When you need the full file, continue with offset until complete
+- For x.com workflows, prefer the X tool over generic Browser/Web when possible.
+- If the user asks to check x.com bookmarks for anything new, use X action=triage_new_bookmarks.
+- If the user asks what new bookmarks have been investigated, use X action=list_investigations with new_only=true.
+- If the user asks to deep dive, investigate, or report on a specific bookmarked item, use X action=deep_dive_bookmark or X action=get_investigation depending on whether they want new research or the stored report."""
 
 
 def _build_context_files(project: str) -> str:

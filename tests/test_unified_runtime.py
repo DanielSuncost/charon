@@ -151,6 +151,46 @@ class TestProviderBridge:
         assert model.model_id == 'qwen3-30b-a3b'
         assert model.provider == 'local'
 
+    def test_session_override_provider_config_isolated_from_global(self, tmp_path):
+        _write_onboarding(tmp_path, provider='codex', model='gpt-5.4', provider_model='gpt-5.4')
+        provider_bridge.save_session_provider_config(tmp_path, 'sess-a', {
+            'complete': True,
+            'step': 'done',
+            'provider_mode': 'provider',
+            'provider': 'lmstudio',
+            'model': 'qwen3-30b-a3b',
+            'provider_model': 'qwen3-30b-a3b',
+        })
+
+        global_cfg = provider_bridge.resolve_provider_config(tmp_path)
+        session_cfg = provider_bridge.resolve_provider_config(tmp_path, session_id='sess-a')
+
+        assert global_cfg['provider_raw'] == 'codex'
+        assert global_cfg['model_id'] == 'gpt-5.4'
+        assert session_cfg['provider_raw'] == 'lmstudio'
+        assert session_cfg['provider_name'] == 'local'
+        assert session_cfg['model_id'] == 'qwen3-30b-a3b'
+        assert session_cfg['session_override'] is True
+
+    def test_session_override_can_be_cleared(self, tmp_path):
+        _write_onboarding(tmp_path, provider='codex', model='gpt-5.4', provider_model='gpt-5.4')
+        provider_bridge.save_session_provider_config(tmp_path, 'sess-a', {
+            'complete': True,
+            'step': 'done',
+            'provider_mode': 'provider',
+            'provider': 'lmstudio',
+            'model': 'qwen3-30b-a3b',
+            'provider_model': 'qwen3-30b-a3b',
+        })
+        assert provider_bridge.load_session_provider_config(tmp_path, 'sess-a')['provider'] == 'lmstudio'
+
+        provider_bridge.clear_session_provider_config(tmp_path, 'sess-a')
+
+        assert provider_bridge.load_session_provider_config(tmp_path, 'sess-a') == {}
+        cfg = provider_bridge.resolve_provider_config(tmp_path, session_id='sess-a')
+        assert cfg['provider_raw'] == 'codex'
+        assert cfg['model_id'] == 'gpt-5.4'
+
 
 # ============================================================================
 # Planner mode detection

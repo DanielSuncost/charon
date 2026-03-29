@@ -1,0 +1,320 @@
+= Manual Provider-Switch Transfer Test Checklist
+
+== Goal
+Verify that `/provider ...` and `/setup provider ...` continuation works as a real resumed session, not just technically "applied."
+
+== Test matrix
+
+=== Case 1: large -> large
+Examples:
+- codex -> claude
+- claude -> codex
+
+Expected:
+- richer transfer
+- more replayed context
+- stronger continuity
+
+=== Case 2: large -> smaller/local
+Examples:
+- codex -> local
+- claude -> lmstudio / ollama / openlm-like model
+
+Expected:
+- compressed/minimal transfer
+- less message replay
+- preserved task state, files, validation, next step
+
+=== Case 3: fresh switch path
+Examples:
+- `/provider X`
+- choose `2`
+
+Expected:
+- no continued context
+- no pending transfer applied
+- clean new session/provider state
+
+=== Case 4: `/setup provider ...`
+Same as above, but through onboarding/setup flow instead of `/provider`.
+
+== Preparation scenario
+Use a session with real context, not trivial chat.
+
+=== Create a session that includes:
+. a clear coding objective
+. at least 2-3 user/assistant turns
+. several tool calls, e.g.
+* `Read`
+* `Edit`
+* `Write`
+* `Bash`
+. at least one validation command, e.g.
+* `python -m py_compile ...`
+* `pytest ...`
+. a clear "next step" still outstanding
+
+=== Good sample setup
+Have the model:
+- inspect `apps/core-daemon/context_transfer.py`
+- edit something small
+- run `python -m py_compile ...`
+- leave one follow-up improvement unfinished
+
+That gives transfer enough meaningful state.
+
+== Exact checklist
+
+=== 1. Build meaningful context
+In Charon, create a working session and confirm:
+- assistant has read files
+- assistant has edited files
+- assistant has run at least one validation command
+- there is an unfinished next step
+
+==== Verify before switching
+The current session should have:
+- several messages
+- tool events recorded
+- some modified files or recent validation history
+
+=== 2. Run provider switch
+Examples:
+
+[source,text]
+----
+/provider claude-code
+----
+
+or
+
+[source,text]
+----
+/setup provider claude-code
+----
+
+==== Expect prompt
+You should see something like:
+- switching from X to Y
+- this session has context
+- `1) Continue this session with context transfer`
+- `2) Start a new session`
+
+==== Check
+- prompt only appears when session has meaningful context
+- no silent reset
+
+=== 3. Choose `1` continue
+Reply:
+
+[source,text]
+----
+1
+----
+
+==== Expect
+Status flow like:
+- prepared context transfer
+- switching provider
+- applied context transfer
+- session continued on new provider
+
+==== Check backend artifacts
+Inspect:
+- `.charon_state/transfers/<id>.json`
+- `.charon_state/transfers/<id>.md`
+- `.charon_state/transfers/<id>-full-messages.json`
+- `.charon_state/transfers/events.jsonl`
+
+==== Verify bundle contents
+In the JSON/MD bundle, confirm:
+- source provider
+- target provider
+- objective
+- latest status
+- files touched
+- recent execution evidence
+- recent task episodes
+- full transcript path
+- last validation command/status
+
+=== 4. Verify pending transfer lifecycle
+During/after switch:
+
+==== Check
+- `.charon_state/pending_transfer.json` exists before apply
+- it is cleared after successful apply
+
+Expected after success:
+- pending transfer file removed
+
+=== 5. Test resumed continuity quality
+Immediately after switch, ask something like:
+
+[source,text]
+----
+Continue from where we left off. What is the next step?
+----
+
+or
+
+[source,text]
+----
+What files did we just change and what validation did we run?
+----
+
+==== Expected answer should include:
+- correct task objective
+- correct changed file paths
+- correct last validation command/result
+- correct next step
+- no need for you to restate previous work
+
+==== Bad signs
+If the new provider:
+- asks what project you mean
+- asks what files were changed
+- forgets the validation command
+- acts like it's a fresh unrelated session
+- contradicts repo state badly
+
+then continuity quality needs work.
+
+=== 6. Verify actual coding continuation
+Then ask it to continue the unfinished task.
+
+==== Expected
+It should:
+- pick up the same thread
+- use exact existing file paths
+- not restart analysis from zero
+- continue from transferred state naturally
+
+This is the real success criterion.
+
+== Specific checks by destination type
+
+=== Large-context target
+Example: codex -> claude
+
+==== Expect:
+- stronger recall of prior discussion
+- more natural continuation
+- more transcript-like continuity
+- awareness of prior reasoning and recent steps
+
+==== Ask:
+- `Summarize what we already decided.`
+- `What have we tried already?`
+- `Which file were we in when we switched?`
+
+=== Smaller/local target
+Example: codex -> local/openlm
+
+==== Expect:
+- maybe less conversational continuity
+- but still good task-state continuity
+
+==== Ask:
+- `What's the current objective?`
+- `Which files matter most?`
+- `What was the last validation?`
+- `What should you do next?`
+
+For smaller models, this matters more than perfect transcript recall.
+
+== Fresh switch test
+Run another switch and choose:
+
+[source,text]
+----
+2
+----
+
+==== Expect
+- provider changes
+- no transfer applied
+- no restored prior context
+- session behaves fresh
+
+==== Verify
+- no pending transfer remains
+- transfer events log records fresh switch
+- new model does not claim prior continuity
+
+== Artifact inspection checklist
+
+=== `.charon_state/transfers/<id>.json`
+Check:
+- `task.objective`
+- `task.next_step`
+- `workspace.files_touched`
+- `workspace.last_validation`
+- `history.full_transcript_path`
+- `execution.recent_tool_events`
+- `execution.recent_task_episodes`
+
+=== `.charon_state/transfers/<id>.md`
+Check:
+- human-readable summary looks sensible
+- last validation is shown
+- files touched are accurate
+
+=== `.charon_state/transfers/events.jsonl`
+Check event order:
+- `bundle_created`
+- `provider_switch_continue`
+- `transfer_applied`
+
+or for fresh:
+- `provider_switch_fresh`
+
+=== `.charon_state/execution/tool_events.jsonl`
+Check that recent validation/tool commands are present and summarized correctly.
+
+== Quality rubric
+
+=== Pass
+- switch prompt appears correctly
+- continue path applies transfer successfully
+- new provider knows task/files/validation/next step
+- fresh path resets as expected
+- artifacts are correct and pending transfer clears
+
+=== Partial pass
+- technical switch works
+- artifacts exist
+- but resumed provider loses some important state or asks redundant questions
+
+=== Fail
+- prompt missing when it should appear
+- pending transfer not applied or not cleared
+- new provider behaves like a fresh session despite "continue"
+- major transferred facts are wrong
+
+== Suggested prompt script
+Use these exact questions after switching.
+
+=== After choosing `1`
+. `What were we working on before the provider switch?`
+. `Which files were touched recently?`
+. `What was the last validation command and result?`
+. `What is the next step?`
+. `Continue the work.`
+
+=== After choosing `2`
+. `What were we working on before the provider switch?`
+
+Expected:
+- it should not have strong continuity
+
+== Best outcome
+You want to learn:
+. does the transfer technically apply?
+. does the resumed provider actually continue correctly?
+. where does continuity degrade by target provider type?
+
+That will tell you whether next effort should go into:
+- better compilation/tiering
+- better validation/task extraction
+- more UI visibility

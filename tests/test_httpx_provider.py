@@ -266,88 +266,47 @@ class TestSSEParsing:
 
     def test_think_block_separation(self):
         """Test that inline <think> blocks are parsed into thinking deltas."""
-        # Simulate what the provider's buffer logic does
-        from providers.httpx_openai import HttpxOpenAIProvider
+        from providers.httpx_openai import _drain_think_buffer
 
-        # Test the logic directly by simulating chunks
-        chunks_text = '<think>Let me analyze this.</think>\nHere is my answer.'
+        deltas, buf, in_think = _drain_think_buffer(
+            '<think>Let me analyze this.</think>\nHere is my answer.',
+            False,
+        )
 
-        # Parse through the same logic as the provider
-        in_think = False
-        thinking_parts = []
-        text_parts = []
-        buf = chunks_text
-
-        while buf:
-            if in_think:
-                end_idx = buf.find('</think>')
-                if end_idx == -1:
-                    thinking_parts.append(buf)
-                    buf = ''
-                else:
-                    thinking_parts.append(buf[:end_idx])
-                    in_think = False
-                    buf = buf[end_idx + len('</think>'):]
-                    buf = buf.lstrip('\n')
-            else:
-                start_idx = buf.find('<think>')
-                if start_idx == -1:
-                    text_parts.append(buf)
-                    buf = ''
-                elif start_idx == 0:
-                    in_think = True
-                    buf = buf[len('<think>'):]
-                else:
-                    text_parts.append(buf[:start_idx])
-                    in_think = True
-                    buf = buf[start_idx + len('<think>'):]
-
-        assert ''.join(thinking_parts) == 'Let me analyze this.'
-        assert ''.join(text_parts) == 'Here is my answer.'
+        assert buf == ''
+        assert in_think is False
+        assert ''.join(d.text for d in deltas if d.type == 'thinking') == 'Let me analyze this.'
+        assert ''.join(d.text for d in deltas if d.type == 'text') == 'Here is my answer.'
 
     def test_think_block_streamed_across_chunks(self):
         """Test think block detection when <think> spans multiple SSE chunks."""
-        chunks = ['<thi', 'nk>deep ', 'thought</thi', 'nk>\nAnswer here']
+        from providers.httpx_openai import _drain_think_buffer
 
+        chunks = ['<thi', 'nk>deep ', 'thought</thi', 'nk>\nAnswer here']
         in_think = False
-        thinking_parts = []
-        text_parts = []
+        buf = ''
+        deltas = []
 
         for chunk in chunks:
-            buf = chunk
-            while buf:
-                if in_think:
-                    end_idx = buf.find('</think>')
-                    if end_idx == -1:
-                        thinking_parts.append(buf)
-                        buf = ''
-                    else:
-                        thinking_parts.append(buf[:end_idx])
-                        in_think = False
-                        buf = buf[end_idx + len('</think>'):]
-                        buf = buf.lstrip('\n')
-                else:
-                    start_idx = buf.find('<think>')
-                    if start_idx == -1:
-                        # Might be a partial tag — for simplicity, emit as text
-                        text_parts.append(buf)
-                        buf = ''
-                    elif start_idx == 0:
-                        in_think = True
-                        buf = buf[len('<think>'):]
-                    else:
-                        text_parts.append(buf[:start_idx])
-                        in_think = True
-                        buf = buf[start_idx + len('<think>'):]
+            buf += chunk
+            parsed, buf, in_think = _drain_think_buffer(buf, in_think)
+            deltas.extend(parsed)
 
-        # The partial '<thi' and 'nk>' get emitted as text since the tag
-        # detection works on the current buffer. This is acceptable —
-        # in practice the provider accumulates into a buffer before parsing.
-        # The important thing is: when a full <think> tag arrives, it works.
-        all_text = ''.join(text_parts)
-        all_thinking = ''.join(thinking_parts)
-        # At minimum, verify no crash and some content was captured
-        assert len(all_text) + len(all_thinking) > 0
+        if buf:
+            deltas.append(type('Delta', (), {'type': 'thinking' if in_think else 'text', 'text': buf})())
+
+        assert ''.join(d.text for d in deltas if d.type == 'thinking') == 'deep thought'
+        assert ''.join(d.text for d in deltas if d.type == 'text') == 'Answer here'
+
+    def test_orphan_closing_think_tag_is_stripped(self):
+        """Visible text should not leak lone </think> tags."""
+        from providers.httpx_openai import _drain_think_buffer
+
+        deltas, buf, in_think = _drain_think_buffer('</think>\n\nHello', False)
+
+        assert buf == ''
+        assert in_think is False
+        assert ''.join(d.text for d in deltas if d.type == 'text') == 'Hello'
 
     def test_http_error_response(self):
         """Test that HTTP errors are handled gracefully."""

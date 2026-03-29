@@ -1,30 +1,28 @@
-"""Browser tool — web browser automation.
+"""Browser tool — cleanroom Playwright-only browser automation.
 
-Primary: browser-use via CDP connection to a managed Chrome instance.
-Fallback: Playwright async API if browser-use fails.
+Zero external deps beyond playwright. No telemetry.
 
-Both run on a dedicated thread with their own event loop to avoid
-conflicts with the chat engine's asyncio loop.
+Uses Playwright Chromium with CDP for:
+- Navigation, click, input, scroll, go_back, wait, screenshot, get_state
+- Proper interactive element indexing via JS DOM walk + bounding box filtering
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import os
-import subprocess
+import secrets
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
 from tools import ToolContext, ToolResult
 
-# ── Dedicated browser thread ────────────────────────────────────────
+# ── Dedicated browser thread ─────────────────────────────────────────────────
 
-_loop = None
-_thread = None
+_loop: asyncio.AbstractEventLoop | None = None
+_thread: threading.Thread | None = None
 _ready = threading.Event()
-_backend = None  # 'browser_use' or 'playwright'
 
 
 def _browser_thread_main():
@@ -45,295 +43,295 @@ def _ensure_thread():
     _ready.wait(timeout=5)
 
 
-def _run(coro):
+def _run(coro, timeout: int = 30):
     _ensure_thread()
     future = asyncio.run_coroutine_threadsafe(coro, _loop)
-    return future.result(timeout=30)
+    return future.result(timeout=timeout)
 
 
-# ── Chrome process management ───────────────────────────────────────
-
-_chrome_proc = None
-
-def _find_chrome() -> str | None:
-    """Find a Chrome/Chromium binary."""
-    import shutil
-    for name in ('google-chrome', 'chromium', 'chromium-browser', 'chrome'):
-        path = shutil.which(name)
-        if path:
-            return path
-    # Check Playwright's Chromium
-    pw_chrome = Path.home() / '.cache' / 'ms-playwright'
-    if pw_chrome.exists():
-        for chrome in sorted(pw_chrome.glob('*/chrome-linux*/chrome'), reverse=True):
-            if chrome.exists():
-                return str(chrome)
-    return None
-
-
-def _ensure_chrome_cdp(port: int = 9222) -> str:
-    """Launch Chrome with remote debugging if not running."""
-    global _chrome_proc
-    import httpx
-
-    cdp_url = f'http://127.0.0.1:{port}'
-
-    # Check if already running
-    try:
-        resp = httpx.get(f'{cdp_url}/json/version', timeout=2)
-        if resp.status_code == 200:
-            return cdp_url
-    except Exception:
-        pass
-
-    # Launch
-    chrome = _find_chrome()
-    if not chrome:
-        return ''
-
-    _chrome_proc = subprocess.Popen([
-        chrome,
-        '--headless=new' if os.environ.get('CHARON_BROWSER_HEADLESS', '1') != '0' else '--headless=false',
-        f'--remote-debugging-port={port}',
-        '--no-sandbox',
-        '--disable-gpu',
-        '--disable-dev-shm-usage',
-        '--no-first-run',
-        '--no-default-browser-check',
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    # Wait for it to be ready
-    for _ in range(20):
-        time.sleep(0.3)
-        try:
-            resp = httpx.get(f'{cdp_url}/json/version', timeout=2)
-            if resp.status_code == 200:
-                return cdp_url
-        except Exception:
-            pass
-
-    return ''
-
-
-# ── browser-use backend ─────────────────────────────────────────────
-
-_bu_session = None
-_bu_controller = None
-_bu_action_cls = None
-
-
-async def _init_browser_use(cdp_url: str):
-    global _bu_session, _bu_controller, _bu_action_cls
-    if _bu_session is not None:
-        return True
-
-    try:
-        from browser_use.browser.session import BrowserSession
-        from browser_use.controller import Controller
-
-        _bu_controller = Controller()
-        _bu_action_cls = _bu_controller.registry.create_action_model()
-        _bu_session = BrowserSession(cdp_url=cdp_url)
-        await _bu_session.start()
-        return True
-    except Exception:
-        _bu_session = None
-        return False
-
-
-async def _bu_navigate(url: str) -> str:
-    await _bu_session.navigate_to(url)
-    return await _bu_session.get_state_as_text()
-
-
-async def _bu_get_state() -> str:
-    return await _bu_session.get_state_as_text()
-
-
-async def _bu_get_url() -> str:
-    return await _bu_session.get_current_page_url()
-
-
-async def _bu_act(action_dict: dict):
-    action = _bu_action_cls.model_validate(action_dict)
-    return await _bu_controller.act(action, _bu_session)
-
-
-async def _bu_screenshot() -> bytes:
-    return await _bu_session.take_screenshot()
-
-
-# ── Playwright fallback ─────────────────────────────────────────────
+# ── Playwright state ──────────────────────────────────────────────────────────
 
 _pw = None
-_pw_browser = None
-_pw_page = None
+_browser = None
+_page = None
+_context = None
+
+# ── Browser visibility context (set per execute_browser call) ─────────────────
+_session_id_ctx: str = ''
+_state_dir_ctx = None
+
+# Index map: int → xpath or element handle info for clicking
+_element_index: dict[int, dict] = {}
 
 
-async def _init_playwright():
-    global _pw, _pw_browser, _pw_page
-    if _pw_page is not None:
-        return True
+async def _ensure_page():
+    global _pw, _browser, _page, _context
 
+    if _page is not None:
+        return _page
+
+    from playwright.async_api import async_playwright
     try:
-        from playwright.async_api import async_playwright
-        _pw = await async_playwright().start()
+        from browser_settings import should_show_browser
+        headless = not should_show_browser(_session_id_ctx, _state_dir_ctx)
+    except Exception:
         headless = os.environ.get('CHARON_BROWSER_HEADLESS', '1') != '0'
-        _pw_browser = await _pw.chromium.launch(headless=headless)
-        _pw_page = await _pw_browser.new_page()
-        return True
-    except Exception:
-        return False
+
+    _pw = await async_playwright().start()
+    _browser = await _pw.chromium.launch(headless=headless)
+    _context = await _browser.new_context(
+        viewport={'width': 1280, 'height': 800},
+        user_agent=(
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+            '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        ),
+    )
+    _page = await _context.new_page()
+    return _page
 
 
-async def _pw_navigate(url: str) -> str:
-    await _pw_page.goto(url, wait_until='domcontentloaded', timeout=15000)
-    await _pw_page.wait_for_timeout(1000)
-    return await _pw_page_summary()
+# ── Interactive element indexer ───────────────────────────────────────────────
+
+# JS that collects all visible, in-viewport interactive elements with metadata.
+_COLLECT_ELEMENTS_JS = """
+() => {
+    const SELECTORS = 'a[href], button, input:not([type="hidden"]), select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [tabindex]:not([tabindex="-1"])';
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    function getLabel(el) {
+        // Try various label sources
+        if (el.getAttribute('aria-label')) return el.getAttribute('aria-label').trim();
+        if (el.getAttribute('title')) return el.getAttribute('title').trim();
+        if (el.getAttribute('placeholder')) return el.getAttribute('placeholder').trim();
+        if (el.getAttribute('alt')) return el.getAttribute('alt').trim();
+        // For label elements
+        if (el.id) {
+            const lbl = document.querySelector('label[for="' + el.id + '"]');
+            if (lbl) return lbl.innerText.trim();
+        }
+        const txt = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ');
+        return txt.slice(0, 80);
+    }
+
+    function getType(el) {
+        const tag = el.tagName.toLowerCase();
+        if (tag === 'a') return 'link';
+        if (tag === 'button') return 'button';
+        if (tag === 'select') return 'select';
+        if (tag === 'textarea') return 'textarea';
+        if (tag === 'input') return 'input/' + (el.type || 'text');
+        const role = el.getAttribute('role');
+        if (role) return role;
+        return tag;
+    }
+
+    function isVisible(el) {
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        if (parseFloat(style.opacity) < 0.1) return false;
+        return true;
+    }
+
+    const seen = new Set();
+    const results = [];
+
+    document.querySelectorAll(SELECTORS).forEach(el => {
+        if (!isVisible(el)) return;
+        const rect = el.getBoundingClientRect();
+        // Must have size and be at least partially in viewport
+        if (rect.width < 2 || rect.height < 2) return;
+        if (rect.bottom < 0 || rect.top > vh || rect.right < 0 || rect.left > vw) return;
+
+        // Deduplicate by position+tag
+        const key = el.tagName + '|' + Math.round(rect.top) + '|' + Math.round(rect.left);
+        if (seen.has(key)) return;
+        seen.add(key);
+
+        const type = getType(el);
+        const label = getLabel(el);
+        const href = el.href || '';
+        const value = el.value || '';
+
+        // Build a stable selector to find this element again
+        // Use index in querySelectorAll result as a positional reference
+        const allMatching = Array.from(document.querySelectorAll(SELECTORS));
+        const posIndex = allMatching.indexOf(el);
+
+        results.push({
+            type,
+            label,
+            href: href.slice(0, 120),
+            value: value.slice(0, 80),
+            tag: el.tagName.toLowerCase(),
+            pos_index: posIndex,
+            rect: { top: Math.round(rect.top), left: Math.round(rect.left), w: Math.round(rect.width), h: Math.round(rect.height) }
+        });
+
+        if (results.length >= 80) return;
+    });
+
+    return results;
+}
+"""
+
+_CLICK_BY_POS_JS = """
+(pos_index) => {
+    const SELECTORS = 'a[href], button, input:not([type="hidden"]), select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [tabindex]:not([tabindex="-1"])';
+    const els = document.querySelectorAll(SELECTORS);
+    const el = els[pos_index];
+    if (!el) return false;
+    el.scrollIntoView({block: 'center', behavior: 'instant'});
+    el.focus();
+    el.click();
+    return true;
+}
+"""
+
+_INPUT_BY_POS_JS = """
+([pos_index, text]) => {
+    const SELECTORS = 'a[href], button, input:not([type="hidden"]), select, textarea, [role="button"], [role="link"], [role="checkbox"], [role="radio"], [role="combobox"], [role="menuitem"], [role="tab"], [tabindex]:not([tabindex="-1"])';
+    const els = document.querySelectorAll(SELECTORS);
+    const el = els[pos_index];
+    if (!el) return false;
+    el.scrollIntoView({block: 'center', behavior: 'instant'});
+    el.focus();
+    el.value = '';
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    return true;
+}
+"""
 
 
-async def _pw_page_summary() -> str:
-    url = _pw_page.url
-    title = await _pw_page.title()
+async def _collect_elements(page) -> list[dict]:
+    global _element_index
     try:
-        text = await _pw_page.evaluate('() => document.body.innerText')
+        elements = await page.evaluate(_COLLECT_ELEMENTS_JS)
+        _element_index = {i: e for i, e in enumerate(elements)}
+        return elements
     except Exception:
-        text = ''
+        _element_index = {}
+        return []
 
-    elements = []
-    try:
-        interactives = await _pw_page.evaluate('''() => {
-            const els = document.querySelectorAll('a, button, input, select, textarea, [role="button"], [onclick]');
-            return Array.from(els).slice(0, 50).map((el, i) => {
-                const tag = el.tagName.toLowerCase();
-                const text = (el.innerText || el.value || el.placeholder || el.getAttribute('aria-label') || '').trim().slice(0, 60);
-                const href = el.href || '';
-                return {i, tag, text, href: href.slice(0, 80)};
-            });
-        }''')
-        for el in interactives:
-            parts = [f'[{el["i"]}] {el["tag"]}']
-            if el.get('text'):
-                parts.append(f'"{el["text"]}"')
-            if el.get('href'):
-                parts.append(f'→ {el["href"]}')
-            elements.append(' '.join(parts))
-    except Exception:
-        pass
 
-    lines = [f'URL: {url}', f'Title: {title}', '', text[:8000] if text else '']
-    if elements:
-        lines.append('\n--- Interactive Elements ---')
-        lines.extend(elements)
+def _format_elements(elements: list[dict]) -> str:
+    if not elements:
+        return ''
+    lines = ['', '--- Interactive Elements ---']
+    for i, el in enumerate(elements):
+        t = el['type']
+        label = el['label']
+        href = el.get('href', '')
+        value = el.get('value', '')
+
+        if t == 'link':
+            part = f'[{i}] link "{label}"'
+            if href:
+                part += f' → {href}'
+        elif t.startswith('input/'):
+            itype = t.split('/')[1]
+            part = f'[{i}] input ({itype})'
+            if label:
+                part += f' "{label}"'
+            if value:
+                part += f' value="{value}"'
+        elif t == 'select':
+            part = f'[{i}] select "{label}"'
+        elif t == 'textarea':
+            part = f'[{i}] textarea "{label}"'
+        else:
+            part = f'[{i}] {t} "{label}"'
+        lines.append(part)
     return '\n'.join(lines)
 
 
-# ── Unified dispatch ────────────────────────────────────────────────
+async def _page_state(page) -> str:
+    url = page.url
+    title = await page.title()
 
-async def _ensure_backend():
-    """Initialize browser-use or fall back to Playwright."""
-    global _backend
+    try:
+        text = await page.evaluate('() => document.body ? document.body.innerText : ""')
+        text = text.strip()[:6000]
+    except Exception:
+        text = ''
 
-    if _backend:
-        return _backend
+    elements = await _collect_elements(page)
+    elem_str = _format_elements(elements)
 
-    # Try browser-use first
-    cdp_url = _ensure_chrome_cdp()
-    if cdp_url:
-        ok = await _init_browser_use(cdp_url)
-        if ok:
-            _backend = 'browser_use'
-            return _backend
+    parts = [f'URL: {url}', f'Title: {title}', '', text]
+    if elem_str:
+        parts.append(elem_str)
+    return '\n'.join(parts)
 
-    # Fall back to Playwright
-    ok = await _init_playwright()
-    if ok:
-        _backend = 'playwright'
-        return _backend
 
-    raise RuntimeError('No browser backend available. Install playwright: uv pip install playwright && playwright install chromium')
-
+# ── Actions ───────────────────────────────────────────────────────────────────
 
 async def _do_navigate(url: str) -> str:
-    backend = await _ensure_backend()
-    if backend == 'browser_use':
-        state = await _bu_navigate(url)
-        page_url = await _bu_get_url()
-        return f'URL: {page_url}\n\n{state}'
-    return await _pw_navigate(url)
+    page = await _ensure_page()
+    await page.goto(url, wait_until='domcontentloaded', timeout=20000)
+    await page.wait_for_timeout(800)
+    return await _page_state(page)
 
 
 async def _do_get_state() -> str:
-    backend = await _ensure_backend()
-    if backend == 'browser_use':
-        state = await _bu_get_state()
-        page_url = await _bu_get_url()
-        return f'URL: {page_url}\n\n{state}'
-    return await _pw_page_summary()
+    page = await _ensure_page()
+    return await _page_state(page)
 
 
 async def _do_click(index: int) -> str:
-    backend = await _ensure_backend()
-    if backend == 'browser_use':
-        await _bu_act({'click': {'index': index}})
-        state = await _bu_get_state()
-        return f'Clicked [{index}].\n\n{state}'
-    await _pw_page.evaluate(f'''() => {{
-        const els = document.querySelectorAll('a, button, input, select, textarea, [role="button"], [onclick]');
-        if (els[{index}]) els[{index}].click();
-    }}''')
-    await _pw_page.wait_for_timeout(1000)
-    return f'Clicked [{index}].\n\n' + await _pw_page_summary()
+    page = await _ensure_page()
+    el = _element_index.get(index)
+    if el is None:
+        return f'Error: no element at index [{index}]. Use get_state to refresh.'
+
+    ok = await page.evaluate(_CLICK_BY_POS_JS, el['pos_index'])
+    if not ok:
+        return f'Error: element [{index}] not found in DOM (page may have changed).'
+
+    await page.wait_for_timeout(800)
+    return f'Clicked [{index}].\n\n' + await _page_state(page)
 
 
 async def _do_input(index: int, text: str) -> str:
-    backend = await _ensure_backend()
-    if backend == 'browser_use':
-        await _bu_act({'input': {'index': index, 'text': text, 'clear': True}})
-        return f'Input "{text[:50]}" into [{index}].'
-    await _pw_page.evaluate(f'''() => {{
-        const els = document.querySelectorAll('a, button, input, select, textarea, [role="button"], [onclick]');
-        const el = els[{index}];
-        if (el) {{ el.focus(); el.value = {json.dumps(text)}; }}
-    }}''')
-    return f'Input "{text[:50]}" into [{index}].'
+    page = await _ensure_page()
+    el = _element_index.get(index)
+    if el is None:
+        return f'Error: no element at index [{index}]. Use get_state to refresh.'
+
+    # Focus + clear via JS, then type via keyboard
+    await page.evaluate(_INPUT_BY_POS_JS, [el['pos_index'], text])
+    await page.keyboard.type(text, delay=20)
+    await page.wait_for_timeout(300)
+    return f'Typed "{text[:60]}" into [{index}].'
 
 
 async def _do_screenshot() -> bytes:
-    backend = await _ensure_backend()
-    if backend == 'browser_use':
-        return await _bu_screenshot()
-    return await _pw_page.screenshot(full_page=False)
+    page = await _ensure_page()
+    return await page.screenshot(full_page=False)
 
 
 async def _do_scroll(direction: str) -> str:
-    backend = await _ensure_backend()
-    if backend == 'browser_use':
-        await _bu_act({'scroll': {'direction': direction}})
-        return f'Scrolled {direction}.\n\n' + await _bu_get_state()
-    delta = 500 if direction == 'down' else -500
-    await _pw_page.evaluate(f'window.scrollBy(0, {delta})')
-    await _pw_page.wait_for_timeout(500)
-    return f'Scrolled {direction}.\n\n' + await _pw_page_summary()
+    page = await _ensure_page()
+    delta = 600 if direction == 'down' else -600
+    await page.evaluate(f'window.scrollBy({{top: {delta}, behavior: "smooth"}})')
+    await page.wait_for_timeout(600)
+    return f'Scrolled {direction}.\n\n' + await _page_state(page)
 
 
 async def _do_go_back() -> str:
-    backend = await _ensure_backend()
-    if backend == 'browser_use':
-        await _bu_act({'go_back': {}})
-        return 'Went back.\n\n' + await _bu_get_state()
-    await _pw_page.go_back(wait_until='domcontentloaded', timeout=10000)
-    await _pw_page.wait_for_timeout(1000)
-    return 'Went back.\n\n' + await _pw_page_summary()
+    page = await _ensure_page()
+    await page.go_back(wait_until='domcontentloaded', timeout=15000)
+    await page.wait_for_timeout(800)
+    return 'Went back.\n\n' + await _page_state(page)
 
 
-# ── Tool definition ─────────────────────────────────────────────────
+# ── Tool definition ───────────────────────────────────────────────────────────
 
 BROWSER_TOOL_DEF = {
     'name': 'Browser',
     'description': (
         'Control a web browser with full JavaScript rendering. Navigate pages, click elements, '
-        'type text, take screenshots. Uses browser-use (CDP) or Playwright as fallback. '
+        'type text, take screenshots. Uses Playwright Chromium. '
         'After navigating, interactive elements are listed with indices [0], [1], etc. '
         'Actions: navigate, click, input, screenshot, scroll, go_back, wait, get_state.'
     ),
@@ -360,12 +358,17 @@ def execute_browser(params: dict, ctx: ToolContext) -> ToolResult:
     """Execute a browser action."""
     action = str(params.get('action', '')).strip().lower()
 
+    # Update module-level session context so _ensure_page picks up the right settings
+    global _session_id_ctx, _state_dir_ctx
+    _session_id_ctx = ctx.agent_id or ''
+    _state_dir_ctx = ctx.state_dir
+
     try:
         if action == 'navigate':
             url = str(params.get('url', '')).strip()
             if not url:
                 return ToolResult(content='Error: url is required.', is_error=True)
-            result = _run(_do_navigate(url))
+            result = _run(_do_navigate(url), timeout=25)
             return ToolResult(content=result[:15000])
 
         if action == 'get_state':
@@ -385,24 +388,22 @@ def execute_browser(params: dict, ctx: ToolContext) -> ToolResult:
 
         if action == 'screenshot':
             img_bytes = _run(_do_screenshot())
-            import tempfile
-            tmp = tempfile.NamedTemporaryFile(suffix='.png', prefix='charon-ss-', delete=False, dir='/tmp')
-            tmp.write(img_bytes)
-            tmp.close()
-            return ToolResult(content=f'Screenshot saved: {tmp.name} ({len(img_bytes)} bytes)')
+            tag = secrets.token_hex(4)
+            tmp = Path(f'/tmp/charon-ss-{tag}.png')
+            tmp.write_bytes(img_bytes)
+            return ToolResult(content=f'Screenshot saved: {tmp} ({len(img_bytes)} bytes)')
 
         if action == 'scroll':
-            return ToolResult(content=_run(_do_scroll(str(params.get('direction', 'down'))))[:12000])
+            direction = str(params.get('direction', 'down')).lower()
+            return ToolResult(content=_run(_do_scroll(direction))[:12000])
 
         if action == 'go_back':
             return ToolResult(content=_run(_do_go_back())[:12000])
 
         if action == 'wait':
             seconds = min(int(params.get('seconds', 2)), 30)
-            async def _w():
-                await asyncio.sleep(seconds)
-            _run(_w())
-            return ToolResult(content=f'Waited {seconds} seconds.')
+            _run(asyncio.sleep(seconds), timeout=seconds + 5)
+            return ToolResult(content=f'Waited {seconds}s.')
 
         return ToolResult(content=f'Unknown action: {action}', is_error=True)
 

@@ -9,6 +9,73 @@ import json
 import os
 from typing import Any, AsyncIterator
 
+
+def _partial_tag_suffix_len(text: str, tag: str) -> int:
+    """Length of the longest suffix of text that could be the start of tag."""
+    max_len = min(len(text), len(tag) - 1)
+    for size in range(max_len, 0, -1):
+        if text.endswith(tag[:size]):
+            return size
+    return 0
+
+
+def _strip_orphan_think_text(text: str) -> str:
+    """Remove leaked think tags from visible assistant text."""
+    if not text:
+        return text
+    text = text.replace('<think>', '').replace('</think>', '')
+    return text
+
+
+def _drain_think_buffer(text_buffer: str, in_think_block: bool) -> tuple[list[StreamDelta], str, bool]:
+    """Split visible text from inline <think> blocks, preserving partial tags across chunks."""
+    out: list[StreamDelta] = []
+
+    while text_buffer:
+        if in_think_block:
+            end_idx = text_buffer.find('</think>')
+            if end_idx != -1:
+                thinking_part = text_buffer[:end_idx]
+                if thinking_part:
+                    out.append(StreamDelta(type='thinking', text=thinking_part))
+                in_think_block = False
+                text_buffer = text_buffer[end_idx + len('</think>'):].lstrip('\n')
+                continue
+
+            keep = _partial_tag_suffix_len(text_buffer, '</think>')
+            emit_upto = len(text_buffer) - keep
+            if emit_upto <= 0:
+                break
+            out.append(StreamDelta(type='thinking', text=text_buffer[:emit_upto]))
+            text_buffer = text_buffer[emit_upto:]
+            continue
+
+        start_idx = text_buffer.find('<think>')
+        if start_idx != -1:
+            if start_idx > 0:
+                visible = _strip_orphan_think_text(text_buffer[:start_idx])
+                if visible:
+                    out.append(StreamDelta(type='text', text=visible))
+            in_think_block = True
+            text_buffer = text_buffer[start_idx + len('<think>'):]
+            continue
+
+        # Drop orphan closing tags even if we never saw the matching open tag.
+        if text_buffer.startswith('</think>'):
+            text_buffer = text_buffer[len('</think>'):].lstrip('\n')
+            continue
+
+        keep = _partial_tag_suffix_len(text_buffer, '<think>')
+        emit_upto = len(text_buffer) - keep
+        if emit_upto <= 0:
+            break
+        visible = _strip_orphan_think_text(text_buffer[:emit_upto])
+        if visible:
+            out.append(StreamDelta(type='text', text=visible))
+        text_buffer = text_buffer[emit_upto:]
+
+    return out, text_buffer, in_think_block
+
 import httpx
 
 from . import Message, ModelInfo, StreamDelta, ToolCall, Usage
@@ -48,6 +115,7 @@ class HttpxOpenAIProvider:
             'messages': api_messages,
             'max_tokens': max_tokens,
             'stream': True,
+            'stream_options': {'include_usage': True},
         }
 
         if tools:
@@ -89,6 +157,7 @@ class HttpxOpenAIProvider:
 
                     current_tool_calls: dict[int, dict[str, str]] = {}
                     finish_reason: str | None = None
+                    usage_data: dict[str, int] = {}
                     # Track <think> blocks that some models (Qwen, DeepSeek)
                     # emit inline rather than via a dedicated reasoning field.
                     in_think_block = False
@@ -109,6 +178,16 @@ class HttpxOpenAIProvider:
                         except json.JSONDecodeError:
                             continue
 
+                        chunk_usage = chunk.get('usage') or {}
+                        if chunk_usage:
+                            usage_data = {
+                                'input_tokens': int(chunk_usage.get('prompt_tokens', 0) or chunk_usage.get('input_tokens', 0) or 0),
+                                'output_tokens': int(chunk_usage.get('completion_tokens', 0) or chunk_usage.get('output_tokens', 0) or 0),
+                                'total_tokens': int(chunk_usage.get('total_tokens', 0) or 0),
+                            }
+                            if not usage_data['total_tokens']:
+                                usage_data['total_tokens'] = usage_data['input_tokens'] + usage_data['output_tokens']
+
                         choices = chunk.get('choices', [])
                         if not choices:
                             continue
@@ -121,38 +200,9 @@ class HttpxOpenAIProvider:
                         content = delta.get('content')
                         if content:
                             text_buffer += content
-                            # Process the buffer for <think> boundaries
-                            while text_buffer:
-                                if in_think_block:
-                                    end_idx = text_buffer.find('</think>')
-                                    if end_idx == -1:
-                                        # Still inside think block, emit as thinking
-                                        yield StreamDelta(type='thinking', text=text_buffer)
-                                        text_buffer = ''
-                                    else:
-                                        # Emit thinking up to close tag, then switch back
-                                        thinking_part = text_buffer[:end_idx]
-                                        if thinking_part:
-                                            yield StreamDelta(type='thinking', text=thinking_part)
-                                        in_think_block = False
-                                        text_buffer = text_buffer[end_idx + len('</think>'):]
-                                        # Strip leading whitespace/newlines after think block
-                                        text_buffer = text_buffer.lstrip('\n')
-                                else:
-                                    start_idx = text_buffer.find('<think>')
-                                    if start_idx == -1:
-                                        # No think tag, emit as text
-                                        yield StreamDelta(type='text', text=text_buffer)
-                                        text_buffer = ''
-                                    elif start_idx == 0:
-                                        # Think tag at start
-                                        in_think_block = True
-                                        text_buffer = text_buffer[len('<think>'):]
-                                    else:
-                                        # Text before think tag
-                                        yield StreamDelta(type='text', text=text_buffer[:start_idx])
-                                        in_think_block = True
-                                        text_buffer = text_buffer[start_idx + len('<think>'):]
+                            deltas, text_buffer, in_think_block = _drain_think_buffer(text_buffer, in_think_block)
+                            for parsed in deltas:
+                                yield parsed
 
                         # Reasoning / thinking (native field from some providers)
                         reasoning = delta.get('reasoning_content') or delta.get('reasoning')
@@ -177,6 +227,16 @@ class HttpxOpenAIProvider:
                                 entry['name'] = fn['name']
                             if fn.get('arguments'):
                                 entry['arguments'] += fn['arguments']
+
+                    # Flush any remaining buffered content, including partial tags at EOF.
+                    if text_buffer:
+                        if in_think_block:
+                            yield StreamDelta(type='thinking', text=text_buffer)
+                        else:
+                            visible = _strip_orphan_think_text(text_buffer).strip()
+                            if visible:
+                                yield StreamDelta(type='text', text=visible)
+                        text_buffer = ''
 
                     # Emit completed tool calls
                     for tc_data in current_tool_calls.values():

@@ -46,6 +46,24 @@ SHADE_TOOL_DEF = {
                 'items': {'type': 'string'},
                 'description': 'Rules or limitations for the shade (optional)',
             },
+            'expected_outputs': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Expected outputs for the shade contract (optional)',
+            },
+            'phase_specs': {
+                'type': 'array',
+                'items': {'type': 'object'},
+                'description': 'Optional explicit phase plan: list of {name, objective} records.',
+            },
+            'contract_type': {
+                'type': 'string',
+                'description': 'Optional contract type label, e.g. libris_source_procurement.',
+            },
+            'metadata': {
+                'type': 'object',
+                'description': 'Optional contract metadata for specialized workflows.',
+            },
         },
         'required': ['goal'],
     },
@@ -60,6 +78,10 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
 
     scope = params.get('scope', [])
     constraints = params.get('constraints', [])
+    expected_outputs = params.get('expected_outputs', [])
+    phase_specs = params.get('phase_specs', [])
+    contract_type = str(params.get('contract_type', '')).strip()
+    metadata = params.get('metadata') or {}
     state_dir = ctx.state_dir or Path('.charon_state')
 
     # 1. Create shade agent
@@ -92,7 +114,11 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
             project=str(ctx.project_root),
             goal=goal,
             constraints=constraints,
+            expected_outputs=expected_outputs,
             scope=scope,
+            phase_specs=phase_specs,
+            contract_type=contract_type,
+            metadata=metadata,
         )
         contract_id = contract['id']
     except Exception as e:
@@ -121,6 +147,7 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
             'shade_id': shade_id,
             'contract_id': contract_id,
             'status': 'running',
+            'contract_type': contract_type,
         },
     )
 
@@ -178,6 +205,43 @@ def _run_shade(
         if not contract:
             return
 
+        libris_meta = dict(contract.get('metadata') or {}) if isinstance(contract.get('metadata'), dict) else {}
+        libris_op = str(libris_meta.get('operation_id') or '').strip()
+        libris_topic = str(libris_meta.get('topic_slug') or '').strip()
+        is_libris = bool(libris_op) or str(contract.get('contract_type') or '').startswith('libris_')
+
+        def _emit_libris_phase(phase_name: str, status: str, summary: str = '') -> None:
+            if not is_libris or not libris_op:
+                return
+            try:
+                from libris_runtime import emit_agent_phase
+                emit_agent_phase(
+                    state_dir, parent_ctx.project_root, libris_op,
+                    agent_id=shade_id, role='shade', phase=phase_name, status=status,
+                    topic_slug=libris_topic, summary=summary,
+                )
+            except Exception:
+                pass
+
+        def _emit_libris_comm(kind: str, summary: str = '') -> None:
+            if not is_libris or not libris_op:
+                return
+            try:
+                from libris_runtime import emit_agent_comm
+                emit_agent_comm(
+                    state_dir, parent_ctx.project_root, libris_op,
+                    from_agent_id=shade_id,
+                    to_agent_id=str(contract.get('parent_agent_id') or ''),
+                    from_role='shade', to_role='researcher',
+                    topic_slug=libris_topic,
+                    message_kind=kind,
+                    summary=summary,
+                )
+            except Exception:
+                pass
+
+        _emit_libris_phase('starting', 'running', 'Shade contract started.')
+
         while True:
             phase = next_pending_phase(contract)
             if not phase:
@@ -185,22 +249,31 @@ def _run_shade(
 
             instruction = build_phase_instruction(contract, phase)
             phase_id = phase['phase_id']
+            phase_name = str(phase.get('name') or phase_id)
+            _emit_libris_phase(phase_name, 'running', str(phase.get('objective') or '')[:200])
 
             try:
                 response, events = asyncio.run(
                     engine.submit_and_collect(instruction)
                 )
+                summary = response[:500] if response else 'Completed (no output)'
                 mark_phase_completed(
                     state_dir, contract_id, phase_id,
                     task_id=shade_id,
-                    summary=response[:500] if response else 'Completed (no output)',
+                    summary=summary,
                 )
+                _emit_libris_phase(phase_name, 'running', f'Completed phase: {phase_name}')
+                if phase_name in ('summary', 'report', 'extraction'):
+                    _emit_libris_comm('shade_result_returned', summary)
             except Exception as e:
+                err = str(e)
                 mark_phase_failed(
                     state_dir, contract_id, phase_id,
                     task_id=shade_id,
-                    error=str(e),
+                    error=err,
                 )
+                _emit_libris_phase('failed', 'failed', err)
+                _emit_libris_comm('shade_failed', err)
                 break
 
             # Reload contract for next phase
@@ -208,10 +281,14 @@ def _run_shade(
             if not contract or contract.get('status') != 'running':
                 break
 
+        if contract and contract.get('status') == 'completed':
+            _emit_libris_phase('done', 'idle', 'Shade contract completed.')
+            _emit_libris_comm('shade_contract_completed', 'Shade finished all contract phases.')
+
         # Mark agent as stopped
         try:
-            from agent_lifecycle import stop_agent
-            stop_agent(shade_id)
+            from agent_lifecycle import set_status
+            set_status(shade_id, 'stopped')
         except Exception:
             pass
 

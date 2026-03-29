@@ -18,6 +18,7 @@ class RunningAgentProcess:
     pid: int
     command: str
     args: str
+    has_boat: bool = False
 
     def formatted_args(self, max_length: int = _MAX_ARGS_DISPLAY) -> str:
         text = (self.args or "").strip()
@@ -76,6 +77,7 @@ def detect_agent_processes(
         command = parts[1]
         args = parts[2] if len(parts) > 2 else ""
         full = f"{command} {args}"
+        has_boat = 'charons-boat' in full.lower() or '/.charon/boats/' in full.lower() or 'boat-' in full.lower()
         # Skip internal/helper processes — only detect the main agent process
         if 'chat_backend.py' in full:
             continue
@@ -87,7 +89,7 @@ def detect_agent_processes(
             pattern = patterns[target]
             if pattern.search(command) or pattern.search(args):
                 seen_pids.add(pid)
-                detected.append(RunningAgentProcess(target=target, pid=pid, command=command, args=args.strip()))
+                detected.append(RunningAgentProcess(target=target, pid=pid, command=command, args=args.strip(), has_boat=has_boat))
                 break
 
     return sorted(detected, key=lambda proc: (proc.target, proc.pid))
