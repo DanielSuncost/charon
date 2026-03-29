@@ -103,6 +103,15 @@ def classify_tool_risk(tool_name: str, params: dict) -> tuple[str, str]:
         url = params.get('url', params.get('query', ''))
         return 'network', f'{tool_name}: {url[:60]}'
 
+    if tool_name == 'X':
+        action = str(params.get('action', '')).strip().lower()
+        if action in ('open_login', 'login_status', 'fetch_post', 'fetch_bookmarks', 'fetch_new_bookmarks', 'triage_new_bookmarks'):
+            target = params.get('url', action)
+            return 'network', f'X:{action}: {str(target)[:60]}'
+        if action in ('deep_dive_bookmark', 'save_investigation', 'mark_presented', 'enqueue_investigation', 'capture_idea', 'schedule_bookmarks_review'):
+            return 'write', f'X:{action}'
+        return 'safe', ''
+
     if tool_name == 'SpawnBatch':
         tasks = params.get('tasks', [])
         return 'write', f'spawn {len(tasks)} shade workers'

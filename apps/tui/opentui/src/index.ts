@@ -33,7 +33,13 @@ interface Agent { id: string; name: string; status: string; role: string; goal: 
 interface Project { name: string; path: string; agents: string[] }
 interface Session { id: string; agentId: string; agentName: string; status: string; project: string; location: string }
 
-interface MenuItem { cmd: string; desc: string }
+interface MenuItem {
+  cmd: string
+  desc: string
+  label?: string
+  title?: string
+  age?: string
+}
 
 const MENU_ITEMS: MenuItem[] = [
   { cmd: '/setup provider lmstudio', desc: 'Use local LM Studio' },
@@ -52,12 +58,18 @@ const MENU_ITEMS: MenuItem[] = [
   { cmd: '/provider', desc: 'Switch provider' },
   { cmd: '/model', desc: 'Switch model' },
   { cmd: '/resume', desc: 'Resume a previous session' },
+  { cmd: '/interrupt', desc: 'Abort the current run immediately' },
+  { cmd: '/steer <msg>', desc: 'Interrupt after current tool and redirect the agent' },
+  { cmd: '/queue <msg>', desc: 'Queue a follow-up after the current run completes' },
   { cmd: '/reset', desc: 'Clear conversation' },
   { cmd: '/dashboard', desc: 'Open dashboard (F2)' },
   { cmd: '/sessions', desc: 'Open sessions (F3)' },
+  { cmd: '/hermes', desc: 'Launch a wrapped Hermes session in the background' },
+  { cmd: '/pi', desc: 'Launch a wrapped pi session in the background' },
   { cmd: '/agent create', desc: 'Create a new agent' },
   { cmd: '/hotkeys', desc: 'Show all keyboard shortcuts' },
   { cmd: '/timestamps', desc: 'Toggle message timestamps' },
+  { cmd: '/thoughts', desc: 'Toggle visible thoughts' },
   { cmd: '/help', desc: 'Show this menu' },
 ]
 
@@ -73,6 +85,7 @@ const S = {
   tokensIn: 0,
   tokensOut: 0,
   contextPct: 0,
+  maxContext: 0,
   thinkingLevel: 'medium',
   agents: [] as Agent[],
   projects: [] as Project[],
@@ -90,9 +103,13 @@ const S = {
   menuOpen: false,
   menuIdx: 0,
   menuItems: [] as MenuItem[],
+  menuTitle: 'Commands',
   menuFilter: '',
   // Timestamp toggle (Ctrl+T)
   showTimestamps: false,
+  // Visible reasoning/thoughts toggle (Ctrl+Y)
+  showThoughts: false,
+  thoughtsSupported: true,
   // Heartbeat
   lastHeartbeatTs: 0,
   // Background process indicators (flash when active)
@@ -107,6 +124,15 @@ function fmtTs(epoch: number): string {
   const mm = String(d.getMinutes()).padStart(2, '0')
   const ss = String(d.getSeconds()).padStart(2, '0')
   return `${hh}:${mm}:${ss}`
+}
+
+function setTerminalTitle(projectPath?: string) {
+  try {
+    const raw = (projectPath || '').trim()
+    const project = raw ? (raw.split('/').filter(Boolean).pop() || 'project') : 'project'
+    const safe = project.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 48) || 'project'
+    process.stdout.write(`\x1b]2;charon-${safe}\x07`)
+  } catch {}
 }
 
 // addStatusRenderable is set after chat scroll is created
@@ -141,9 +167,26 @@ const ROBE_BG = '#2a1215'      // warm dark red-brown (visible, not black)
 const ROBE_BG_USER = '#0d1117' // dark blue-gray for user messages
 const MANILA = '#e8d5a3'        // light manila/parchment for Charon's name
 
+function currentTerminalWidth(): number {
+  return _renderer?.terminalWidth || process.stdout?.columns || 80
+}
+
+function currentInfoPaneWidth(): number {
+  const termW = currentTerminalWidth()
+  if (!S.infoPaneOpen || S.view !== 'chat' || termW < 100) return 0
+  return Math.min(28, Math.floor(termW * 0.25))
+}
+
+function effectiveChatWidth(): number {
+  const termW = currentTerminalWidth()
+  const paneW = currentInfoPaneWidth()
+  const gutter = paneW > 0 ? 6 : 4
+  return Math.max(40, termW - paneW - gutter)
+}
+
 /** Format a Charon response with robe-red background, manila name, and basic markdown */
 function charonMsg(text: string): StyledText {
-  const w = Math.max(40, (process.stdout?.columns || 80) - 4)
+  const w = effectiveChatWidth()
   const parts: (StyledText | string)[] = []
   // Render markdown content with robe background, indented 1 char
   const rendered = renderSimpleMarkdown(text, w - 1)
@@ -286,7 +329,7 @@ function renderSimpleMarkdown(text: string, w: number): StyledText[] {
 
 /** Format a user message — no label, cool grey background */
 function userMsg(text: string): StyledText {
-  const w = Math.max(40, (process.stdout?.columns || 80) - 4)
+  const w = effectiveChatWidth()
   const parts: (StyledText | string)[] = []
   const lines = text.split('\n')
   for (const line of lines) {
@@ -299,7 +342,7 @@ function userMsg(text: string): StyledText {
 
 /** Format streaming charon response */
 function charonStreamMsg(text: string): StyledText {
-  const w = Math.max(40, (process.stdout?.columns || 80) - 4)
+  const w = effectiveChatWidth()
   const parts: (StyledText | string)[] = []
   // Render with markdown, indented 1 char
   const rendered = renderSimpleMarkdown(text, w - 1)
@@ -314,11 +357,82 @@ function charonStreamMsg(text: string): StyledText {
   return joinStyled(...parts)
 }
 
+function thoughtStreamMsg(text: string, done = false): StyledText {
+  const w = effectiveChatWidth()
+  const bgColor = '#140f1f'
+  const fgColor = '#c4b5fd'
+  const parts: (StyledText | string)[] = []
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n')
+  const header = '  ⟪ visible thoughts ⟫'
+  parts.push(t`${bold(fg('#ddd6fe')(bg(bgColor)(header + ' '.repeat(Math.max(0, w - header.length)))) )}`)
+  parts.push('\n')
+  for (const raw of lines) {
+    const line = raw.slice(0, w - 2)
+    const padded = ' ' + line + ' '.repeat(Math.max(0, w - line.length - 1))
+    parts.push(t`${fg(fgColor)(bg(bgColor)(padded.slice(0, w)))}`)
+    parts.push('\n')
+  }
+  if (!done) {
+    const cursorLine = '  ▊' + ' '.repeat(Math.max(0, w - 3))
+    parts.push(t`${fg('#ddd6fe')(bg(bgColor)(cursorLine))}`)
+  }
+  return joinStyled(...parts)
+}
+
+function normalizeToolOutput(text: string): string {
+  return (text || '')
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '')
+    .replace(/\r+\n/g, '\n')
+    .replace(/\r/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd()
+}
+
+function renderUserContent(text: string): StyledText {
+  const w = effectiveChatWidth()
+  const parts: (StyledText | string)[] = []
+  const lines = text.split('\n')
+  for (const line of lines) {
+    const padded = ' ' + line + ' '.repeat(Math.max(0, w - line.length - 1))
+    parts.push(t`${fg('#e2e8f0')(bg('#1e2433')(padded))}`)
+    parts.push('\n')
+  }
+  return joinStyled(...parts)
+}
+
+function renderToolBlockContent(header: StyledText | null, content: string, isError: boolean, tc?: { bg: string, fg: string }) {
+  const toolColor = tc || { bg: '#151520', fg: '#a5b4fc' }
+  const w = effectiveChatWidth()
+  const errBg = '#1a0d0d'
+  const resultParts: (StyledText | string)[] = []
+  const allLines = normalizeToolOutput(content).split('\n')
+  const contentLines = allLines.slice(0, 8)
+  for (let li = 0; li < contentLines.length; li++) {
+    const l = contentLines[li]
+    const padded = '  ' + l.slice(0, w - 2) + ' '.repeat(Math.max(0, w - l.length - 2))
+    resultParts.push(isError
+      ? t`${fg('#fca5a5')(bg(errBg)(padded.slice(0, w)))}`
+      : t`${fg(toolColor.fg)(bg(toolColor.bg)(padded.slice(0, w)))}`
+    )
+    if (li < contentLines.length - 1 || allLines.length > 8) resultParts.push('\n')
+  }
+  if (allLines.length > 8) {
+    const moreLine = `  ... (${allLines.length} lines total)` + ' '.repeat(Math.max(0, w - 30))
+    resultParts.push(t`${dim(fg(toolColor.fg)(bg(toolColor.bg)(moreLine.slice(0, w))))}`)
+  }
+  if (header) {
+    resultParts.unshift(header)
+    if (resultParts.length > 1) resultParts.splice(1, 0, '\n')
+  }
+  return joinStyled(...resultParts)
+}
+
 // ============================================================================
 // Main
 // ============================================================================
 
 async function main() {
+  setTerminalTitle(process.cwd())
   const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: false })
   _renderer = renderer
 
@@ -393,6 +507,10 @@ async function main() {
 
   // Streaming markdown renderable (reused during streaming)
   let streamingMd: any = null
+  let streamingThought: any = null
+  let streamingTool: any = null
+  let thoughtBuf = ''
+  let toolBuf = ''
 
   // Bottom spacing handled by chatScroll paddingBottom
 
@@ -404,6 +522,16 @@ async function main() {
     if (streamingMd) {
       try { chatScroll.remove(streamingMd.id) } catch {}
       streamingMd = null
+    }
+    if (streamingThought) {
+      try { chatScroll.remove(streamingThought.id) } catch {}
+      streamingThought = null
+      thoughtBuf = ''
+    }
+    if (streamingTool) {
+      try { chatScroll.remove(streamingTool.id) } catch {}
+      streamingTool = null
+      toolBuf = ''
     }
   }
 
@@ -428,15 +556,9 @@ async function main() {
     addChatRenderable(spacer)
 
     // User message with cool grey background
-    const w = Math.max(40, (process.stdout?.columns || 80) - 4)
-    const lines = text.split('\n')
-    const parts: (StyledText | string)[] = []
-    for (const line of lines) {
-      const padded = ' ' + line + ' '.repeat(Math.max(0, w - line.length - 1))
-      parts.push(t`${fg('#e2e8f0')(bg('#1e2433')(padded))}`)
-      parts.push('\n')
-    }
-    const userRenderable = instantiate(renderer, Text({ content: joinStyled(...parts), width: '100%' })) as any
+    const userRenderable = instantiate(renderer, Text({ content: renderUserContent(text), width: '100%' })) as any
+    userRenderable.__charonType = 'user'
+    userRenderable.__charonRaw = text
     addChatRenderable(userRenderable)
   }
 
@@ -460,8 +582,12 @@ async function main() {
     addChatRenderable(md)
   }
 
-  function addToolBlock(styledContent: StyledText) {
+  function addToolBlock(styledContent: StyledText, meta?: { header?: StyledText | null, content?: string, isError?: boolean, tc?: { bg: string, fg: string } }) {
     const renderable = instantiate(renderer, Text({ content: styledContent, width: '100%' })) as any
+    if (meta) {
+      renderable.__charonType = 'tool'
+      renderable.__charonMeta = meta
+    }
     addChatRenderable(renderable)
   }
 
@@ -509,6 +635,64 @@ async function main() {
     }
   }
 
+  function startThinkingStream() {
+    const spacer = instantiate(renderer, Box({ height: 1, width: '100%' })) as any
+    addChatRenderable(spacer)
+    thoughtBuf = ''
+    streamingThought = instantiate(renderer, Text({ content: thoughtStreamMsg('', false), width: '100%' })) as any
+    try { chatScroll.insertBefore(streamingThought, _bottomSpacer) } catch { chatScroll.add(streamingThought) }
+  }
+
+  function updateThinkingStream(text: string) {
+    thoughtBuf = text
+    if (streamingThought) {
+      streamingThought.content = thoughtStreamMsg(thoughtBuf, false)
+      renderer.requestRender()
+      scrollToBottom()
+    }
+  }
+
+  function finishThinkingStream() {
+    if (streamingThought) {
+      streamingThought.content = thoughtStreamMsg(thoughtBuf, true)
+      chatMsgRenderables.push(streamingThought)
+      streamingThought = null
+      renderer.requestRender()
+      scrollToBottom()
+    }
+  }
+
+  function startToolStream(header: StyledText | null, tc?: { bg: string, fg: string }) {
+    const spacer = instantiate(renderer, Box({ height: 1, width: '100%' })) as any
+    addChatRenderable(spacer)
+    toolBuf = ''
+    streamingTool = instantiate(renderer, Text({ content: renderToolBlockContent(header, '', false, tc), width: '100%' })) as any
+    try { chatScroll.insertBefore(streamingTool, _bottomSpacer) } catch { chatScroll.add(streamingTool) }
+  }
+
+  function updateToolStream(header: StyledText | null, content: string, isError: boolean, tc?: { bg: string, fg: string }) {
+    toolBuf = content
+    if (streamingTool) {
+      streamingTool.content = renderToolBlockContent(header, toolBuf, isError, tc)
+      renderer.requestRender()
+      scrollToBottom()
+    }
+  }
+
+  function finishToolStream(header: StyledText | null, content: string, isError: boolean, tc?: { bg: string, fg: string }) {
+    if (streamingTool) {
+      const finalContent = content || toolBuf
+      streamingTool.content = renderToolBlockContent(header, finalContent, isError, tc)
+      streamingTool.__charonType = 'tool'
+      streamingTool.__charonMeta = { header, content: finalContent, isError, tc }
+      chatMsgRenderables.push(streamingTool)
+      streamingTool = null
+      toolBuf = ''
+      renderer.requestRender()
+      scrollToBottom()
+    }
+  }
+
   // Initialize chat scroll with mascot + welcome + spacer
   try { chatScroll.insertBefore(mascotRenderable, _bottomSpacer) } catch { chatScroll.add(mascotRenderable) }
   try { chatScroll.insertBefore(welcomeText, _bottomSpacer) } catch { chatScroll.add(welcomeText) }
@@ -540,28 +724,28 @@ async function main() {
     const spark = '#fcd34d'    // spark yellow
 
     const frames = [
-      // Frame 1: oar forward, lantern bright
+      // Frame 1: hunched head right-shifted, body+boat synced, oar forward
       () => joinStyled(
-        t`${fg(spark)('  .*')}`, t`${fg(lanternBright)('◈')}`, t`${fg(spark)('·.          ')}`, '\n',
-        '     ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)(' ╱')}`, '         ', '\n',
+        '        ', t`${fg(figure)('▵')}`, t`${fg(oar)('_')}`, t`${fg(spark)('·')}`, t`${fg(lanternBright)('◈')}`, t`${fg(spark)('*.')}`, '      ', '\n',
+        '       ', t`${fg(figureD)('█')}`, t`${fg(oar)('─╱')}`, '            ', '\n',
         t`${fg(water)('  ≈')}`, t`${fg(waveD)('~')}`, t`${fg(hull)('╘')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('▬')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('╛')}`, t`${fg(waveD)('~')}`, t`${fg(water)('≈')}`, t`${fg(waveD)('~~  ')}`,
       ),
-      // Frame 2: oar vertical, lantern orange
+      // Frame 2: body+boat shift left together, lantern dim
       () => joinStyled(
-        t`${fg(spark)('  .·')}`, t`${fg(lanternDim)('◈')}`, t`${fg(spark)('*.          ')}`, '\n',
-        '     ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)(' │')}`, '         ', '\n',
+        '       ', t`${fg(figure)('▵')}`, t`${fg(oar)('_')}`, t`${fg(spark)('·')}`, t`${fg(lanternDim)('◈')}`, t`${fg(spark)(' *')}`, '       ', '\n',
+        '      ', t`${fg(figureD)('█')}`, t`${fg(oar)('─│')}`, '             ', '\n',
         t`${fg(waveD)(' ~')}`, t`${fg(water)('≈')}`, t`${fg(hull)('╘')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('▬')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('╛')}`, t`${fg(water)('≈')}`, t`${fg(waveD)('~')}`, t`${fg(water)('≈   ')}`,
       ),
-      // Frame 3: oar back, lantern bright
+      // Frame 3: hunched head right-shifted again, oar back
       () => joinStyled(
-        t`${fg(spark)('   *')}`, t`${fg(lanternBright)('◈')}`, t`${fg(lanternGlow)('˙')}`, '          ', '\n',
-        '     ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)('  ╲')}`, '        ', '\n',
+        '        ', t`${fg(figure)('▵')}`, t`${fg(oar)('_')}`, t`${fg(spark)('*')}`, t`${fg(lanternBright)('◈')}`, t`${fg(lanternGlow)('˙')}`, '      ', '\n',
+        '       ', t`${fg(figureD)('█')}`, t`${fg(oar)('─╲')}`, '            ', '\n',
         t`${fg(water)(' ≈')}`, t`${fg(waveD)('~')}`, t`${fg(water)('≈')}`, t`${fg(hull)('╘')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('▬')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('╛')}`, t`${fg(waveD)('~')}`, t`${fg(water)('≈   ')}`,
       ),
-      // Frame 4: oar vertical, lantern dim
+      // Frame 4: settle back, lantern dim
       () => joinStyled(
-        t`${fg(spark)('  ·')}`, t`${fg(lanternDim)('◈')}`, t`${fg(spark)(' *.         ')}`, '\n',
-        '     ', t`${fg(figure)('⟨')}`, t`${fg(figureD)('█')}`, t`${fg(figure)('⟩')}`, t`${fg(oar)(' │')}`, '         ', '\n',
+        '        ', t`${fg(figure)('▵')}`, t`${fg(oar)('_')}`, t`${fg(spark)(' ·')}`, t`${fg(lanternDim)('◈')}`, t`${fg(spark)('*')}`, '      ', '\n',
+        '       ', t`${fg(figureD)('█')}`, t`${fg(oar)('─│')}`, '            ', '\n',
         t`${fg(waveD)('  ~')}`, t`${fg(water)('≈')}`, t`${fg(hull)('╘')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('▬')}`, t`${fg(hullL)('▬▬')}`, t`${fg(hull)('╛')}`, t`${fg(water)('≈')}`, t`${fg(waveD)('~~  ')}`,
       ),
     ]
@@ -1111,9 +1295,30 @@ async function main() {
     return joinStyled(...parts)
   }
 
+  function rebuildWidthSensitiveChat() {
+    for (const r of chatMsgRenderables) {
+      try {
+        if (r?.__charonType === 'user' && typeof r.__charonRaw === 'string') {
+          r.content = renderUserContent(r.__charonRaw)
+        } else if (r?.__charonType === 'tool' && r.__charonMeta) {
+          const meta = r.__charonMeta as any
+          r.content = renderToolBlockContent(meta.header || null, meta.content || '', Boolean(meta.isError), meta.tc)
+        }
+      } catch {}
+    }
+    if (streamingThought) updateThinkingStream(thoughtBuf)
+    if (streamingTool) {
+      const tc = (S as any)._currentToolColor || { bg: '#151520', fg: '#a5b4fc' }
+      const pendingHeader = (S as any)._pendingToolHeader || null
+      updateToolStream(pendingHeader, toolBuf, false, tc)
+    }
+    if (streamingMd) updateStreaming(S.buf.join(''))
+  }
+
   function rebuildView() {
 
     if (S.view === 'chat') {
+      rebuildWidthSensitiveChat()
       // Chat is rendered incrementally — just request render
       renderer.requestRender()
     } else if (S.view === 'dashboard') {
@@ -1137,12 +1342,26 @@ async function main() {
     // Update menu overlay (rendered in bottom bar, not chat scroll)
     if (S.menuOpen && S.menuItems.length > 0 && S.view === 'chat') {
       const menuW = Math.min(72, Math.max(58, (process.stdout?.columns || 80) - 8))
+      const termRows = renderer.terminalHeight || process.stdout?.rows || 24
+      const reservedBottomRows = 6 // input + status lines; keep menu from running off-screen
+      const maxVisibleItems = Math.max(3, termRows - reservedBottomRows)
       const border = fg('#7c3aed')
       const hasAge = S.menuItems.some((it: any) => it.age)
-      const title = hasAge ? 'Sessions' : 'Commands'
+      const title = S.menuTitle || (hasAge ? 'Sessions' : 'Commands')
+      const totalItems = S.menuItems.length
+      const visibleItems = Math.min(totalItems, maxVisibleItems)
+      const startIdx = Math.min(
+        Math.max(0, S.menuIdx - Math.floor(visibleItems / 2)),
+        Math.max(0, totalItems - visibleItems),
+      )
+      const endIdx = Math.min(totalItems, startIdx + visibleItems)
+      const showing = totalItems > visibleItems ? ` ${startIdx + 1}-${endIdx}/${totalItems}` : ''
+      const footerHelp = totalItems > visibleItems
+        ? '↑↓ navigate  1-9 quick select  PgUp/PgDn jump  Enter select  Esc close'
+        : '↑↓ navigate  1-9 quick select  Enter select  Esc close'
       const mp: (StyledText | string)[] = []
-      mp.push(t`${border(`  ╭─ ${title} ${'─'.repeat(menuW - title.length - 5)}╮`)}`)
-      for (let i = 0; i < S.menuItems.length; i++) {
+      mp.push(t`${border(`  ╭─ ${title}${showing} ${'─'.repeat(Math.max(0, menuW - title.length - showing.length - 5))}╮`)}`)
+      for (let i = startIdx; i < endIdx; i++) {
         const item = S.menuItems[i] as any
         const sel = i === S.menuIdx
         const age = item.age || ''
@@ -1174,7 +1393,8 @@ async function main() {
           }
         } else {
           // Command-style: cmd + desc
-          const cmdPad = item.cmd + ' '.repeat(Math.max(0, 30 - item.cmd.length))
+          const displayCmd = item.label || item.cmd
+          const cmdPad = displayCmd + ' '.repeat(Math.max(0, 30 - displayCmd.length))
           if (sel) {
             mp.push(joinStyled(
               t`${border('  │')}`,
@@ -1193,7 +1413,7 @@ async function main() {
         }
       }
       mp.push('\n')
-      mp.push(t`${border(`  ╰─ ↑↓ navigate  Enter select  Esc close ${'─'.repeat(Math.max(0, menuW - 44))}╯`)}`)
+      mp.push(t`${border(`  ╰─ ${footerHelp} ${'─'.repeat(Math.max(0, menuW - footerHelp.length - 5))}╯`)}`)
       menuText.content = joinStyled(...mp)
     } else {
       menuText.content = ''
@@ -1299,7 +1519,7 @@ async function main() {
     // Right: view hotkeys + streaming hints
     let hotkeys = 'F1:chat  F2:dash  F3:sessions  Ctrl+P:info  Ctrl+Shift+C:copy'
     if (S.streaming) {
-      hotkeys = 'Esc:abort  Enter:steer  /queue:follow-up'
+      hotkeys = 'Esc:/interrupt  Enter:steer  /queue:follow-up'
     }
     const leftLen = S.ob.complete ? 30 : 22
     const pad2 = ' '.repeat(Math.max(1, termW - leftLen - hotkeys.length - 2))
@@ -1702,6 +1922,13 @@ async function main() {
       return
     }
 
+    // Ctrl+Y: toggle visible thoughts
+    if (key.name === 'y' && key.ctrl) {
+      backend.sendCommand('/thoughts')
+      key.preventDefault()
+      return
+    }
+
     // Escape: abort if streaming, close menu if open
     if (key.name === 'escape') {
       if (S.streaming) {
@@ -1720,27 +1947,39 @@ async function main() {
 
     // Menu navigation when open
     if (S.menuOpen && S.view === 'chat') {
+      const pageJump = Math.max(5, (renderer.terminalHeight || process.stdout?.rows || 24) - 10)
+      const executeMenuItem = (item?: MenuItem) => {
+        if (!item) return
+        S.menuOpen = false; (S as any)._pickerActive = false; (S as any)._lastPickerCmd = null
+        if (item.cmd.includes('<')) {
+          input.value = item.cmd.split('<')[0]
+          rebuildView()
+          return
+        }
+        input.value = ''
+        addUserMessage(item.label || item.cmd)
+        if (item.cmd === '/dashboard') { switchView('dashboard'); return }
+        if (item.cmd === '/sessions') { switchView('sessions'); return }
+        if (item.cmd === '/chat') { switchView('chat'); return }
+        backend.sendCommand(item.cmd)
+        rebuildView()
+      }
       if (key.name === 'up') { S.menuIdx = Math.max(0, S.menuIdx - 1); rebuildView(); return }
       if (key.name === 'down') { S.menuIdx = Math.min(S.menuItems.length - 1, S.menuIdx + 1); rebuildView(); return }
-      if (key.name === 'return') {
-        const item = S.menuItems[S.menuIdx]
-        if (item) {
-          S.menuOpen = false; (S as any)._pickerActive = false; (S as any)._lastPickerCmd = null
-          if (item.cmd.includes('<')) {
-            // Has placeholder — put partial command in input for user to complete
-            input.value = item.cmd.split('<')[0]
-            rebuildView()
-          } else {
-            // Direct command — execute it
-            input.value = ''
-            addUserMessage(item.cmd)
-            if (item.cmd === '/dashboard') { switchView('dashboard'); return }
-            if (item.cmd === '/sessions') { switchView('sessions'); return }
-            if (item.cmd === '/chat') { switchView('chat'); return }
-            backend.sendCommand(item.cmd)
-            rebuildView()
-          }
+      if (key.name === 'pageup') { S.menuIdx = Math.max(0, S.menuIdx - pageJump); rebuildView(); return }
+      if (key.name === 'pagedown') { S.menuIdx = Math.min(S.menuItems.length - 1, S.menuIdx + pageJump); rebuildView(); return }
+      if (key.name === 'home') { S.menuIdx = 0; rebuildView(); return }
+      if (key.name === 'end') { S.menuIdx = Math.min(S.menuItems.length - 1, S.menuItems.length - 1); rebuildView(); return }
+      const seq = String((key as any).sequence || '')
+      if (/^[1-9]$/.test(seq)) {
+        const index = Number(seq) - 1
+        if (index >= 0 && index < S.menuItems.length) {
+          executeMenuItem(S.menuItems[index])
+          return
         }
+      }
+      if (key.name === 'return') {
+        executeMenuItem(S.menuItems[S.menuIdx])
         return
       }
     }
@@ -1749,7 +1988,7 @@ async function main() {
       const v = (input.value || '').trim()
       if (!v) return
 
-      // While streaming: Enter = steer (interrupt), Ctrl+Enter or /queue = follow-up
+      // While streaming: Enter = steer, /queue = follow-up, /interrupt = abort
       if (S.streaming && !v.startsWith('/')) {
         input.value = ''
         pushMsg(t`${bold(fg('#f59e0b')('steer> '))}${v}`)
@@ -1762,7 +2001,22 @@ async function main() {
       addUserMessage(v)
       input.value = ''
 
-      // /queue command — add to follow-up queue
+      // Explicit steering/queue/interrupt controls
+      if (v === '/interrupt' || v === '/abort') {
+        backend.sendAbort()
+        pushMsg(t`${fg('#ef4444')('  ⏹ Interrupt requested')}`)
+        rebuildView()
+        return
+      }
+      if (v.startsWith('/steer ')) {
+        const msg = v.slice(7).trim()
+        if (msg) {
+          pushMsg(t`${bold(fg('#f59e0b')('steer> '))}${msg}`)
+          backend.sendSteer(msg)
+        }
+        rebuildView()
+        return
+      }
       if (v.startsWith('/queue ')) {
         const msg = v.slice(7).trim()
         if (msg) {
@@ -1776,6 +2030,7 @@ async function main() {
       // Open full menu on bare /
       if (v === '/' || v === '/help' || v === '/?' || v === '/setup') {
         S.menuOpen = true
+        S.menuTitle = 'Commands'
         S.menuItems = MENU_ITEMS
         S.menuIdx = 0
         rebuildView()
@@ -1786,7 +2041,7 @@ async function main() {
       if (v.startsWith('/') && v.length > 1) {
         const matches = MENU_ITEMS.filter(m => m.cmd.toLowerCase().startsWith(v.toLowerCase()))
         if (matches.length > 1) {
-          S.menuOpen = true; S.menuItems = matches; S.menuIdx = 0; rebuildView(); return
+          S.menuOpen = true; S.menuTitle = 'Commands'; S.menuItems = matches; S.menuIdx = 0; rebuildView(); return
         }
         if (matches.length === 1 && matches[0].cmd.includes('<')) {
           // Single match with placeholder — put in input
@@ -1964,6 +2219,7 @@ async function main() {
                   matches[i].cmd.length < matches[bestIdx].cmd.length) bestIdx = i
             }
             S.menuOpen = true
+            S.menuTitle = 'Commands'
             S.menuItems = matches
             // Only reset cursor if the menu items changed
             if (!S.menuOpen || S.menuItems.length !== matches.length) S.menuIdx = bestIdx
@@ -1984,6 +2240,7 @@ async function main() {
       case 'chat_delta': {
         // Clear thinking animation (but keep rowing — it stops on chat_complete)
         if ((S as any)._thinkInterval) { clearInterval((S as any)._thinkInterval); (S as any)._thinkInterval = null }
+        if (streamingThought) finishThinkingStream()
         // If streamingMd was finalized (tool use turn), start a new one for post-tool response
         if (!streamingMd) {
           S.buf = []  // Reset buffer — previous text is already in the finalized MD
@@ -1995,6 +2252,10 @@ async function main() {
         break
       }
       case 'thinking_start': {
+        if (S.showThoughts) {
+          if (!streamingThought) startThinkingStream()
+          break
+        }
         // Start a thinking animation
         const thinkIdx = S.msgs.length
         pushMsg(t`${fg('#7c3aed')('  ◆ thinking...')}`)
@@ -2011,15 +2272,31 @@ async function main() {
         ;(S as any)._thinkInterval = thinkInterval
         break
       }
+      case 'thinking_delta': {
+        if (S.showThoughts) {
+          if (!streamingThought) startThinkingStream()
+          updateThinkingStream(thoughtBuf + (((ev.text as string) || '')))
+        }
+        break
+      }
       case 'tool_call': {
         if ((S as any)._thinkInterval) { clearInterval((S as any)._thinkInterval); (S as any)._thinkInterval = null }
+        if (streamingThought) finishThinkingStream()
         // Finalize any in-progress streaming text before adding tool block
         if (streamingMd) {
           finishStreaming()
           S.buf = []
         }
         const nm = (ev.tool_name as string)||'', ar = ev.arguments as any
-        const s = nm==='Bash'?(ar.command||'').slice(0,60):nm==='Read'?(ar.path||''):nm==='Write'?`${ar.path} (${(ar.content||'').length}ch)`:nm==='Edit'?(ar.path||''):JSON.stringify(ar).slice(0,60)
+        const s = nm==='Bash'?(ar.command||'').slice(0,60)
+          : nm==='Read'?(ar.path||'')
+          : nm==='Write'?`${ar.path} (${(ar.content||'').length}ch)`
+          : nm==='Edit'?(ar.path||'')
+          : nm==='RunProcess'?(ar.name || ar.command || '').slice(0,60)
+          : nm==='ProcessStatus'?(ar.process_id || '(all)')
+          : nm==='ProcessLogs'?(ar.process_id || '')
+          : nm==='StopProcess'?(ar.process_id || '')
+          : JSON.stringify(ar).slice(0,60)
 
         // Tool-specific colors
         const toolColors: Record<string, {bg: string, fg: string, label: string}> = {
@@ -2027,13 +2304,17 @@ async function main() {
           'Write': { bg: '#1a1a0d', fg: '#fbbf24', label: '✏️' },
           'Edit':  { bg: '#1a140d', fg: '#f59e0b', label: '🔧' },
           'Bash':  { bg: '#0d0d1a', fg: '#93c5fd', label: '⚡' },
+          'RunProcess': { bg: '#0d161a', fg: '#67e8f9', label: '▶' },
+          'ProcessStatus': { bg: '#13161a', fg: '#a5f3fc', label: '◉' },
+          'ProcessLogs': { bg: '#111827', fg: '#93c5fd', label: '🪵' },
+          'StopProcess': { bg: '#1a0d0d', fg: '#fca5a5', label: '■' },
           'SpawnShade': { bg: '#1a0d1a', fg: '#c084fc', label: '👻' },
         }
         const tc = toolColors[nm] || { bg: '#151520', fg: '#a5b4fc', label: '⚙' }
-        const w = Math.max(40, (process.stdout?.columns || 80) - 4)
+        const w = effectiveChatWidth()
         const header = ` ${tc.label} ${nm}  ${s}`
         const headerPad = header + ' '.repeat(Math.max(0, w - header.length))
-        addToolBlock(joinStyled(t`${bold(fg(tc.fg)(bg(tc.bg)(headerPad.slice(0, w))))}`))
+        ;(S as any)._pendingToolHeader = joinStyled(t`${bold(fg(tc.fg)(bg(tc.bg)(headerPad.slice(0, w))))}`)
 
         // Show rowing animation in the activity indicator (above input bar)
         startRowingAnimation(tc)
@@ -2041,29 +2322,29 @@ async function main() {
         scrollToBottom()
         break
       }
+      case 'tool_result_delta': {
+        const c = normalizeToolOutput((ev.content as string) || '')
+        const tc = (S as any)._currentToolColor || { bg: '#151520', fg: '#a5b4fc' }
+        const pendingHeader = (S as any)._pendingToolHeader || null
+        if (!streamingTool) startToolStream(pendingHeader, tc)
+        updateToolStream(pendingHeader, c, false, tc)
+        break
+      }
       case 'tool_result': {
         // Don't stop animation — keep rowing between tool result and next API call
-        const c = (ev.content as string) || '', e = ev.is_error as boolean
+        const c = normalizeToolOutput((ev.content as string) || '')
+        const e = ev.is_error as boolean
         const tc = (S as any)._currentToolColor || { bg: '#151520', fg: '#a5b4fc' }
-        const w = Math.max(40, (process.stdout?.columns || 80) - 4)
-        const errBg = '#1a0d0d'
-
-        // Build entire tool result as ONE block
-        const resultParts: (StyledText | string)[] = []
-        const contentLines = c.split('\n').slice(0, 8)
-        for (const l of contentLines) {
-          const padded = '  ' + l.slice(0, w - 2) + ' '.repeat(Math.max(0, w - l.length - 2))
-          resultParts.push(e
-            ? t`${fg('#fca5a5')(bg(errBg)(padded.slice(0, w)))}`
-            : t`${fg(tc.fg)(bg(tc.bg)(padded.slice(0, w)))}`
+        const pendingHeader = (S as any)._pendingToolHeader || null
+        ;(S as any)._pendingToolHeader = null
+        if (streamingTool) {
+          finishToolStream(pendingHeader, c, e, tc)
+        } else {
+          addToolBlock(
+            renderToolBlockContent(pendingHeader, c, e, tc),
+            { header: pendingHeader, content: c, isError: e, tc }
           )
-          resultParts.push('\n')
         }
-        if (c.split('\n').length > 8) {
-          const moreLine = `  ... (${c.split('\n').length} lines total)` + ' '.repeat(Math.max(0, w - 30))
-          resultParts.push(t`${dim(fg(tc.fg)(bg(tc.bg)(moreLine.slice(0, w))))}`)
-        }
-        addToolBlock(joinStyled(...resultParts))
         scrollToBottom()
         break
       }
@@ -2075,12 +2356,16 @@ async function main() {
           stopRowingAnimation()
         }
         if ((S as any)._thinkInterval) { clearInterval((S as any)._thinkInterval); (S as any)._thinkInterval = null }
+        if (streamingThought) finishThinkingStream()
         if (streamingMd && S.buf.length) { finishStreaming(); S.buf=[] }
         rebuildView(); break
       case 'chat_complete':
         // Clear any lingering animations
         if ((S as any)._thinkInterval) { clearInterval((S as any)._thinkInterval); (S as any)._thinkInterval = null }
         stopRowingAnimation()
+        if (streamingThought) {
+          finishThinkingStream()
+        }
         if (S.buf.length) {
           finishStreaming()
         } else if (streamingMd) {
@@ -2153,22 +2438,31 @@ async function main() {
         rebuildView(); break
       case 'suggestions': {
         const title = (ev.title as string) || 'Commands'
-        const items = (ev.items as Array<{cmd: string, desc: string}>) || []
-        const parts: (StyledText | string)[] = []
-        parts.push(t`${bold(fg('#a78bfa')(`  ┌─ ${title} ─`))}`)
-        for (const item of items) {
+        const items = ((ev.items as Array<{cmd: string, desc: string, label?: string}>) || []).map(item => ({
+          cmd: item.cmd,
+          desc: item.desc,
+          label: item.label,
+        }))
+        S.menuTitle = title
+        S.menuItems = items
+        S.menuIdx = 0
+        S.menuOpen = items.length > 0
+        if (title !== 'Provider Switch') {
+          const parts: (StyledText | string)[] = []
+          parts.push(t`${bold(fg('#a78bfa')(`  ┌─ ${title} ─`))}`)
+          for (const item of items) {
+            parts.push('\n')
+            parts.push(joinStyled(
+              t`${fg('#a78bfa')('  │')} `,
+              t`${bold(fg('#e2e8f0')(item.label || item.cmd))}`,
+              '  ',
+              t`${dim(item.desc)}`,
+            ))
+          }
           parts.push('\n')
-          // Don't use t`` to combine StyledText — use joinStyled
-          parts.push(joinStyled(
-            t`${fg('#a78bfa')('  │')} `,
-            t`${bold(fg('#e2e8f0')(item.cmd))}`,
-            '  ',
-            t`${dim(item.desc)}`,
-          ))
+          parts.push(t`${fg('#a78bfa')('  └' + '─'.repeat(40))}`)
+          pushMsg(joinStyled(...parts))
         }
-        parts.push('\n')
-        parts.push(t`${fg('#a78bfa')('  └' + '─'.repeat(40))}`)
-        pushMsg(joinStyled(...parts))
         rebuildView(); break
       }
       case 'auth_url': {
@@ -2274,11 +2568,13 @@ async function main() {
         S.menuOpen = true
         ;(S as any)._pickerActive = true  // prevent input change handler from closing
         if (pickerType === 'switch') {
+          S.menuTitle = 'Providers'
           S.menuItems = models.map(m => ({ cmd: `/provider ${m.id}`, desc: m.desc }))
         } else if (pickerType === 'resume') {
+          S.menuTitle = 'Sessions'
           S.menuItems = models.map((m: any) => ({ cmd: `/resume ${m.id}`, desc: m.desc, age: m.age || '' }))
         } else {
-          // Model picker
+          S.menuTitle = 'Models'
           S.menuItems = models.map(m => ({ cmd: `/setup model ${m.id}`, desc: m.desc }))
         }
         S.menuIdx = 0
@@ -2329,6 +2625,16 @@ async function main() {
         pushMsg(t`${yellow(`  Timestamps ${S.showTimestamps ? 'enabled ⏱' : 'disabled'}`)}`)
         rebuildView(); updateStatus(); break
       }
+      case 'toggle_visible_thoughts': {
+        S.showThoughts = Boolean(ev.enabled)
+        if (typeof ev.supported === 'boolean') S.thoughtsSupported = Boolean(ev.supported)
+        const provider = ((ev.provider as string) || '').trim()
+        const suffix = (S.showThoughts && !S.thoughtsSupported)
+          ? ` (current provider${provider ? `: ${provider}` : ''} may not expose thoughts)`
+          : ''
+        pushMsg(t`${yellow(`  Visible thoughts ${S.showThoughts ? 'enabled 🧠' : 'disabled'}${suffix}`)}`)
+        rebuildView(); updateStatus(); break
+      }
       case 'usage': {
         const inTok = (ev.input_tokens as number) || 0
         const outTok = (ev.output_tokens as number) || 0
@@ -2337,7 +2643,9 @@ async function main() {
         ;(S as any).lastCallIn = inTok
         ;(S as any).lastCallOut = outTok
         S.contextPct = (ev.context_pct as number) ?? S.contextPct
+        S.maxContext = (ev.context_window as number) || S.maxContext
         updateStatus()
+        updateInfoPane()
         renderer.requestRender()
         break
       }
@@ -2345,11 +2653,17 @@ async function main() {
       case 'error': pushMsg(t`${red(`  Error: ${(ev.error as string)||''}`)}`); S.streaming=false; stopRowingAnimation(); rebuildView(); updateStatus(); break
       case 'refresh': {
         const p = ev.payload as any
-        if (p?.onboarding) { S.ob = p.onboarding; input.placeholder = S.ob.complete ? 'Type a message or /command...' : 'Type /setup provider <name> to get started...' }
+        if (p?.onboarding) {
+          S.ob = p.onboarding
+          input.placeholder = S.ob.complete ? 'Type a message or /command...' : 'Type /setup provider <name> to get started...'
+          setTerminalTitle(S.ob.project || process.cwd())
+        }
         if (p?.agent_mode) S.agentMode = p.agent_mode
         if (p?.batch_progress) S.batchProgress = p.batch_progress
         if (p?.session_id) (globalThis as any).__charonSessionId = p.session_id
         if (p?.session_info) { S.sessionInfo = p.session_info; updateInfoPane() }
+        if (typeof p?.visible_thoughts === 'boolean') S.showThoughts = p.visible_thoughts
+        if (typeof p?.thoughts_supported === 'boolean') S.thoughtsSupported = p.thoughts_supported
         if (p?.agents) S.agents = p.agents
         if (p?.projects) S.projects = p.projects
         if (p?.sessions) S.sessions = p.sessions
@@ -2475,7 +2789,7 @@ async function main() {
   const infoPaneBox = instantiate(renderer, Box({
     position: 'absolute', right: 0, top: 0,
     width: 0,  // hidden by default
-    height: '100%',
+    bottom: 6,
     flexDirection: 'column',
     backgroundColor: '#0c0c14',
     borderStyle: 'rounded',
@@ -2508,7 +2822,7 @@ async function main() {
     const p: (StyledText | string)[] = []
 
     // Tab indicator
-    const tabs = ['Tasks', 'Goals', 'Model']
+    const tabs = ['Outcomes', 'Goals', 'Model']
     const tabParts: (StyledText | string)[] = []
     for (let i = 0; i < tabs.length; i++) {
       if (i > 0) tabParts.push(t`${dim('  ')}`)
@@ -2523,31 +2837,32 @@ async function main() {
     p.push('\n')
 
     if (S.infoPaneTab === 0) {
-      // Tasks tab
+      // Tasks tab — session-local outcome ledger
       if (tasks.length === 0) {
-        p.push(t`${dim('No tasks yet.')}`)
+        p.push(t`${dim('No completed work yet.')}`)
         p.push('\n')
-        p.push(t`${dim('Start a conversation')}`)
+        p.push(t`${dim('Start a concrete task')}`)
         p.push('\n')
-        p.push(t`${dim('to see tasks here.')}`)
+        p.push(t`${dim('to track outcomes here.')}`)
       } else {
         for (let i = tasks.length - 1; i >= 0; i--) {
           const task = tasks[i]
           const ts = task.ts ? new Date(task.ts * 1000) : null
           const time = ts ? `${ts.getHours().toString().padStart(2,'0')}:${ts.getMinutes().toString().padStart(2,'0')}` : ''
-          const icon = '✓'
-          const summary = (task.summary || task.instruction || '').slice(0, paneW - 8)
-          const tools = task.tool_calls ? `${task.tool_calls}t` : ''
-          const turns = task.turns ? `${task.turns}↻` : ''
-          p.push(t`${fg('#6ee7b7')(`${icon} ${time}`)}`)
-          if (tools || turns) p.push(t`${dim(` ${tools} ${turns}`)}`)
+          const status = task.status || 'completed'
+          const icon = status === 'failed' ? '[-]' : status === 'active' ? '[~]' : '[+]'
+          const color = status === 'failed' ? '#ef4444' : status === 'active' ? '#f59e0b' : '#22c55e'
+          const title = (task.title || task.summary || task.instruction || '').slice(0, paneW - 8)
+          const meta: string[] = []
+          if (task.tool_calls) meta.push(`${task.tool_calls}t`)
+          if (task.turns) meta.push(`${task.turns}↻`)
+          if (task.files_touched?.length) meta.push(`${task.files_touched.length}f`)
+          p.push(t`${fg(color)(`${icon} ${title}`)}`)
           p.push('\n')
-          // Wrap summary
-          let rem = summary
-          while (rem.length > 0) {
-            p.push(t`${dim(`  ${rem.slice(0, paneW - 6)}`)}`)
+          const metaText = [time, ...meta].filter(Boolean).join('  ')
+          if (metaText) {
+            p.push(t`${dim(`  ${metaText}`)}`)
             p.push('\n')
-            rem = rem.slice(paneW - 6)
           }
         }
       }
@@ -2601,6 +2916,11 @@ async function main() {
     p.push('\n')
     const fmtK = (n: number) => n >= 1000 ? `${(n/1000).toFixed(1)}k` : `${n}`
     p.push(t`${dim(`chat: ${fmtK(tokens.chat_in || S.tokensIn)}↑ ${fmtK(tokens.chat_out || S.tokensOut)}↓`)}`)
+    const maxCtx = (tokens.max_context || S.maxContext || 0)
+    if (maxCtx > 0) {
+      p.push('\n')
+      p.push(t`${dim(`max ctx: ${fmtK(maxCtx)}`)}`)
+    }
     if (tokens.consolidation_tokens) {
       p.push('\n')
       p.push(t`${dim(`bg: ~${fmtK(tokens.consolidation_tokens)} consol`)}`)
@@ -2724,6 +3044,7 @@ const _cleanExit = (code = 0) => {
     // Exit raw mode
     if (process.stdin.setRawMode) process.stdin.setRawMode(false)
     process.stdin.unref()
+    process.stdout.write('\x1b]2;charon\x07')
   } catch {}
   // Print resume message to normal screen buffer (after alt screen exit)
   try {

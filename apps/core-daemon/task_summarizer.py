@@ -16,6 +16,84 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+import re
+
+
+def summarize_instruction_fast(instruction: str) -> str:
+    """Fast short task label from the user instruction.
+
+    Produces a brief high-level label suitable for an in-progress outcome title.
+    """
+    text = ' '.join((instruction or '').strip().split())
+    if not text:
+        return 'Working on task'
+    lower = text.lower()
+    prefixes = [
+        'please ', 'can you ', 'could you ', 'would you ', 'help me ',
+        'i want you to ', 'let\'s ', 'lets ',
+    ]
+    for prefix in prefixes:
+        if lower.startswith(prefix):
+            text = text[len(prefix):].strip()
+            lower = text.lower()
+            break
+
+    replacements = [
+        (r'^explain what\s+(.+?)\s+is\s+and\s+how\s+it\s+can\s+interact\s+with\s+(.+)$', r'Explain \1 and \2 integration'),
+        (r'^explain what\s+(.+?)\s+is$', r'Explain \1'),
+        (r'^explain\s+(.+)$', r'Explain \1'),
+        (r'^compare\s+(.+)$', r'Compare \1'),
+        (r'^fix\s+(.+)$', r'Fix \1'),
+        (r'^investigate\s+(.+)$', r'Investigate \1'),
+        (r'^research\s+(.+)$', r'Research \1'),
+        (r'^implement\s+(.+)$', r'Implement \1'),
+        (r'^add\s+(.+)$', r'Add \1'),
+        (r'^create\s+(.+)$', r'Create \1'),
+        (r'^build\s+(.+)$', r'Build \1'),
+        (r'^update\s+(.+)$', r'Update \1'),
+    ]
+    for pattern, replacement in replacements:
+        m = re.match(pattern, lower, re.I)
+        if m:
+            candidate = re.sub(pattern, replacement, text, flags=re.I).strip(' .?!,;:')
+            return candidate[:80] if candidate else 'Working on task'
+
+    words = text.split()
+    if len(words) > 6:
+        words = words[:6]
+    candidate = ' '.join(words).strip(' .?!,;:')
+    return candidate[:80] if candidate else 'Working on task'
+
+
+async def summarize_instruction_rich(*, instruction: str, provider: Any, model: Any) -> str:
+    """Generate a brief high-level task label from a user request.
+
+    Uses the existing background/shade model lane; falls back to fast mode.
+    """
+    prompt = (
+        'Turn this user request into a very short high-level task label for a coding agent UI. '
+        'Use 2-7 words. Focus on the real task, not filler. Use title case. '
+        'Examples: "Explain Charon and Hermes Integration", "Fix F1 Typing Flicker", '
+        '"Compare Codex and Claude Auth". Output only the label.\n\n'
+        f'Request: {instruction[:400]}'
+    )
+    text_parts = []
+    try:
+        async for delta in provider.stream(
+            messages=[{'role': 'user', 'content': prompt}],
+            model=model,
+            system_prompt='Output only the label. 2-7 words. No punctuation unless necessary.',
+            max_tokens=32,
+        ):
+            if hasattr(delta, 'type') and delta.type == 'text':
+                text_parts.append(delta.text)
+    except Exception:
+        return summarize_instruction_fast(instruction)
+
+    result = ''.join(text_parts).strip().strip('"\'')
+    if not result or '\n' in result or len(result) > 100:
+        return summarize_instruction_fast(instruction)
+    return result
 
 
 def summarize_fast(

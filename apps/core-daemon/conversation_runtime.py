@@ -149,6 +149,8 @@ def enqueue_agent_task(
     expected_outputs: list[str] | None = None,
     phase_plan: list[dict] | None = None,
     shade_phase: dict | None = None,
+    interval_minutes: int | float | None = None,
+    not_before: str | None = None,
 ) -> dict:
     queue = load_queue(state_dir)
     task_id = _task_id(prefix='task')
@@ -176,6 +178,8 @@ def enqueue_agent_task(
         'expected_outputs': [o for o in (expected_outputs or []) if str(o).strip()],
         'phase_plan': [p for p in (phase_plan or []) if isinstance(p, dict)],
         'shade_phase': shade_phase or None,
+        'interval_minutes': interval_minutes if interval_minutes else None,
+        'not_before': not_before,
         'boundary': {
             'status': 'unclaimed',
             'lease_owner': owner_agent_id,

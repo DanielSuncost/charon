@@ -14,6 +14,38 @@ from providers import ModelInfo, get_provider
 from providers import Provider
 
 
+def _session_provider_dir(state_dir: Path) -> Path:
+    d = Path(state_dir) / 'session_providers'
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _safe_session_id(session_id: str) -> str:
+    return ''.join(c if c.isalnum() or c in ('-', '_', '.') else '_' for c in str(session_id or '').strip())
+
+
+def _session_provider_path(state_dir: Path, session_id: str) -> Path:
+    return _session_provider_dir(state_dir) / f'{_safe_session_id(session_id)}.json'
+
+
+def load_session_provider_config(state_dir: Path, session_id: str | None) -> dict:
+    if not session_id:
+        return {}
+    return _read_json(_session_provider_path(Path(state_dir), session_id), {})
+
+
+def save_session_provider_config(state_dir: Path, session_id: str, config: dict) -> None:
+    path = _session_provider_path(Path(state_dir), session_id)
+    path.write_text(json.dumps(config, indent=2))
+
+
+def clear_session_provider_config(state_dir: Path, session_id: str) -> None:
+    try:
+        _session_provider_path(Path(state_dir), session_id).unlink()
+    except FileNotFoundError:
+        pass
+
+
 # Known model context windows (conservative defaults)
 CONTEXT_WINDOWS = {
     # Anthropic — all Claude models support 200k context
@@ -77,8 +109,8 @@ def _read_json(path: Path, default=None):
         return default or {}
 
 
-def resolve_provider_config(state_dir: Path) -> dict:
-    """Read onboarding + auth config and return a unified config dict.
+def resolve_provider_config(state_dir: Path, session_id: str | None = None) -> dict:
+    """Read onboarding + optional session override auth config and return a unified config dict.
 
     Returns:
         {
@@ -93,34 +125,39 @@ def resolve_provider_config(state_dir: Path) -> dict:
     """
     state_dir = Path(state_dir)
     onboarding = _read_json(state_dir / 'onboarding.json')
+    session_override = load_session_provider_config(state_dir, session_id)
     auth_store = _read_json(state_dir / 'auth' / 'auth.json')
 
-    provider_mode = str(onboarding.get('provider_mode') or '').strip().lower()
-    provider_raw = str(onboarding.get('provider') or '').strip().lower()
-    complete = bool(onboarding.get('complete'))
+    effective = dict(onboarding)
+    if session_override:
+        effective.update({k: v for k, v in session_override.items() if v is not None})
+
+    provider_mode = str(effective.get('provider_mode') or '').strip().lower()
+    provider_raw = str(effective.get('provider') or '').strip().lower()
+    complete = bool(effective.get('complete'))
 
     # Not configured yet
     if not complete or provider_mode == 'no-provider' or not provider_raw:
         return {
             'provider_name': 'local',
-            'model_id': _detect_model_fallback(onboarding),
+            'model_id': _detect_model_fallback(effective),
             'api_key': 'not-needed',
-            'base_url': _detect_base_url(onboarding),
+            'base_url': _detect_base_url(effective),
             'context_window': DEFAULT_CONTEXT_WINDOW,
             'supports_thinking': False,
             'ready': False,
         }
 
     provider_name = PROVIDER_MAP.get(provider_raw, 'local')
-    model_id = _detect_model(onboarding, provider_name)
-    api_key = _resolve_api_key(provider_name, provider_raw, onboarding, auth_store)
-    base_url = _detect_base_url(onboarding) if provider_name == 'local' else None
+    model_id = _detect_model(effective, provider_name)
+    api_key = _resolve_api_key(provider_name, provider_raw, effective, auth_store)
+    base_url = _detect_base_url(effective) if provider_name == 'local' else None
     context_window = CONTEXT_WINDOWS.get(model_id, DEFAULT_CONTEXT_WINDOW)
     supports_thinking = provider_name == 'anthropic'
 
     # For API/opencode providers, we might need a custom base URL
     if provider_raw in ('api', 'opencode') and not base_url:
-        base_url = str(onboarding.get('provider_base_url') or '').strip() or None
+        base_url = str(effective.get('provider_base_url') or '').strip() or None
 
     return {
         'provider_name': provider_name,
@@ -131,6 +168,8 @@ def resolve_provider_config(state_dir: Path) -> dict:
         'context_window': context_window,
         'supports_thinking': supports_thinking,
         'ready': bool(api_key),
+        'session_id': session_id or '',
+        'session_override': bool(session_override),
     }
 
 
@@ -242,7 +281,13 @@ def _resolve_api_key(
 
 
 def _get_refresh_token(state_dir: Path, provider_raw: str) -> str | None:
-    """Get the refresh token for a provider from auth stores."""
+    """Get the refresh token for a provider from auth stores.
+
+    Important: for Claude/Anthropic flows, prefer Claude's own credentials over
+    pi-agent's auth store. pi may have its own independently-rotated Anthropic
+    refresh token, and using that for Charon's Claude flow causes refresh/auth
+    mismatches.
+    """
     state_dir = Path(state_dir)
     # Check Charon's auth store
     auth_file = state_dir / 'auth' / 'auth.json'
@@ -257,6 +302,19 @@ def _get_refresh_token(state_dir: Path, provider_raw: str) -> str | None:
                 return rt
         except Exception:
             pass
+
+    # Claude-backed providers: prefer Claude Code credentials before pi auth.
+    if provider_raw in ('claude-code', 'anthropic'):
+        claude_creds = Path.home() / '.claude' / '.credentials.json'
+        if claude_creds.exists():
+            try:
+                cred = json.loads(claude_creds.read_text())
+                rt = cred.get('claudeAiOauth', {}).get('refreshToken', '').strip()
+                if rt:
+                    return rt
+            except Exception:
+                pass
+
     # Check pi-agent's auth store
     pi_auth = Path.home() / '.pi' / 'agent' / 'auth.json'
     if pi_auth.exists():
@@ -267,7 +325,8 @@ def _get_refresh_token(state_dir: Path, provider_raw: str) -> str | None:
                 return rt
         except Exception:
             pass
-    # Check Claude's credentials
+
+    # Fallback to Claude's credentials for any remaining Anthropic-ish callers
     claude_creds = Path.home() / '.claude' / '.credentials.json'
     if claude_creds.exists():
         try:
@@ -354,13 +413,13 @@ def _refresh_token(provider_raw: str, refresh_token: str) -> str | None:
     return None
 
 
-def create_provider_and_model(state_dir: Path) -> tuple[Provider, ModelInfo, bool]:
+def create_provider_and_model(state_dir: Path, session_id: str | None = None) -> tuple[Provider, ModelInfo, bool]:
     """Create a Provider and ModelInfo from the current config.
 
     Returns (provider, model_info, ready).
     ready=False means heuristic mode (no LLM available).
     """
-    config = resolve_provider_config(state_dir)
+    config = resolve_provider_config(state_dir, session_id=session_id)
 
     model = ModelInfo(
         provider=config['provider_name'],
