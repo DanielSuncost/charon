@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,10 @@ SUPPORTED_EXTERNAL_AGENTS = {
     'pi': {
         'command': ['pi'],
         'display_name': 'pi',
+    },
+    'charon': {
+        'command': [sys.executable, '-m', 'charon_native_session'],
+        'display_name': 'Charon',
     },
 }
 

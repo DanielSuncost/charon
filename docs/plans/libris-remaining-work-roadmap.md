@@ -234,8 +234,9 @@ Expand shade contract taxonomy.
 ## Backend
 - [ ] Improve `libris_procurement_ingest.py` claim/source extraction quality
 - [ ] Add critique-to-gap task generation
-- [ ] Add `libris_gap_fill` contract type
-- [ ] Add `libris_claim_extraction` contract type
+- [x] Add `libris_gap_fill` contract type
+- [x] Add `libris_claim_extraction` contract type
+- [x] Add `libris_contradiction_check` contract type
 - [ ] Add operation-level executive summary generation
 - [ ] Add multi-topic delivery bundle artifact
 - [ ] Improve result fusion between `Paper` and `SourceDiscovery`

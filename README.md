@@ -38,28 +38,20 @@ You re-explain context every time. Charon is different:
 
 <!-- TODO: screenshot of session grid -->
 
-Run agents from any framework — Hermes, pi, your own — and manage them
-all from one terminal. Charon's Boat wraps any agent in a tmux session
-and registers it with the session grid:
+The Session Grid (F3) is a live terminal multiplexer embedded directly in the Rust TUI. Each cell is a real VTE terminal emulator — you see the full rendered output and can type into any session without leaving Charon.
+
+Sessions can be:
+- **Native Charon agents** — spawned with a real PTY via `portable-pty`
+- **Existing tmux sessions** — attached via `tmux capture-pane -e` (ANSI-preserving) with input written directly to the pane TTY
+- **External agents** wrapped via Charon's Boat (pi, Claude Code, Codex, opencode, your own) — connected via Unix socket stream
 
 ```bash
-charons-boat wrap -- hermes           # wrap hermes
-charons-boat wrap --name review -- pi # wrap pi-agent
+charons-boat wrap --name review -- pi # wrap pi-agent, appears in grid
 ```
 
-Every wrapped agent appears in the session grid (F3). Monitor status,
-switch between agents, see what's running across projects.
+Every wrapped agent appears in the Session Grid. Select it with arrow keys, press Enter to focus, and type to interact — all without switching windows or tmux panes.
 
-**Memory bridge** — Charon can import memory from compatible agents.
-Hermes uses the same `§`-delimited markdown format for `MEMORY.md` and
-`USER.md`, and stores sessions in SQLite with FTS5. A Hermes agent's
-accumulated knowledge can be indexed into Charon's semantic memory,
-making it searchable alongside native Charon conversations.
-
-> **Coming next:** Real-time tmux capture in the session grid, visual
-> notifications when any agent needs approval or intervention, and
-> remote agent connectivity so you can monitor agents running on other
-> machines from one Charon instance.
+**What this means in practice:** unlike tools that only let you *observe* agent sessions (status, branch, last output), Charon's Session Grid lets you fully *participate* — send input, see real-time output, resize — from one unified view across all your sessions, local or remote.
 
 ---
 
@@ -339,8 +331,14 @@ charon/
 │   ├── consolidation.py           # Background user model learning
 │   ├── user_model_structured.py   # 7-category structured user profile
 │   ├── providers/                 # Anthropic, OpenAI, local (httpx, zero SDK)
-│   └── tools/                     # 14 built-in + dynamic plugin loader
-├── apps/tui/                      # Terminal frontend
+│   └── tools/                     # 15 built-in + dynamic plugin loader
+├── crates/charon-tui/             # Rust TUI (crossterm + vte + portable-pty)
+│   ├── src/grid.rs                # Responsive grid layout (aspect-aware, N cells)
+│   ├── src/session.rs             # SessionCell: VTE emulator + ByteStream backend
+│   ├── src/backend.rs             # LocalPty · TmuxPane · BoatPane · CharonPane
+│   ├── src/terminal.rs            # Screen buffer + scrollback
+│   ├── src/parser.rs              # AnsiParser: VTE events → TerminalState
+│   └── src/native_session.rs      # Unix socket session server
 ├── libs/store.py                  # SQLite persistence (WAL)
 ├── tools/charons-boat/            # External agent bridge
 └── docs/                          # Design documents
@@ -377,7 +375,6 @@ the art cloud-hosted: 81.6%). Retrieval accuracy: 98.5% at R@10.
 ### Planned
 
 - Procedural memory (auto-capture and retrieve multi-step approaches)
-- Rust TUI
 - Per-agent provider config
 - Contract templates (learned shade patterns)
 - Overseer agent role

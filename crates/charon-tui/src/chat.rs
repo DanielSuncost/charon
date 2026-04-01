@@ -186,10 +186,23 @@ pub enum ChatMessage {
     Stderr { text: String },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChatTextPoint {
+    pub row: usize,
+    pub col: usize,
+}
+
 #[derive(Clone, Debug)]
 pub struct ProvisionalOutcome {
     pub summary: String,
     pub done: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ChatContextMenu {
+    pub x: u16,
+    pub y: u16,
+    pub selected: usize,
 }
 
 pub struct ChatState {
@@ -217,6 +230,10 @@ pub struct ChatState {
     pub info_pane_open: bool,
     pub info_pane_tab: usize,
     pub copy_mode: bool,
+    pub selection_anchor: Option<ChatTextPoint>,
+    pub selection_focus: Option<ChatTextPoint>,
+    pub selection_dragging: bool,
+    pub context_menu: Option<ChatContextMenu>,
     pub provisional_outcomes: Vec<ProvisionalOutcome>,
 }
 
@@ -249,6 +266,10 @@ impl ChatState {
             info_pane_open: true,
             info_pane_tab: 0,
             copy_mode: false,
+            selection_anchor: None,
+            selection_focus: None,
+            selection_dragging: false,
+            context_menu: None,
             provisional_outcomes: Vec::new(),
         })
     }
@@ -677,12 +698,15 @@ impl ChatState {
     }
 
     fn handle_event(&mut self, event: BackendEvent) {
+        let was_following = self.scroll == 0;
         match event {
             BackendEvent::Json(v) => self.handle_json(v),
             BackendEvent::Stderr(line) => self.push_stderr(&line),
             BackendEvent::Eof => self.push_error("backend exited"),
         }
-        self.scroll = 0;
+        if was_following {
+            self.scroll = 0;
+        }
         if self.transcript.len() > 10000 {
             let drain = self.transcript.len() - 10000;
             self.transcript.drain(0..drain);
@@ -1014,13 +1038,20 @@ impl ChatState {
             item("/project list", "List explicit projects"),
             item("/project create", "Create an explicit project object"),
             item("/project use", "Select an explicit project"),
-            item("/conversation", "Create a forced conversation room"),
-            item("/conversation hermes", "Start a Hermes conversation room"),
-            item("/team", "Create a multi-agent room/team"),
-            item("/team hermes", "Spawn wrapped Hermes discussion sessions"),
-            item("/devteam", "Create a developer team room"),
-            item("/devteam hermes", "Start a Hermes developer team room"),
-            item("/libris", "Start a Libris research room"),
+            item("/conversation", "Create a live conversation room with Hermes participants"),
+            item("/conversation hermes", "Start a Hermes live conversation room"),
+            item("/conversation hermes teacher student", "Create a teacher/student Hermes room with live participants"),
+            item("/conversation hermes strategist critic", "Create a strategist/critic Hermes room with live participants"),
+            item("/conversation hermes planner critic", "Create a planner/critic Hermes room with live participants"),
+            item("/conversation hermes architect reviewer", "Create an architect/reviewer Hermes room with live participants"),
+            item("/conversation hermes optimist skeptic", "Create an optimist/skeptic Hermes room with live participants"),
+            item("/conversation hermes dialogue", "Create a 2-agent Hermes dialogue room with live participants"),
+            item("/conversation hermes 2", "Create a 2-agent Hermes conversation room with live participants"),
+            item("/team", "Create a live multi-agent room/team"),
+            item("/team hermes", "Create a Hermes discussion room with live participants"),
+            item("/devteam", "Create a live developer team room"),
+            item("/devteam hermes", "Create a Hermes developer team room with live participants"),
+            item("/libris", "Start a Libris research room with live participants"),
             item("/hotkeys", "Keyboard shortcuts"),
             item("/timestamps", "Toggle timestamps"),
             item("/thoughts", "Toggle visible thoughts"),
@@ -1115,31 +1146,39 @@ impl ChatState {
             ]);
         }
 
-        if input == "/conversation" || input.starts_with("/conversation ") {
+        if input == "/conversation" || input.starts_with("/conversation ") || input == "/conv" || input.starts_with("/conv") {
             items.extend([
-                item("/conversation hermes teacher student ", "Start a teacher/student Hermes conversation room"),
-                item("/conversation hermes 2 ", "Start a 2-agent Hermes conversation room"),
+                item("/conversation hermes teacher student ", "Create a teacher/student Hermes room with live participants"),
+                item("/conversation hermes debate ", "Create a 2-agent Hermes debate/dialogue room with live participants"),
+                item("/conversation hermes strategist critic ", "Create a strategist/critic Hermes room with live participants"),
+                item("/conversation hermes planner critic ", "Create a planner/critic Hermes room with live participants"),
+                item("/conversation hermes architect reviewer ", "Create an architect/reviewer Hermes room with live participants"),
+                item("/conversation hermes optimist skeptic ", "Create an optimist/skeptic Hermes room with live participants"),
+                item("/conversation hermes dialogue ", "Create a 2-agent Hermes dialogue room with live participants"),
+                item("/conversation hermes 2 ", "Create a 2-agent Hermes conversation room with live participants"),
             ]);
         }
 
         if input == "/team" || input.starts_with("/team ") {
             items.extend([
-                item("/team hermes 2 ", "Spawn 2 wrapped Hermes sessions for a discussion topic"),
-                item("/team hermes 3 ", "Spawn a 3-agent Hermes discussion room"),
+                item("/team hermes 2 ", "Create a 2-agent Hermes discussion room with live participants"),
+                item("/team hermes 3 ", "Create a 3-agent Hermes discussion room with live participants"),
+                item("/team hermes 4 ", "Create a 4-agent Hermes discussion room with live participants"),
             ]);
         }
 
         if input == "/devteam" || input.starts_with("/devteam ") {
             items.extend([
-                item("/devteam hermes 2 ", "Create a 2-agent Hermes developer team room"),
-                item("/devteam hermes 3 ", "Create a 3-agent Hermes developer team room"),
+                item("/devteam hermes 2 ", "Create a 2-agent Hermes developer team room with live participants"),
+                item("/devteam hermes 3 ", "Create a 3-agent Hermes developer team room with live participants"),
+                item("/devteam hermes 4 ", "Create a 4-agent Hermes developer team room with live participants"),
             ]);
         }
 
         if input == "/libris" || input.starts_with("/libris ") {
             items.extend([
-                item("/libris ", "Start a Libris research intake from a broad prompt"),
-                item("/libris status ", "Inspect Libris swarm state for an operation"),
+                item("/libris ", "Start a Libris research room from a broad prompt"),
+                item("/libris status ", "Inspect a Libris room / swarm operation"),
             ]);
         }
 
@@ -1175,11 +1214,14 @@ impl ChatState {
 
         let query = input.to_ascii_lowercase();
         let needle = query.trim_start_matches('/');
+        let needle_alias = if needle == "conv" { "conversation" } else { needle };
         items.into_iter()
             .filter(|item| {
                 item.cmd.to_ascii_lowercase().starts_with(&query)
                     || (!needle.is_empty() && item.cmd.to_ascii_lowercase().contains(needle))
+                    || (!needle_alias.is_empty() && item.cmd.to_ascii_lowercase().contains(needle_alias))
                     || (!needle.is_empty() && item.desc.to_ascii_lowercase().contains(needle))
+                    || (!needle_alias.is_empty() && item.desc.to_ascii_lowercase().contains(needle_alias))
             })
             .take(20)
             .collect()
@@ -1245,6 +1287,22 @@ impl ChatState {
         } else {
             format!("{}/{}", provider, model)
         }
+    }
+
+    pub fn orchestration_parse_hint(&self) -> Option<String> {
+        let parse = self.refresh_payload.as_ref()
+            .and_then(|p| p.get("orchestration_parse"))?;
+        let source = parse.get("source").and_then(|v| v.as_str()).unwrap_or("");
+        let command = parse.get("command").and_then(|v| v.as_str()).unwrap_or("");
+        if source.is_empty() || command.is_empty() {
+            return None;
+        }
+        let label = match source {
+            "fast-path" => "parse:fast",
+            "shades-parser" => "parse:shades",
+            other => other,
+        };
+        Some(format!("{} {}", label, command))
     }
 }
 

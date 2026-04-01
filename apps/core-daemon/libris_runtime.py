@@ -1251,6 +1251,74 @@ def _score_text_signal(text: str, terms: list[str]) -> float:
     return min(1.0, score / max(1, len(terms)))
 
 
+
+def _normalize_url_for_dedupe(url: str) -> str:
+    u = str(url or '').strip().lower()
+    if not u:
+        return ''
+    u = re.sub(r'^https?://', '', u)
+    u = re.sub(r'^www\.', '', u)
+    u = u.split('#', 1)[0]
+    u = re.sub(r'\?.*$', '', u)
+    u = u.rstrip('/')
+    return u
+
+
+
+def _normalize_title_for_dedupe(title: str) -> str:
+    t = re.sub(r'\s+', ' ', str(title or '').strip().lower())
+    t = re.sub(r'[^a-z0-9 ]+', '', t)
+    return t[:180]
+
+
+
+def _source_duplicate_key(source: dict[str, Any]) -> str:
+    url_key = _normalize_url_for_dedupe(str(source.get('url') or ''))
+    if url_key:
+        return f'url:{url_key}'
+    title_key = _normalize_title_for_dedupe(str(source.get('title') or ''))
+    authors = source.get('authors') or []
+    auth_key = ','.join(str(a).strip().lower() for a in authors[:2] if str(a).strip())
+    if title_key:
+        return f'title:{title_key}|authors:{auth_key}'
+    return ''
+
+
+
+def _backend_quality_weight(backend: str) -> float:
+    b = str(backend or '').lower()
+    return {
+        'openalex': 0.95,
+        'semanticscholar': 0.93,
+        'arxiv': 0.9,
+        'github': 0.82,
+        'web-search': 0.62,
+    }.get(b, 0.58)
+
+
+
+def _citation_signal(source: dict[str, Any]) -> float:
+    raw = source.get('citation_count')
+    if raw in (None, ''):
+        raw = source.get('cited_by_count')
+    try:
+        n = int(raw or 0)
+    except Exception:
+        n = 0
+    if n <= 0:
+        return 0.2
+    if n >= 500:
+        return 1.0
+    if n >= 100:
+        return 0.85
+    if n >= 25:
+        return 0.65
+    if n >= 5:
+        return 0.45
+    return 0.3
+
+
+
 def score_source_lead(source: dict[str, Any], query: str = '') -> dict[str, Any]:
     terms = [t for t in (query or '').lower().split() if t][:8]
     title = str(source.get('title') or '')
@@ -1264,39 +1332,44 @@ def score_source_lead(source: dict[str, Any], query: str = '') -> dict[str, Any]
     if published:
         if len(published) >= 4 and published[:4].isdigit():
             year = int(published[:4])
-            recency = 1.0 if year >= 2025 else 0.85 if year >= 2024 else 0.6 if year >= 2022 else 0.35
+            recency = 1.0 if year >= 2025 else 0.9 if year >= 2024 else 0.72 if year >= 2023 else 0.55 if year >= 2022 else 0.35
 
-    credibility = 0.45
-    if backend in ('arxiv', 'semanticscholar', 'openalex'):
-        credibility = 0.8
+    credibility = max(0.4, _backend_quality_weight(backend))
     if source_type in ('official', 'paper', 'repo'):
-        credibility = max(credibility, 0.75)
+        credibility = max(credibility, 0.78)
     if 'github.com' in url:
-        credibility = max(credibility, 0.65)
+        credibility = max(credibility, 0.7)
+    if 'arxiv.org' in url:
+        credibility = max(credibility, 0.82)
 
-    novelty = 0.5
-    novelty += 0.25 * _score_text_signal(title + ' ' + snippet, terms)
-    novelty = min(1.0, novelty)
+    query_fit = 0.3 + 0.7 * _score_text_signal(title + ' ' + snippet, terms)
+    novelty = min(1.0, 0.45 + 0.35 * _score_text_signal(title + ' ' + snippet, terms) + 0.20 * recency)
 
     implementation_signal = 0.2
     if source_type == 'repo' or 'github.com' in url:
-        implementation_signal = 0.95
+        implementation_signal = 0.98
     elif 'paperswithcode' in url:
-        implementation_signal = 0.85
+        implementation_signal = 0.82
     elif source_type == 'official':
-        implementation_signal = 0.65
+        implementation_signal = 0.68
+    elif source_type == 'paper':
+        implementation_signal = 0.42
 
-    user_fit = 0.35 + 0.65 * _score_text_signal(title + ' ' + snippet, terms)
+    citation_signal = 0.25
+    if backend in ('semanticscholar', 'openalex') or source_type == 'paper':
+        citation_signal = _citation_signal(source)
+
     lead_score = round(
-        0.22 * recency +
-        0.24 * credibility +
-        0.20 * novelty +
-        0.14 * implementation_signal +
-        0.20 * user_fit,
+        0.20 * recency +
+        0.22 * credibility +
+        0.16 * novelty +
+        0.16 * implementation_signal +
+        0.18 * query_fit +
+        0.08 * citation_signal,
         4,
     )
 
-    action = 'deep_read' if lead_score >= 0.72 else 'monitor' if lead_score >= 0.5 else 'ignore'
+    action = 'deep_read' if lead_score >= 0.74 else 'monitor' if lead_score >= 0.54 else 'ignore'
     return {
         'lead_score': lead_score,
         'subscores': {
@@ -1304,7 +1377,9 @@ def score_source_lead(source: dict[str, Any], query: str = '') -> dict[str, Any]
             'credibility': round(credibility, 4),
             'novelty': round(novelty, 4),
             'implementation_signal': round(implementation_signal, 4),
-            'user_fit': round(user_fit, 4),
+            'query_fit': round(query_fit, 4),
+            'citation_signal': round(citation_signal, 4),
+            'backend_quality': round(_backend_quality_weight(backend), 4),
         },
         'recommended_action': action,
     }
@@ -1332,14 +1407,58 @@ def index_promising_source(
     ensure_research_tree(state_dir, project_root)
     scored = dict(source)
     scored.update(score_source_lead(source, query=query))
+    duplicate_key = _source_duplicate_key(scored)
     scored.update({
         'lead_id': _new_id('lead'),
         'operation_id': operation_id,
         'topic_slug': topic_slug,
         'indexed_at': _now_iso(),
+        'duplicate_key': duplicate_key,
+        'normalized_url': _normalize_url_for_dedupe(str(scored.get('url') or '')),
+        'normalized_title': _normalize_title_for_dedupe(str(scored.get('title') or '')),
+        'query': query,
     })
     _append_jsonl(research_root(state_dir, project_root) / 'promising_sources.jsonl', scored)
     return scored
+
+
+def _fuse_promising_source_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        key = str(row.get('duplicate_key') or _source_duplicate_key(row) or row.get('lead_id') or _new_id('lead'))
+        existing = grouped.get(key)
+        if not existing:
+            merged = dict(row)
+            merged['support_count'] = 1
+            merged['backends'] = sorted({str(row.get('backend') or '').strip()} - {''})
+            grouped[key] = merged
+            continue
+        existing['support_count'] = int(existing.get('support_count') or 1) + 1
+        backends = set(existing.get('backends') or [])
+        if row.get('backend'):
+            backends.add(str(row.get('backend') or '').strip())
+        existing['backends'] = sorted(b for b in backends if b)
+        existing['lead_score'] = round(max(float(existing.get('lead_score') or 0.0), float(row.get('lead_score') or 0.0)) + min(0.12, 0.04 * (int(existing.get('support_count') or 1) - 1)), 4)
+        # Prefer richer metadata when present.
+        for field in ('snippet', 'abstract', 'published_at', 'url', 'title', 'source_type'):
+            if (not existing.get(field)) and row.get(field):
+                existing[field] = row.get(field)
+        old_sub = existing.get('subscores') or {}
+        new_sub = row.get('subscores') or {}
+        merged_sub = dict(old_sub)
+        for k, v in new_sub.items():
+            try:
+                merged_sub[k] = round(max(float(merged_sub.get(k) or 0.0), float(v or 0.0)), 4)
+            except Exception:
+                merged_sub[k] = v
+        existing['subscores'] = merged_sub
+        if float(row.get('lead_score') or 0.0) > float(existing.get('best_single_score') or existing.get('lead_score') or 0.0):
+            existing['best_single_score'] = float(row.get('lead_score') or 0.0)
+        existing['recommended_action'] = 'deep_read' if float(existing.get('lead_score') or 0.0) >= 0.74 else 'monitor' if float(existing.get('lead_score') or 0.0) >= 0.54 else 'ignore'
+    out = list(grouped.values())
+    out.sort(key=lambda r: (float(r.get('lead_score') or 0.0), int(r.get('support_count') or 1)), reverse=True)
+    return out
+
 
 
 def list_promising_sources(
@@ -1358,12 +1477,11 @@ def list_promising_sources(
         if topic_slug and str(row.get('topic_slug') or '') != topic_slug:
             continue
         out.append(row)
-    out.sort(key=lambda r: float(r.get('lead_score') or 0), reverse=True)
-    return out[:limit]
+    return _fuse_promising_source_rows(out)[:limit]
 
 
 def search_promising_sources(state_dir: Path, project_root: Path, query: str, limit: int = 10) -> list[dict[str, Any]]:
-    rows = _iter_jsonl(research_root(state_dir, project_root) / 'promising_sources.jsonl')
+    rows = _fuse_promising_source_rows(_iter_jsonl(research_root(state_dir, project_root) / 'promising_sources.jsonl'))
     return _search_jsonl(rows, ['title', 'url', 'snippet', 'abstract', 'topic_slug', 'backend', 'source_type'], query, limit)
 
 
@@ -1475,6 +1593,122 @@ def select_best_checkpoint(state_dir: Path, project_root: Path, operation_id: st
     return best
 
 
+def _safe_read_text(path_str: str) -> str:
+    try:
+        p = Path(str(path_str or ''))
+        if p.exists():
+            return p.read_text(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+    return ''
+
+
+
+def _extract_top_bullets(text: str, limit: int = 4) -> list[str]:
+    bullets: list[str] = []
+    for raw in (text or '').splitlines():
+        s = raw.strip()
+        if not s:
+            continue
+        if re.match(r'^[-*•]\s+', s):
+            s = re.sub(r'^[-*•]\s+', '', s).strip()
+            if len(s) >= 20:
+                bullets.append(s[:240])
+        elif re.match(r'^\d+[.)]\s+', s):
+            s = re.sub(r'^\d+[.)]\s+', '', s).strip()
+            if len(s) >= 20:
+                bullets.append(s[:240])
+        if len(bullets) >= limit:
+            break
+    if bullets:
+        return bullets[:limit]
+    parts = re.split(r'(?<=[.!?])\s+', (text or '').strip())
+    return [p.strip()[:240] for p in parts if len(p.strip()) >= 30][:limit]
+
+
+
+def build_operation_delivery_bundle(state_dir: Path, project_root: Path, operation_id: str, selections: list[dict[str, Any]]) -> dict[str, Any]:
+    op = get_operation_state(state_dir, project_root, operation_id)
+    if not op:
+        return {}
+
+    op_dir = operation_dir(state_dir, project_root, operation_id)
+    bundle_dir = op_dir / 'delivery'
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    topic_lookup = {str(t.get('slug') or ''): t for t in (op.get('topics') or [])}
+    ranked = sorted(selections, key=lambda s: (float(s.get('score') or 0.0), str(s.get('topic_slug') or '')), reverse=True)
+
+    executive_lines = [
+        '# Libris Executive Summary',
+        '',
+        f'- Operation ID: {operation_id}',
+        f'- Status: {op.get("status") or "unknown"}',
+        f'- Prompt: {str(op.get("prompt") or "").strip()}',
+        f'- Delivered topics: {len(ranked)}',
+        '',
+        '## Ranked topics',
+        '',
+    ]
+
+    bundle_topics = []
+    for idx, sel in enumerate(ranked, start=1):
+        slug = str(sel.get('topic_slug') or '')
+        topic = topic_lookup.get(slug, {})
+        checkpoint_id = str(sel.get('checkpoint_id') or '')
+        score = sel.get('score')
+        delivery = sel.get('delivery') or {}
+        report_md = _safe_read_text(str(delivery.get('report_path') or ''))
+        critique_md = _safe_read_text(str(delivery.get('critique_path') or ''))
+        findings = _extract_top_bullets(report_md, limit=4)
+        critiques = _extract_top_bullets(critique_md, limit=3)
+        why = str(topic.get('why_interesting') or '').strip()
+
+        executive_lines.append(f'### {idx}. {topic.get("title") or slug}')
+        executive_lines.append(f'- Topic slug: {slug}')
+        executive_lines.append(f'- Best checkpoint: {checkpoint_id}')
+        executive_lines.append(f'- Score: {score}')
+        if why:
+            executive_lines.append(f'- Why selected: {why[:300]}')
+        if findings:
+            executive_lines.append('- Strongest findings:')
+            executive_lines.extend([f'  - {f}' for f in findings[:3]])
+        if critiques:
+            executive_lines.append('- Remaining caveats:')
+            executive_lines.extend([f'  - {c}' for c in critiques[:2]])
+        executive_lines.append('')
+
+        bundle_topics.append({
+            'rank': idx,
+            'topic_slug': slug,
+            'title': topic.get('title') or slug,
+            'checkpoint_id': checkpoint_id,
+            'score': score,
+            'why_selected': why,
+            'strongest_findings': findings,
+            'remaining_caveats': critiques,
+            'delivery': delivery,
+        })
+
+    overview = {
+        'operation_id': operation_id,
+        'prompt': op.get('prompt') or '',
+        'status': op.get('status') or '',
+        'topic_count': len(bundle_topics),
+        'topics': bundle_topics,
+        'generated_at': _now_iso(),
+    }
+    _write_json(bundle_dir / 'delivery-bundle.json', overview)
+    (bundle_dir / 'executive-summary.md').write_text('\n'.join(executive_lines).strip() + '\n', encoding='utf-8')
+    return {
+        'bundle_dir': str(bundle_dir),
+        'bundle_json_path': str(bundle_dir / 'delivery-bundle.json'),
+        'executive_summary_path': str(bundle_dir / 'executive-summary.md'),
+        'overview': overview,
+    }
+
+
+
 def finalize_operation_selection(state_dir: Path, project_root: Path, operation_id: str) -> dict[str, Any]:
     op = get_operation_state(state_dir, project_root, operation_id)
     if not op:
@@ -1506,13 +1740,22 @@ def finalize_operation_selection(state_dir: Path, project_root: Path, operation_
             mark_best_checkpoint(state_dir, project_root, operation_id, slug, str(best.get('checkpoint_id') or ''), selector='coordinator')
 
     op_dir = operation_dir(state_dir, project_root, operation_id)
+    bundle = build_operation_delivery_bundle(state_dir, project_root, operation_id, selections)
     summary_lines = ['# Libris Final Selection', '']
-    for sel in selections:
-        summary_lines.append(f'- {sel["topic_slug"]}: {sel["checkpoint_id"]} (score={sel.get("score")})')
+    for idx, sel in enumerate(sorted(selections, key=lambda s: float(s.get('score') or 0.0), reverse=True), start=1):
+        summary_lines.append(f'- {idx}. {sel["topic_slug"]}: {sel["checkpoint_id"]} (score={sel.get("score")})')
+    if bundle.get('executive_summary_path'):
+        summary_lines.extend(['', f'Executive summary: {bundle.get("executive_summary_path")}'])
+    if bundle.get('bundle_json_path'):
+        summary_lines.append(f'Delivery bundle JSON: {bundle.get("bundle_json_path")}')
     (op_dir / 'coordinator' / 'final-selection.md').write_text('\n'.join(summary_lines), encoding='utf-8')
     set_operation_status(state_dir, project_root, operation_id, 'delivered', 'Coordinator selected final deliveries.')
-    append_operation_event(state_dir, project_root, operation_id, 'final_deliveries_selected', {'count': len(selections)})
-    return {'operation_id': operation_id, 'selections': selections}
+    append_operation_event(state_dir, project_root, operation_id, 'final_deliveries_selected', {
+        'count': len(selections),
+        'executive_summary_path': bundle.get('executive_summary_path', ''),
+        'bundle_json_path': bundle.get('bundle_json_path', ''),
+    })
+    return {'operation_id': operation_id, 'selections': selections, 'bundle': bundle}
 
 
 def get_libris_swarm_state(state_dir: Path, project_root: Path, operation_id: str) -> dict[str, Any]:
@@ -1665,11 +1908,31 @@ def get_libris_swarm_state(state_dir: Path, project_root: Path, operation_id: st
             members.append(judge)
         members.extend(shades)
 
+    non_shade_members = [m for m in members if str(m.get('role') or '') != 'shade']
+    team_grid = []
+    if coordinator:
+        team_grid.append(coordinator)
+    for tc in topic_cards:
+        researcher = tc.get('researcher') or {}
+        judge = tc.get('judge') or {}
+        if researcher:
+            team_grid.append(researcher)
+        if judge:
+            team_grid.append(judge)
+
     final_selection_path = operation_dir(state_dir, project_root, operation_id) / 'coordinator' / 'final-selection.md'
+    delivery_dir = operation_dir(state_dir, project_root, operation_id) / 'delivery'
+    executive_summary_path = delivery_dir / 'executive-summary.md'
+    delivery_bundle_path = delivery_dir / 'delivery-bundle.json'
     try:
         final_selection = final_selection_path.read_text(encoding='utf-8') if final_selection_path.exists() else ''
     except Exception:
         final_selection = ''
+    try:
+        executive_summary = executive_summary_path.read_text(encoding='utf-8') if executive_summary_path.exists() else ''
+    except Exception:
+        executive_summary = ''
+    delivery_bundle = _read_json(delivery_bundle_path, {}) if delivery_bundle_path.exists() else {}
     edges = []
     edge_map: dict[tuple[str, str, str], dict[str, Any]] = {}
     for evt in events:
@@ -1750,8 +2013,32 @@ def get_libris_swarm_state(state_dir: Path, project_root: Path, operation_id: st
         'topics': topic_cards,
         'members': members,
         'nodes': members,
+        'non_shade_members': non_shade_members,
+        'team_grid_nodes': team_grid,
+        'views': {
+            'grid': {
+                'kind': 'non_shade_team_grid',
+                'description': 'Coordinator + researcher/judge cells for quick session switching.',
+                'nodes': team_grid,
+            },
+            'graph': {
+                'kind': 'topic_cluster_graph',
+                'description': 'Coordinator / topic / shade topology with communication edges.',
+                'nodes': members,
+                'edges': edges,
+            },
+        },
+        'counts': {
+            'topics': len(topic_cards),
+            'members': len(members),
+            'non_shade_members': len(non_shade_members),
+            'shades': sum(1 for m in members if str(m.get('role') or '') == 'shade'),
+            'edges': len(edges),
+        },
         'edges': edges,
         'events_tail': events[-50:],
         'promising_sources': list_promising_sources(state_dir, project_root, operation_id=operation_id, limit=50),
         'final_selection_markdown': final_selection if isinstance(final_selection, str) else '',
+        'executive_summary_markdown': executive_summary if isinstance(executive_summary, str) else '',
+        'delivery_bundle': delivery_bundle if isinstance(delivery_bundle, dict) else {},
     }
