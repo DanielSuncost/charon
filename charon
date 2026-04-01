@@ -19,12 +19,18 @@ while [ -L "$SOURCE" ]; do
   [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 CHARON_ROOT="$(cd "$(dirname "$SOURCE")" && pwd)"
-TUI_DIR="${CHARON_ROOT}/apps/tui/opentui"
+LEGACY_TUI_DIR="${CHARON_ROOT}/apps/tui/opentui"
+RUST_TUI_MANIFEST="${CHARON_ROOT}/crates/charon-tui/Cargo.toml"
+RUST_TUI_BIN="${CHARON_ROOT}/crates/charon-tui/target/release/charon-tui"
 
 case "${1:-}" in
   chat)
     shift
     exec python3 "${CHARON_ROOT}/scripts/charon_chat.py" "$@"
+    ;;
+  legacy-tui)
+    shift
+    exec bun "${LEGACY_TUI_DIR}/src/index.ts" "$@"
     ;;
   setup)
     shift
@@ -45,15 +51,18 @@ case "${1:-}" in
     echo "  charon --agent AG-0005       New session bound to a specific agent"
     echo "  charon --provider codex      Start with a specific provider"
     echo "  charon chat                  Direct CLI chat (no TUI)"
+    echo "  charon legacy-tui            Launch the old Bun/OpenTUI frontend"
     echo "  charon setup                 Run setup/onboarding"
     echo "  charon status                Show current config"
     echo "  charon agents                List agents"
     echo ""
-    echo "TUI Controls:"
+    echo "TUI Controls (Rust TUI):"
     echo "  F1  Chat view"
     echo "  F2  Dashboard"
     echo "  F3  Session Grid"
-    echo "  /   Show command menu"
+    echo ""
+    echo "Legacy frontend:"
+    echo "  charon legacy-tui"
     exit 0
     ;;
   --resume=*|--resume)
@@ -105,33 +114,16 @@ case "${1:-}" in
     shift
     ;& # fall through
   "")
-    # Default: launch TUI
-    if ! command -v bun &>/dev/null; then
-      echo "Error: Bun is required for the Charon TUI."
-      echo "Install: curl -fsSL https://bun.sh/install | bash"
+    # Default: launch Rust TUI
+    if ! command -v cargo &>/dev/null; then
+      echo "Error: cargo is required to build/run the Rust TUI."
+      echo "Install Rust: https://rustup.rs"
       echo ""
       echo "Alternatively, use CLI mode: charon chat"
       exit 1
     fi
 
-    # Ensure dependencies are installed
-    if [ ! -d "${TUI_DIR}/node_modules" ]; then
-      echo "Installing TUI dependencies..."
-      (cd "${TUI_DIR}" && bun install)
-    fi
-
-    # Warn if other Charon sessions are already running
-    # (multiple sessions with OAuth providers can cause token refresh races)
-    existing_backends=$(pgrep -f "chat_backend.py" 2>/dev/null | wc -l)
-    if [ "$existing_backends" -gt 0 ]; then
-      echo "⚠ ${existing_backends} other Charon session(s) detected."
-      echo "  Multiple sessions sharing OAuth tokens (claude-code/codex) may"
-      echo "  cause intermittent errors. Use local models or API keys for"
-      echo "  multiple simultaneous sessions."
-      echo ""
-    fi
-
-    # Check Python dependencies
+    # Check Python deps used by the backend pieces the Rust TUI relies on.
     if ! python3 -c "import httpx" 2>/dev/null; then
       echo "Installing Python dependencies..."
       if command -v uv &>/dev/null; then
@@ -141,52 +133,23 @@ case "${1:-}" in
       fi
     fi
 
-    # Tmux-native mode: run TUI inside a tmux session
-    # This enables:
-    # - Multiple terminals attaching to the same session
-    # - Session persistence (detach instead of kill)
-    # - Session grid can capture live content
-    # Tmux wrapping: opt-in via --tmux flag or CHARON_USE_TMUX=1
-    # NEVER nest tmux — if already inside tmux, run directly
-    if [ "${TMUX:-}" != "" ]; then
-      exec bun "${TUI_DIR}/src/index.ts"
-    fi
-    if [ "${CHARON_USE_TMUX:-}" = "1" ] && command -v tmux &>/dev/null; then
-
-      # Determine session name
-      if [ -n "${CHARON_SESSION:-}" ]; then
-        # Explicit session name — attach if exists, create if not
-        SESSION_NAME="$CHARON_SESSION"
-        if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
-          exec tmux attach-session -t "$SESSION_NAME"
-        fi
-      else
-        # Auto-generate unique session name: charon-01, charon-02, etc.
-        SESSION_NUM=1
-        while tmux has-session -t "charon-$(printf '%02d' $SESSION_NUM)" 2>/dev/null; do
-          SESSION_NUM=$((SESSION_NUM + 1))
-        done
-        SESSION_NAME="charon-$(printf '%02d' $SESSION_NUM)"
-      fi
-
-      # Create new session with TUI running inside it
-      # Pass through env vars
-      TMUX_ENV="CHARON_SESSION_NAME='$SESSION_NAME'"
-      [ -n "${CHARON_PROVIDER:-}" ] && TMUX_ENV="$TMUX_ENV CHARON_PROVIDER='$CHARON_PROVIDER'"
-      [ -n "${CHARON_RESUME:-}" ] && TMUX_ENV="$TMUX_ENV CHARON_RESUME='$CHARON_RESUME'"
-
-      # Get current terminal size for tmux session
-      TERM_COLS=$(tput cols 2>/dev/null || echo 120)
-      TERM_ROWS=$(tput lines 2>/dev/null || echo 40)
-
-      # Create session at the correct size from the start
-      tmux new-session -d -s "$SESSION_NAME" -x "$TERM_COLS" -y "$TERM_ROWS" \
-        "env $TMUX_ENV CHARON_NO_TMUX=1 bun '${TUI_DIR}/src/index.ts'; echo ''; echo '  Session ended. Press Enter to close.'; read"
-      exec tmux attach-session -t "$SESSION_NAME"
+    # Build Rust TUI if needed
+    if [ ! -x "${RUST_TUI_BIN}" ]; then
+      echo "Building Rust TUI..."
+      cargo build --release --manifest-path "${RUST_TUI_MANIFEST}"
     fi
 
-    # Fallback: direct launch (no tmux available or CHARON_NO_TMUX=1)
-    exec bun "${TUI_DIR}/src/index.ts"
+    if [ ! -x "${RUST_TUI_BIN}" ]; then
+      echo "Error: Rust TUI binary not found after build: ${RUST_TUI_BIN}"
+      exit 1
+    fi
+
+    # Note: the Rust TUI does not yet support the old frontend's provider/resume/agent flags.
+    if [ -n "${CHARON_PROVIDER:-}" ] || [ -n "${CHARON_RESUME:-}" ] || [ -n "${CHARON_AGENT:-}" ]; then
+      echo "Note: provider/resume/agent launch flags are not yet wired into the Rust TUI; starting the Rust TUI normally."
+    fi
+
+    exec "${RUST_TUI_BIN}"
     ;;
   *)
     # Pass through to charon_agents.py

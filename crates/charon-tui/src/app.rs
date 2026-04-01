@@ -64,6 +64,12 @@ impl SessionsState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextPoint {
+    pub row: usize,
+    pub col: usize,
+}
+
 pub struct InterAgentState {
     pub selected: usize,
     pub scroll: usize,
@@ -73,6 +79,12 @@ pub struct InterAgentState {
     pub topic_detail: bool,
     pub room_panes: Vec<SessionCell>,
     pub room_panes_room_id: String,
+    pub delete_confirm_open: bool,
+    pub delete_target_room_id: String,
+    pub delete_target_title: String,
+    pub transcript_anchor: Option<TextPoint>,
+    pub transcript_focus: Option<TextPoint>,
+    pub transcript_dragging: bool,
 }
 
 impl InterAgentState {
@@ -86,6 +98,12 @@ impl InterAgentState {
             topic_detail: false,
             room_panes: Vec::new(),
             room_panes_room_id: String::new(),
+            delete_confirm_open: false,
+            delete_target_room_id: String::new(),
+            delete_target_title: String::new(),
+            transcript_anchor: None,
+            transcript_focus: None,
+            transcript_dragging: false,
         }
     }
 }

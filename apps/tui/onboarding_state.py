@@ -52,7 +52,7 @@ def onboarding_panel_text(state: dict) -> str:
     shade_model = state.get('shade_model') or ''
     shade_line = ''
     if shade_provider or shade_model:
-        shade_line = f'Shade: {shade_provider or "(unset)"} / {shade_model or "(unset)"}\n'
+        shade_line = f'Shade / parser model: {shade_provider or "(unset)"} / {shade_model or "(unset)"}\n'
     return (
         '[b]Setup / Onboarding[/b]\n'
         f'Complete: {done}   Current step: {step}\n'
@@ -61,5 +61,6 @@ def onboarding_panel_text(state: dict) -> str:
         f'Model: {model}\n'
         f'{shade_line}'
         f'Project: {project}\n'
-        'Commands: /setup provider <name> | /setup no-provider | /setup model <name> | /setup project <name> | /setup complete | /setup status | /setup reset'
+        'Commands: /setup provider <name> | /setup model <name> | /setup shade-provider <name> | /setup shade-model <name> | /setup project <name> | /setup complete | /setup status | /setup reset\n'
+        'The shade model is also used for lightweight orchestration/NL command parsing.'
     )

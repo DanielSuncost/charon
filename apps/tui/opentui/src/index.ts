@@ -1,7 +1,7 @@
 /**
  * Charon TUI — three-view terminal interface.
  *
- * F1=Chat, F2=Dashboard, F3=Sessions. Enter submits input.
+ * F1=Chat, F2=Dashboard, F3=Sessions, F4=Rooms. Enter submits input.
  *
  * OpenTUI gotchas solved here:
  * 1. Factory functions (Text(), Box()) return VNode proxies. Setting .content
@@ -28,10 +28,11 @@ import { createSessionsLayout, createSessionsState, syncVisible, gridAgents as g
 // Types & State
 // ============================================================================
 
-type ViewName = 'chat' | 'dashboard' | 'sessions'
+type ViewName = 'chat' | 'dashboard' | 'sessions' | 'rooms'
 interface Agent { id: string; name: string; status: string; role: string; goal: string; project: string; mode: string }
 interface Project { name: string; path: string; agents: string[] }
 interface Session { id: string; agentId: string; agentName: string; status: string; project: string; location: string }
+interface InterAgentRoom { id: string; kind: string; title: string; status: string; summary?: string; participants?: any[]; events?: any[]; active_speaker?: string; meta?: any }
 
 interface MenuItem {
   cmd: string
@@ -64,8 +65,13 @@ const MENU_ITEMS: MenuItem[] = [
   { cmd: '/reset', desc: 'Clear conversation' },
   { cmd: '/dashboard', desc: 'Open dashboard (F2)' },
   { cmd: '/sessions', desc: 'Open sessions (F3)' },
+  { cmd: '/rooms', desc: 'Open room controls (F4)' },
   { cmd: '/hermes', desc: 'Launch a wrapped Hermes session in the background' },
   { cmd: '/pi', desc: 'Launch a wrapped pi session in the background' },
+  { cmd: '/pause-room <room-id>', desc: 'Pause a conversation room runner' },
+  { cmd: '/resume-room <room-id>', desc: 'Resume a paused conversation room runner' },
+  { cmd: '/say-room <room-id> <message>', desc: 'Say something to the whole room' },
+  { cmd: '/inject-room <room-id> --target whole --when next <message>', desc: 'Inject steering or a message into a room' },
   { cmd: '/agent create', desc: 'Create a new agent' },
   { cmd: '/hotkeys', desc: 'Show all keyboard shortcuts' },
   { cmd: '/timestamps', desc: 'Toggle message timestamps' },
@@ -90,7 +96,9 @@ const S = {
   agents: [] as Agent[],
   projects: [] as Project[],
   sessions: [] as Session[],
+  interAgentRooms: [] as InterAgentRoom[],
   activity: [] as string[],
+  roomIdx: 0,
   dashIdx: 0,
   dashSection: 'agents' as 'agents' | 'projects',
   projIdx: 0,
@@ -706,7 +714,9 @@ async function main() {
   // ── Activity indicator (rowing animation, fixed above input bar) ─────
   function startRowingAnimation(tc?: {fg: string, bg: string}) {
     stopRowingAnimation()
-    activityBox.height = 3
+    // Use one extra row so the 3-line boat animation sits slightly higher
+    // and doesn't get clipped against the input border below.
+    activityBox.height = 4
     activityBox.maxHeight = undefined
     activityBox.overflow = undefined
 
@@ -917,8 +927,20 @@ async function main() {
     }
 
     function update() {
-      const allAgents = (S.agents as any[]).filter(a =>
-        a.role !== 'shade' && a.status !== 'stopped'
+      const allAgents = (S.agents as any[]).filter((a: any) =>
+        a.role !== 'shade' && a.status !== 'stopped' && (
+          a.hasTmux
+          || a.tmux_session
+          || a.tmuxSession
+          || a.isLive
+          || a.source === 'live'
+          || a.source === 'tmux'
+          || a.source === 'detected'
+          || a.source === 'boat'
+          || a.source === 'virtual'
+          || a.hasBoat
+          || a.liveSessionId
+        )
       )
       // Default visibility: charon agents + live sessions + charons-boat agents
       // Non-charon agents without boat are hidden by default (user can toggle)
@@ -929,14 +951,32 @@ async function main() {
           }
         }
       } else {
-        // Auto-add new live sessions
+        // Auto-add newly discovered Charon/live/boat sessions so the grid stays in sync
         for (const a of allAgents) {
-          if ((a.isLive || a.source === 'live') && !SS.visible.has(a.id)) {
+          if ((
+            a.role === 'charon' ||
+            a.source === 'charon' ||
+            a.source === 'live' ||
+            a.isLive ||
+            (a as any).hasBoat
+          ) && !SS.visible.has(a.id)) {
             SS.visible.add(a.id)
           }
         }
       }
-      const visibleAgents = allAgents.filter(a => SS.visible.has(a.id))
+      const charonIds = new Set(allAgents.filter(a => a.role === 'charon' || a.source === 'charon').map(a => a.id))
+      for (const id of charonIds) SS.visible.add(id)
+      // Hard guarantee: keep the grid in sync with the sidebar agent list.
+      // Charon/live/boat sessions should always render in the grid even if the
+      // visibility set got out of sync earlier.
+      const visibleAgents = allAgents.filter(a => (
+        SS.visible.has(a.id)
+        || a.role === 'charon'
+        || a.source === 'charon'
+        || a.source === 'live'
+        || a.isLive
+        || (a as any).hasBoat
+      ))
       const inAgents = SS.section === 'agents'
 
       // Sidebar
@@ -983,6 +1023,82 @@ async function main() {
 
     return { root, update, gridScrolls }
   })()
+
+  const roomsText = instantiate(renderer, Text({ content: '', width: '100%' })) as any
+  const roomsScroll = instantiate(renderer, ScrollBox({ flexGrow: 1, width: '100%', stickyScroll: true, stickyStart: 'top' })) as any
+  roomsScroll.add(roomsText)
+
+  function buildRooms(): StyledText {
+    const parts: (StyledText | string)[] = []
+    const rooms = S.interAgentRooms || []
+    const selectedIdx = Math.max(0, Math.min(S.roomIdx, Math.max(0, rooms.length - 1)))
+    const selected = rooms[selectedIdx]
+    const statusColor = (status: string) => status === 'active' ? '#22c55e' : status === 'paused' ? '#f59e0b' : '#6b7280'
+
+    parts.push(t`${bold(fg('#a78bfa')(' Room Controls (F4)'))}`)
+    parts.push('\n')
+    parts.push(t`${dim(' ↑↓ select  p pause/resume  i inject-next  Enter say-to-room  d delete-room  r refresh  F1/F2/F3 switch ')}`)
+    parts.push('\n\n')
+
+    if (!rooms.length) {
+      parts.push(t`${dim(' No rooms yet. Start one with /conversation or /team.')}`)
+      return joinStyled(...parts)
+    }
+
+    parts.push(t`${bold(' Rooms')}`)
+    parts.push('\n')
+    for (let i = 0; i < rooms.length; i++) {
+      const room = rooms[i]
+      const sel = i === selectedIdx
+      const prefix = sel ? '▸ ' : '  '
+      const status = String(room.status || 'unknown')
+      const marker = status === 'paused' ? '⏸' : status === 'active' ? '▶' : '•'
+      const line = `${prefix}${marker} ${room.id}  ${room.title || room.kind || 'room'}`
+      const extras = []
+      if (room.active_speaker) extras.push(`speaker:${room.active_speaker}`)
+      const pending = Array.isArray(room.meta?.pending_injections) ? room.meta.pending_injections.length : 0
+      if (pending) extras.push(`queued:${pending}`)
+      const badge = status === 'paused' ? '[PAUSED]' : status === 'active' ? '[RUNNING]' : `[${status.toUpperCase()}]`
+      parts.push(sel
+        ? t`${bold(fg('#c4b5fd')(line))} ${bold(fg(statusColor(status))(badge))}`
+        : t`${fg('#9ca3af')(line)} ${bold(fg(statusColor(status))(badge))}`)
+      if (room.summary || extras.length) {
+        parts.push('\n')
+        parts.push(t`${dim(`    ${(room.summary || '').slice(0, 90)}${extras.length ? `  [${extras.join('  ')}]` : ''}`)}`)
+      }
+      parts.push('\n')
+    }
+
+    if (selected) {
+      parts.push('\n')
+      parts.push(t`${bold(' Selected')}`)
+      parts.push('\n')
+      parts.push(t`${fg('#e2e8f0')(` id: ${selected.id}`)}`)
+      parts.push('\n')
+      const selectedStatus = String(selected.status || 'unknown')
+      const selectedBadge = selectedStatus === 'paused' ? 'PAUSED' : selectedStatus === 'active' ? 'RUNNING' : selectedStatus.toUpperCase()
+      parts.push(joinStyled(t`${fg('#e2e8f0')(' state: ')}`, t`${bold(fg(statusColor(selectedStatus))(selectedBadge))}`))
+      parts.push('\n')
+      parts.push(t`${fg('#e2e8f0')(` title: ${selected.title || ''}`)}`)
+      parts.push('\n')
+      const participants = (selected.participants || []).map((p: any) => `${p.role || 'participant'}:${p.name || p.id || '?'}`).join(', ')
+      parts.push(t`${dim(` participants: ${participants || '—'}`)}`)
+      parts.push('\n')
+      const events = (selected.events || []).slice(-8)
+      if (events.length) {
+        parts.push(t`${bold(' recent events')}`)
+        parts.push('\n')
+        for (const ev of events) {
+          const type = String(ev.type || 'event')
+          const summary = String(ev.summary || ev.message || ev.text || ev.topic || '').replace(/\s+/g, ' ').slice(0, 100)
+          parts.push(t`${dim(`  • ${type}${summary ? ` — ${summary}` : ''}`)}`)
+          parts.push('\n')
+        }
+      }
+    }
+
+    return joinStyled(...parts)
+  }
 
   function buildDashboard(): StyledText {
     // This is a fallback — the real dashboard uses its own Box tree
@@ -1086,7 +1202,7 @@ async function main() {
     leftLines.push('')
     leftLines.push(t`${dim('  Controls')}`)
     leftLines.push(t`${dim('    ↑↓: navigate  Tab: agents/projects  Enter: select')}`)
-    leftLines.push(t`${dim('    F1: chat  F2: dashboard  F3: sessions')}`)
+    leftLines.push(t`${dim('    F1: chat  F2: dashboard  F3: sessions  F4: rooms')}`)
 
     // ── Right side (Rear-view mirror) ──────────────────────────
 
@@ -1106,7 +1222,7 @@ async function main() {
     const parts: (StyledText | string)[] = []
 
     // Header (reverse-style)
-    parts.push(t`${bold(fg('#0a0a12')(` Charon Dashboard  │  TAB:switch  F1:chat  F3:sessions `))}`)
+    parts.push(t`${bold(fg('#0a0a12')(` Charon Dashboard  │  TAB:switch  F1:chat  F3:sessions  F4:rooms `))}`)
     parts.push('\n')
 
     // Left content
@@ -1134,10 +1250,27 @@ async function main() {
     const termW = renderer.terminalWidth || 80
     const termH = renderer.terminalHeight || 24
 
-    // All agents that could appear in the sidebar
-    const allAgents = (S.agents as any[]).filter(a =>
-      a.role !== 'shade' && a.status !== 'stopped'
+    const isLiveBackedSession = (a: any) => Boolean(
+      a
+      && a.role !== 'shade'
+      && a.status !== 'stopped'
+      && (
+        a.hasTmux
+        || a.tmux_session
+        || a.tmuxSession
+        || a.isLive
+        || a.source === 'live'
+        || a.source === 'tmux'
+        || a.source === 'detected'
+        || a.source === 'boat'
+        || a.source === 'virtual'
+        || a.hasBoat
+        || a.liveSessionId
+      )
     )
+
+    // Only show real live-backed sessions in F3.
+    const allAgents = (S.agents as any[]).filter(isLiveBackedSession)
     
     // Visible in grid: only agents checked in the sidebar
     // Default: show agents with tmux, charon agents, or charons-boat connected
@@ -1148,7 +1281,14 @@ async function main() {
         }
       }
     }
-    const visibleAgents = allAgents.filter(a => SS.visible.has(a.id))
+    const visibleAgents = allAgents.filter(a => (
+      SS.visible.has(a.id)
+      || a.role === 'charon'
+      || (a as any).source === 'charon'
+      || (a as any).source === 'live'
+      || (a as any).isLive
+      || (a as any).hasBoat
+    ))
 
     // Layout: left sidebar (agent list) + right grid (session cells)
     const sideW = Math.min(24, Math.max(16, Math.floor(termW * 0.2)))
@@ -1212,7 +1352,10 @@ async function main() {
     const cols = Math.min(2, visibleAgents.length)
     const cellW = Math.floor((gridW - (cols - 1)) / cols)
     const gridRows = Math.ceil(visibleAgents.length / cols)
-    const cellH = Math.max(6, Math.min(18, Math.floor((termH - 4) / gridRows) - 2))
+    // Keep all rows visible in typical terminal heights.
+    // The old minimum of 6 made 3+ grid rows overflow, so only the first row
+    // of sessions was visible even when more were present.
+    const cellH = Math.max(2, Math.min(12, Math.floor((termH - 6 - gridRows * 2) / Math.max(1, gridRows))))
 
     // Pre-build grid lines
     const gridLines: string[] = []
@@ -1327,8 +1470,7 @@ async function main() {
       DS.projects = S.projects
       DS.activity = S.activity
       dashboard.update(DS)
-    } else {
-      // Sessions: update grid directly, then return to skip menu/requestRender below
+    } else if (S.view === 'sessions') {
       const liveState = (S as any)._liveState as Map<string, {status: string, summary: string}> | undefined
       SS.agents = (S.agents as any[]).map((a: any) => {
         const live = liveState?.get(a.id)
@@ -1336,8 +1478,9 @@ async function main() {
         return a
       }) as any
       SS.projects = S.projects
-      sessGrid.update()
-      return  // Skip menu text update and requestRender — they cause tmux collapse
+      sessText.content = buildSessions()
+    } else {
+      roomsText.content = buildRooms()
     }
     // Update menu overlay (rendered in bottom bar, not chat scroll)
     if (S.menuOpen && S.menuItems.length > 0 && S.view === 'chat') {
@@ -1418,12 +1561,17 @@ async function main() {
     } else {
       menuText.content = ''
     }
-    if (S.view !== 'sessions') renderer.requestRender()
+    renderer.requestRender()
   }
 
   function updateStatus() {
     if (S.view === 'sessions') {
       statusBar.content = t`${dim('  Tab:switch  ↑↓←→:navigate  Enter:connect  Esc:back')}`
+      statusBar2.content = ''
+      return
+    }
+    if (S.view === 'rooms') {
+      statusBar.content = t`${dim('  ↑↓:select  p:pause/resume  i:inject-next  Enter:say-room  d:delete-room  r:refresh  F1/F2/F3/F4:switch')}`
       statusBar2.content = ''
       return
     }
@@ -1517,7 +1665,7 @@ async function main() {
     }
 
     // Right: view hotkeys + streaming hints
-    let hotkeys = 'F1:chat  F2:dash  F3:sessions  Ctrl+P:info  Ctrl+Shift+C:copy'
+    let hotkeys = 'F1:chat  F2:dash  F3:sessions  F4:rooms  Ctrl+P:info  Ctrl+Shift+C:copy'
     if (S.streaming) {
       hotkeys = 'Esc:/interrupt  Enter:steer  /queue:follow-up'
     }
@@ -1535,14 +1683,14 @@ async function main() {
 
     // Both chatScroll and sessScroll are always in root.
     // Toggle visible to show/hide. Never add/remove them.
-    const newEl = view === 'chat' ? chatScroll : view === 'dashboard' ? dashboard.root : sessGrid.root
+    const newEl = view === 'chat' ? chatScroll : view === 'dashboard' ? dashboard.root : view === 'sessions' ? sessScroll : roomsScroll
     if (newEl !== activeViewEl) {
       try { root.remove(activeViewEl.id) } catch {}
       root.add(newEl, 0)
       activeViewEl = newEl
     }
 
-    if (view === 'sessions') {
+    if (view === 'sessions' || view === 'rooms') {
       // Minimize bottom bar (can't hide — causes tmux collapse)
       input.placeholder = ''
       try { input.value = '' } catch {}
@@ -1550,16 +1698,20 @@ async function main() {
       inputBox.backgroundColor = '#0a0a12'
       input.backgroundColor = '#0a0a12'
       input.textColor = '#0a0a12'  // hide cursor
-      statusBar.content = t`${dim('  Tab:switch  ↑↓←→:navigate  Enter:connect  Esc:back')}`
-      statusBar2.content = ''
-      const liveState = (S as any)._liveState as Map<string, {status: string, summary: string}> | undefined
-      SS.agents = (S.agents as any[]).map((a: any) => {
-        const live = liveState?.get(a.id)
-        if (live) return { ...a, status: live.status || a.status, last_summary: live.summary || a.last_summary }
-        return a
-      }) as any
-      SS.projects = S.projects
-      sessGrid.update()
+      if (view === 'sessions') {
+        statusBar.content = t`${dim('  Tab:switch  ↑↓←→:navigate  Enter:connect  Esc:back')}`
+        statusBar2.content = ''
+        const liveState = (S as any)._liveState as Map<string, {status: string, summary: string}> | undefined
+        SS.agents = (S.agents as any[]).map((a: any) => {
+          const live = liveState?.get(a.id)
+          if (live) return { ...a, status: live.status || a.status, last_summary: live.summary || a.last_summary }
+          return a
+        }) as any
+        SS.projects = S.projects
+        sessText.content = buildSessions()
+      } else {
+        roomsText.content = buildRooms()
+      }
     } else {
       // Restore input appearance
       input.placeholder = S.ob.complete ? 'Type a message or /command...' : 'Type /setup provider <name> to get started...'
@@ -1571,8 +1723,16 @@ async function main() {
 
     rebuildView()
     updateStatus()
-    if (view === 'chat') { input.focus() }
-    else { input.blur() }  // blur input on dashboard/sessions so keys aren't eaten
+    if (view === 'chat') {
+      input.focus()
+    } else {
+      input.blur()
+      try {
+        if (view === 'rooms' && typeof (roomsScroll as any).focus === 'function') (roomsScroll as any).focus()
+        else if (view === 'sessions' && typeof (sessScroll as any).focus === 'function') (sessScroll as any).focus()
+        else if (view === 'dashboard' && typeof (dashboard.root as any).focus === 'function') (dashboard.root as any).focus()
+      } catch {}
+    }  // blur input on non-chat views so keys aren't eaten
     if (view !== 'chat') backend.sendRefresh()
   }
 
@@ -1750,6 +1910,7 @@ async function main() {
       if (key.name === 'f1') { SS.enteredSession = null; SS.zoomedSession = null; switchView('chat'); key.preventDefault(); return }
       if (key.name === 'f2') { SS.enteredSession = null; SS.zoomedSession = null; switchView('dashboard'); key.preventDefault(); return }
       if (key.name === 'f3') { key.preventDefault(); return } // already on sessions
+      if (key.name === 'f4') { SS.enteredSession = null; SS.zoomedSession = null; switchView('rooms'); key.preventDefault(); return }
       if (key.name === 'escape') {
         if (SS.zoomedSession) {
           SS.zoomedSession = null
@@ -1779,7 +1940,7 @@ async function main() {
             if (!(S as any)._convCache) (S as any)._convCache = new Map()
             const existing = (S as any)._convCache.get(targetSid) || ''
             ;(S as any)._convCache.set(targetSid, existing + `\n❯ ${msg}`)
-            sessGrid.update()
+            sessText.content = buildSessions()
             // Poll conversation immediately and repeatedly to catch the response
             const pollConv = () => backend.send({ type: 'live_conv', session_id: targetSid })
             setTimeout(pollConv, 500)
@@ -1792,7 +1953,7 @@ async function main() {
             backend.sendTmuxSend(tmuxName, msg + '\n', false)
           }
           ;(S as any)._steerInput = ''
-          sessGrid.update()
+          sessText.content = buildSessions()
         }
         key.preventDefault(); return
       }
@@ -1838,7 +1999,7 @@ async function main() {
         }
         if (key.name === 'backspace') {
           ;(S as any)._steerInput = ((S as any)._steerInput || '').slice(0, -1)
-          sessGrid.update()
+          sessText.content = buildSessions()
           key.preventDefault()
           return
         }
@@ -1847,7 +2008,7 @@ async function main() {
           const ch = key.sequence || ''
           if (ch && ch.length === 1 && ch.charCodeAt(0) >= 32) {
             ;(S as any)._steerInput = ((S as any)._steerInput || '') + ch
-            sessGrid.update()
+            sessText.content = buildSessions()
           }
           key.preventDefault()
           return
@@ -1888,6 +2049,7 @@ async function main() {
     if (key.name === 'f1') { switchView('chat'); return }
     if (key.name === 'f2') { switchView('dashboard'); return }
     if (key.name === 'f3') { switchView('sessions'); return }
+    if (key.name === 'f4') { switchView('rooms'); return }
 
     // Approval prompt handler (y/n/a when pending)
     if ((S as any)._approvalPending && (S as any)._approvalHandler) {
@@ -1960,6 +2122,7 @@ async function main() {
         addUserMessage(item.label || item.cmd)
         if (item.cmd === '/dashboard') { switchView('dashboard'); return }
         if (item.cmd === '/sessions') { switchView('sessions'); return }
+        if (item.cmd === '/rooms') { switchView('rooms'); return }
         if (item.cmd === '/chat') { switchView('chat'); return }
         backend.sendCommand(item.cmd)
         rebuildView()
@@ -2052,6 +2215,7 @@ async function main() {
 
       if (v === '/dashboard' || v === '/dash') { switchView('dashboard'); return }
       if (v === '/sessions' || v === '/grid') { switchView('sessions'); return }
+      if (v === '/rooms') { switchView('rooms'); return }
       if (v === '/chat') { switchView('chat'); return }
       // Commands that trigger pickers — set flag before sending so input handler doesn't race
       if (v === '/resume' || v === '/provider' || v === '/model' || v.startsWith('/setup model')) {
@@ -2060,6 +2224,62 @@ async function main() {
       if (v.startsWith('/')) backend.sendCommand(v)
       else { const expanded = expandPasteMarkers(v); S.streaming = true; S.streamStartTs = Date.now(); S.buf = []; startRowingAnimation(); scrollToBottom(); backend.sendChat(expanded) }
       rebuildView(); updateStatus()
+      return
+    }
+
+    if (S.view === 'rooms') {
+      const rooms = S.interAgentRooms || []
+      const selected = rooms[S.roomIdx]
+      const keySeq = String((key as any).sequence || '')
+      if (key.name === 'up' && S.roomIdx > 0) { S.roomIdx--; rebuildView(); return }
+      if (key.name === 'down' && S.roomIdx < rooms.length - 1) { S.roomIdx++; rebuildView(); return }
+      if (key.name === 'r' || keySeq === 'r' || keySeq === 'R') {
+        backend.sendRefresh()
+        statusBar.content = t`${fg('#93c5fd')('  ↻ Refreshing rooms…')}`
+        renderer.requestRender()
+        return
+      }
+      if ((key.name === 'return' || key.name === 'enter' || keySeq === '\r' || keySeq === '\n') && selected) {
+        switchView('chat')
+        input.focus()
+        input.value = `/say-room ${selected.id} `
+        statusBar.content = t`${fg('#f59e0b')(`  Ready to speak into ${selected.id}`)}`
+        renderer.requestRender()
+        return
+      }
+      if ((key.name === 'i' || keySeq === 'i' || keySeq === 'I') && selected) {
+        switchView('chat')
+        input.focus()
+        input.value = `/inject-room ${selected.id} --target whole --when next `
+        statusBar.content = t`${fg('#a78bfa')(`  Ready to queue steering for ${selected.id}`)}`
+        renderer.requestRender()
+        return
+      }
+      if ((key.name === 'p' || keySeq === 'p' || keySeq === 'P') && selected) {
+        const currentStatus = String(selected.status || '')
+        const nextStatus = currentStatus === 'paused' ? 'active' : 'paused'
+        ;(selected as any).status = nextStatus
+        ;(selected as any).summary = nextStatus === 'paused' ? 'Pause requested…' : 'Resume requested…'
+        rebuildView()
+        statusBar.content = t`${fg(nextStatus === 'paused' ? '#f59e0b' : '#22c55e')(`  ${nextStatus === 'paused' ? '⏸' : '▶'} ${selected.id} → ${nextStatus}`)}`
+        renderer.requestRender()
+        backend.sendCommand(currentStatus === 'paused' ? `/resume-room ${selected.id}` : `/pause-room ${selected.id}`)
+        backend.sendRefresh()
+        return
+      }
+      if ((key.name === 'd' || keySeq === 'd' || keySeq === 'D' || key.name === 'delete' || key.name === 'backspace') && selected) {
+        const roomId = String(selected.id || '')
+        if (!roomId) return
+        S.interAgentRooms = rooms.filter((r: any) => String(r.id || '') !== roomId)
+        if (S.roomIdx >= S.interAgentRooms.length) S.roomIdx = Math.max(0, S.interAgentRooms.length - 1)
+        rebuildView()
+        statusBar.content = t`${fg('#ef4444')(`  Deleting room ${roomId} and closing participant sessions…`)}`
+        renderer.requestRender()
+        backend.sendCommand(`/delete-room ${roomId}`)
+        backend.sendRefresh()
+        return
+      }
+      if (key.name === 'escape') { switchView('chat'); return }
       return
     }
 
@@ -2134,18 +2354,32 @@ async function main() {
         rebuildView(); return
       }
 
-      const sidebarAgents = (S.agents as any[]).filter((a: any) => a.role !== 'shade' && a.status !== 'stopped')
+      const sidebarAgents = (S.agents as any[]).filter((a: any) =>
+        a.role !== 'shade' && a.status !== 'stopped' && (
+          a.hasTmux
+          || a.tmux_session
+          || a.tmuxSession
+          || a.isLive
+          || a.source === 'live'
+          || a.source === 'tmux'
+          || a.source === 'detected'
+          || a.source === 'boat'
+          || a.source === 'virtual'
+          || a.hasBoat
+          || a.liveSessionId
+        )
+      )
 
       if (SS.section === 'agents') {
-        if (key.name === 'up' && SS.agentIdx > 0) { SS.agentIdx--; sessGrid.update(); renderer.requestRender(); return }
-        if (key.name === 'down' && SS.agentIdx < sidebarAgents.length - 1) { SS.agentIdx++; sessGrid.update(); renderer.requestRender(); return }
+        if (key.name === 'up' && SS.agentIdx > 0) { SS.agentIdx--; sessText.content = buildSessions(); renderer.requestRender(); return }
+        if (key.name === 'down' && SS.agentIdx < sidebarAgents.length - 1) { SS.agentIdx++; sessText.content = buildSessions(); renderer.requestRender(); return }
         if (key.name === 'return') {
           if (sidebarAgents[SS.agentIdx]) {
             const id = sidebarAgents[SS.agentIdx].id
             if (SS.visible.has(id)) SS.visible.delete(id)
             else SS.visible.add(id)
           }
-          sessGrid.update()
+          sessText.content = buildSessions()
           renderer.requestRender()
           return
         }
@@ -2153,7 +2387,21 @@ async function main() {
       }
 
       if (SS.section === 'grid') {
-        const allAgents = (S.agents as any[]).filter((a: any) => a.role !== 'shade' && a.status !== 'stopped')
+        const allAgents = (S.agents as any[]).filter((a: any) =>
+          a.role !== 'shade' && a.status !== 'stopped' && (
+            a.hasTmux
+            || a.tmux_session
+            || a.tmuxSession
+            || a.isLive
+            || a.source === 'live'
+            || a.source === 'tmux'
+            || a.source === 'detected'
+            || a.source === 'boat'
+            || a.source === 'virtual'
+            || a.hasBoat
+            || a.liveSessionId
+          )
+        )
         const ga = allAgents.filter((a: any) => SS.visible.has(a.id))
 
         if (SS.enteredSession) return
@@ -2538,7 +2786,7 @@ async function main() {
         if (sid && preview) {
           if (!(S as any)._convCache) (S as any)._convCache = new Map()
           ;(S as any)._convCache.set(sid, preview)
-          if (S.view === 'sessions') sessGrid.update()
+          if (S.view === 'sessions') sessText.content = buildSessions()
         }
         break
       }
@@ -2559,7 +2807,7 @@ async function main() {
           ;(S as any)._liveState.set(agentId, { status: captureState, summary: captureSummary })
         }
         // Update grid content directly — don't call rebuildView (causes tmux collapse)
-        if (S.view === 'sessions') sessGrid.update()
+        if (S.view === 'sessions') sessText.content = buildSessions()
         break
       }
       case 'model_picker': {
@@ -2667,6 +2915,10 @@ async function main() {
         if (p?.agents) S.agents = p.agents
         if (p?.projects) S.projects = p.projects
         if (p?.sessions) S.sessions = p.sessions
+        if (p?.inter_agent_rooms) {
+          S.interAgentRooms = p.inter_agent_rooms as any
+          if (S.roomIdx >= S.interAgentRooms.length) S.roomIdx = Math.max(0, S.interAgentRooms.length - 1)
+        }
 
         // Merge session data into agents list:
         // 1. Update existing Charon agents with live tmux status from sessions

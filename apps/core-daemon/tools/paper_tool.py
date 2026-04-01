@@ -133,6 +133,8 @@ def _search_arxiv(query: str, limit: int = 5) -> list[dict[str, Any]]:
             'venue': 'arXiv',
             'url': page_url,
             'pdf_url': pdf_url,
+            'citation_count': 0,
+            'source_type': 'paper',
         })
     return results[:limit]
 
@@ -140,7 +142,7 @@ def _search_arxiv(query: str, limit: int = 5) -> list[dict[str, Any]]:
 def _search_semantic_scholar(query: str, limit: int = 5) -> list[dict[str, Any]]:
     import httpx
 
-    fields = 'title,authors,abstract,year,venue,url,externalIds'
+    fields = 'title,authors,abstract,year,venue,url,externalIds,citationCount'
     url = 'https://api.semanticscholar.org/graph/v1/paper/search'
     try:
         with httpx.Client(timeout=20, follow_redirects=True) as client:
@@ -166,6 +168,8 @@ def _search_semantic_scholar(query: str, limit: int = 5) -> list[dict[str, Any]]
             'venue': _normalize_whitespace(row.get('venue', '')),
             'url': row.get('url', '') or '',
             'pdf_url': '',
+            'citation_count': int(row.get('citationCount') or 0),
+            'source_type': 'paper',
         })
     return out
 
@@ -217,6 +221,8 @@ def _search_openalex(query: str, limit: int = 5) -> list[dict[str, Any]]:
             'venue': _normalize_whitespace(((row.get('primary_location') or {}).get('source') or {}).get('display_name', '')),
             'url': row.get('doi') or (row.get('primary_location') or {}).get('landing_page_url', '') or '',
             'pdf_url': (row.get('primary_location') or {}).get('pdf_url', '') or '',
+            'citation_count': int(row.get('cited_by_count') or 0),
+            'source_type': 'paper',
         })
     return out
 

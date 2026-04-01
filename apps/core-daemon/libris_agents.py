@@ -68,6 +68,7 @@ def _role_instruction(role: str, operation_id: str, topic_slug: str = '', user_g
         return (
             f'Work topic `{topic_slug}` in operation `{operation_id}`.\n\n'
             f'First call Research.get_topic_state to inspect the topic. If checkpoints already exist, read the latest critique and summary before revising. '
+            f'If the topic state includes follow_up_tasks, treat them as required fixes and address them explicitly in the next draft. '
             f'Then perform one disciplined research pass: use Web search/extract, Paper, SourceDiscovery, or Browser as needed, '
             f'consult the promising-source index, save meaningful sources, save claims, write an evidence markdown artifact, '
             f'and save a structured draft report.\n\n'
@@ -337,6 +338,25 @@ def _run_operation_controller(
                     ingest_procurement_contracts(state_dir, project_root, operation_id, topic['slug'])
                 except Exception:
                     pass
+                try:
+                    from libris_specialists import (
+                        spawn_topic_claim_extraction_shades,
+                        wait_for_claim_extraction_contracts,
+                        ingest_claim_extraction_contracts,
+                        spawn_topic_contradiction_check_shades,
+                        wait_for_contradiction_check_contracts,
+                        ingest_contradiction_check_contracts,
+                    )
+                    claim_contracts = spawn_topic_claim_extraction_shades(state_dir, project_root, operation_id, topic, max_leads=1)
+                    if claim_contracts:
+                        wait_for_claim_extraction_contracts(state_dir, project_root, operation_id, topic['slug'], min_completed=1, timeout_seconds=18)
+                        ingest_claim_extraction_contracts(state_dir, project_root, operation_id, topic['slug'])
+                    contradiction_contracts = spawn_topic_contradiction_check_shades(state_dir, project_root, operation_id, topic, max_claims=6)
+                    if contradiction_contracts:
+                        wait_for_contradiction_check_contracts(state_dir, project_root, operation_id, topic['slug'], min_completed=1, timeout_seconds=18)
+                        ingest_contradiction_check_contracts(state_dir, project_root, operation_id, topic['slug'])
+                except Exception:
+                    pass
             except Exception:
                 pass
             emit_agent_phase(
@@ -444,8 +464,36 @@ def _run_operation_controller(
                     all_ready = False
                     continue
 
-                # One bounded revision loop after the first critique.
-                if checkpoint_count >= 1 and revision_round < 1:
+                revision_plan = {'should_revise': False, 'reasons': [], 'metrics': {}}
+                try:
+                    from libris_convergence import should_request_additional_revision
+                    revision_plan = should_request_additional_revision(state_dir, project_root, operation_id, topic)
+                except Exception:
+                    pass
+
+                if revision_plan.get('should_revise'):
+                    try:
+                        from libris_runtime import append_operation_event
+                        append_operation_event(state_dir, project_root, operation_id, 'topic_revision_requested', {
+                            'topic_slug': slug,
+                            'revision_round': revision_round + 1,
+                            'reasons': revision_plan.get('reasons') or [],
+                            'metrics': revision_plan.get('metrics') or {},
+                        })
+                    except Exception:
+                        pass
+                    try:
+                        from libris_refinement import (
+                            plan_critique_followups,
+                            wait_for_gap_fill_contracts,
+                            ingest_gap_fill_contracts,
+                        )
+                        followups = plan_critique_followups(state_dir, project_root, operation_id, slug, max_tasks=3, spawn_gap_fill=True)
+                        if followups.get('contracts'):
+                            wait_for_gap_fill_contracts(state_dir, project_root, operation_id, slug, min_completed=1, timeout_seconds=18)
+                            ingest_gap_fill_contracts(state_dir, project_root, operation_id, slug)
+                    except Exception:
+                        pass
                     researcher = spawn_libris_role(
                         state_dir,
                         project_root,
@@ -459,7 +507,7 @@ def _run_operation_controller(
                         state_dir, project_root, operation_id,
                         from_agent_id=str(topic.get('judge_agent_id') or ''), to_agent_id=researcher.get('id', ''),
                         from_role='judge', to_role='researcher', topic_slug=slug,
-                        message_kind='critique_returned', summary='Judge returned critique for bounded revision.'
+                        message_kind='critique_returned', summary='Judge returned critique and requested another targeted revision.'
                     )
                     update_topic_runtime(
                         state_dir,
@@ -479,8 +527,41 @@ def _run_operation_controller(
                     all_ready = False
                     continue
 
-                if checkpoint_count >= 2:
-                    update_topic_runtime(state_dir, project_root, operation_id, slug, status='checkpointed')
+                if checkpoint_count >= 1:
+                    final_status = 'checkpointed'
+                    final_note = 'Topic reached bounded convergence for this run.'
+                    reasons = revision_plan.get('reasons') or []
+                    if 'quality_good_enough' in reasons:
+                        final_status = 'ready_high_confidence'
+                        final_note = 'Topic reached good-enough quality and does not require another revision.'
+                    elif 'score_plateau' in reasons:
+                        final_status = 'plateaued'
+                        final_note = 'Topic appears to have plateaued under current bounded refinement.'
+                    elif 'checkpoint_budget_exhausted' in reasons or 'revision_cap_reached' in reasons:
+                        final_status = 'checkpointed'
+                        final_note = 'Topic stopped due to bounded revision/checkpoint limits.'
+                    update_topic_runtime(
+                        state_dir,
+                        project_root,
+                        operation_id,
+                        slug,
+                        status=final_status,
+                        extras={
+                            'convergence_reasons': reasons,
+                            'convergence_metrics': revision_plan.get('metrics') or {},
+                        },
+                    )
+                    try:
+                        from libris_runtime import append_operation_event
+                        append_operation_event(state_dir, project_root, operation_id, 'topic_convergence_decided', {
+                            'topic_slug': slug,
+                            'status': final_status,
+                            'reasons': reasons,
+                            'metrics': revision_plan.get('metrics') or {},
+                            'note': final_note,
+                        })
+                    except Exception:
+                        pass
                 else:
                     all_ready = False
 

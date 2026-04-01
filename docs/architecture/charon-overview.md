@@ -6,8 +6,22 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                      Charon TUI (OpenTUI/JS)                     │
-│         Session Grid · Projects · Chat · Libris · Dashboard      │
+│                    Charon TUI  (Rust / crossterm)                │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────┐     │
+│  │  Session Grid  (F3)                                     │     │
+│  │                                                         │     │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐             │     │
+│  │  │ agent-01 │  │ agent-02 │  │ tmux:dev │             │     │
+│  │  │          │  │          │  │          │             │     │
+│  │  │  (live   │  │  (live   │  │  (live   │             │     │
+│  │  │   VTE    │  │   VTE    │  │   VTE    │             │     │
+│  │  │ terminal)│  │ terminal)│  │ terminal)│             │     │
+│  │  └──────────┘  └──────────┘  └──────────┘             │     │
+│  │  Responsive grid · Enter: focus · type to interact     │     │
+│  └─────────────────────────────────────────────────────────┘     │
+│                                                                  │
+│  Chat (F1) · Dashboard (F2) · Libris (F4) · Inter-agent (F5)    │
 └────────────────────────────┬─────────────────────────────────────┘
                              │  WebSocket / IPC
 ┌────────────────────────────▼─────────────────────────────────────┐
@@ -52,7 +66,7 @@
     │  Local Agents        │      │     Charon's Boat            │
     │                      │      │                             │
     │  Persistent agents   │      │  Wraps any external agent   │
-    │  run in-process or   │      │  (Pi, Claude Code, Codex,   │
+    │  run in-process or   │      │  (pi, Claude Code, Codex,   │
     │  as registered local │      │   opencode, etc.) and        │
     │  sessions. Sessions  │      │  surfaces it in the grid.   │
     │  appear in the grid  │      │                             │
@@ -67,6 +81,23 @@
 ```
 
 ## Key Concepts
+
+### Rust TUI & Session Grid
+
+The TUI is written in Rust (`crates/charon-tui`), using `crossterm` for raw terminal I/O. The Session Grid is a live multi-pane terminal multiplexer embedded directly in the TUI — not a wrapper around tmux.
+
+Each pane is a **`SessionCell`**: a VTE terminal emulator (`vte` crate) fed by a **`ByteStream`** backend. Backend types:
+
+| Backend | How it works | When used |
+|---|---|---|
+| **`LocalPty`** | `portable-pty` — spawns a child process with a real PTY | Charon-native sessions |
+| **`TmuxPane`** | Polls `tmux capture-pane -e` (ANSI-preserving) at 100ms; writes input directly to the pane TTY device | Any existing tmux session |
+| **`BoatPane`** | Unix socket or subprocess stream via the charons-boat protocol (base64-framed JSON) | External agents registered via Charon's Boat |
+| **`CharonPane`** | Direct Unix socket to a native Charon session server (`NativeSessionServer`) | Charon-managed native sessions |
+
+All backends implement the same `ByteStream` trait: `read_available` → `write_bytes` → `resize`. The VTE parser (`AnsiParser`) feeds bytes into `TerminalState`, which is rendered by the grid at up to 30 fps.
+
+This means **you can type into any session directly from the Session Grid** — including tmux sessions and any agent wrapped by Charon's Boat — without leaving the TUI.
 
 ### Persistent Agents
 Each agent has durable memory, a project assignment, an inbox, and a **soft specialization** label (auto-derived from recent working memory — e.g. "auth", "database", "shade & agent"). Agents communicate directly with each other via inbox events — no user in the middle.
@@ -102,6 +133,8 @@ Exposed via the `SpawnJudgeLoop` tool for software development automation (perf 
 ### Charon's Boat
 Universal session bridge — wraps any external agent and surfaces it in the Session Grid. Works locally via socket registration files (`~/.charon/boats/*.json`) and remotely via SSH tunnel + pairing code → identity keypair exchange.
 
+The TUI's `BoatPane` backend connects directly to the boat's Unix socket and exchanges base64-framed JSON (`subscribe` / `input` / `resize` / `output`), giving full bidirectional byte-stream access to the wrapped agent's PTY.
+
 ### Memory Tiers
 - **UserModel** — global, shared across all agents and all projects. Preferences, corrections, user facts.
 - **ProjectKnowledge** — per-project. Architecture decisions, conventions, build commands.
@@ -112,17 +145,54 @@ Universal session bridge — wraps any external agent and surfaces it in the Ses
 ## How External Agents Appear in the Grid
 
 ```
-Pi / Claude Code / any agent
+pi / Claude Code / any agent
          │
          │  runs charons-boat (pairing code flow)
          │  OR is auto-detected via ~/.charon/boats/ registration
          ▼
-  boat session record
-  {id: "boat-pi", source: "boat", boatSessionId: "pi", ...}
+  boat session record  (~/.charon/boats/<id>.json)
+  {id: "boat-pi", source: "boat", socket: "/path/to.sock", ...}
          │
          ▼
   Charon TUI Session Grid
-  (live session cell, interact via boat channel)
+  ┌──────────────┐
+  │  pi          │  ← live VTE terminal, full bidirectional I/O
+  │              │    via BoatPane ByteStream backend
+  │ > ...        │
+  └──────────────┘
+  Enter to focus, type to interact — without leaving the TUI
 ```
 
-Remote agents follow the same model — just over an SSH tunnel. No tmux is required for agents that self-register via Charon's Boat.
+Remote agents follow the same model — just over an SSH tunnel. No tmux required for agents that self-register via Charon's Boat.
+
+---
+
+## Codebase Layout
+
+```
+charon/
+├── apps/core-daemon/              # Python agent runtime
+│   ├── conversation_engine.py     # Multi-turn LLM with tool use and steering
+│   ├── memory_engine.py           # Semantic memory: vector + FTS5 hybrid search
+│   ├── agent_runtime.py           # Task execution with summarization
+│   ├── shade_orchestrator.py      # Sequential shade contracts
+│   ├── batch_orchestrator.py      # Parallel shade swarms
+│   ├── judge_engine.py            # Judge Loop: iterative optimization
+│   ├── checkpoint_manager.py      # Shadow git snapshots for rollback
+│   ├── autonomous.py              # Goal-driven self-assignment
+│   └── tools/                     # 15 built-in + dynamic plugin loader
+├── crates/charon-tui/             # Rust TUI (crossterm + vte + portable-pty)
+│   ├── src/main.rs                # Entry point, event loop, view routing
+│   ├── src/grid.rs                # Responsive grid layout (N cells, aspect-aware)
+│   ├── src/session.rs             # SessionCell: VTE state + ByteStream backend
+│   ├── src/backend.rs             # ByteStream: LocalPty, TmuxPane, BoatPane, CharonPane
+│   ├── src/terminal.rs            # TerminalState: screen buffer, scrollback
+│   ├── src/parser.rs              # AnsiParser: VTE event → TerminalState
+│   ├── src/native_session.rs      # NativeSessionServer: Unix socket session host
+│   ├── src/app.rs                 # App state: views, sessions, chat, inter-agent
+│   ├── src/render.rs              # Rendering primitives
+│   ├── src/chat.rs                # Chat view state
+│   └── src/backend.rs             # Backend discovery (boats dir + tmux)
+├── tools/charons-boat/            # External agent bridge
+└── docs/                          # Design documents
+```
