@@ -37,7 +37,7 @@ use crossterm::{
 };
 
 use backend::discover_sessions;
-use chat::{ChatContextMenu, ChatMessage, ChatTextPoint};
+use chat::{ChatMessage, ChatTextPoint, LaunchOptions};
 use grid::compute_grid;
 use native_session::{NativeCommand, NativeSessionServer};
 use parser::AnsiParser;
@@ -47,6 +47,7 @@ use serde_json::Value;
 use session::{BackendType, SessionCell};
 use terminal::TerminalState;
 
+#[derive(Clone, Debug)]
 enum LaunchMode {
     AutoDiscover,
     SpawnCommand(Vec<String>),
@@ -54,14 +55,39 @@ enum LaunchMode {
     ListSessions,
 }
 
-fn copy_to_clipboard(text: &str) -> bool {
-    let attempts: &[(&str, &[&str])] = &[
-        ("wl-copy", &[]),
-        ("xclip", &["-selection", "clipboard"]),
-        ("xsel", &["--clipboard", "--input"]),
-        ("pbcopy", &[]),
+#[derive(Clone, Debug)]
+struct CliOptions {
+    launch_mode: LaunchMode,
+    provider: Option<String>,
+    resume: Option<String>,
+    agent: Option<String>,
+}
+
+fn osc52_clipboard_sequence(text: &str) -> Result<String, String> {
+    let term = std::env::var("TERM").unwrap_or_default();
+    if term.is_empty() || term == "dumb" {
+        return Err("clipboard unavailable in dumb terminal".to_string());
+    }
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    let inner = format!("\x1b]52;c;{}\x07", encoded);
+    if std::env::var_os("TMUX").is_some() {
+        Ok(format!("\x1bPtmux;\x1b{}\x1b\\", inner.replace("\x1b", "\x1b\x1b")))
+    } else if std::env::var_os("STY").is_some() {
+        Ok(format!("\x1bP{}\x1b\\", inner.replace("\x1b", "\x1b\x1b")))
+    } else {
+        Ok(inner)
+    }
+}
+
+fn copy_to_clipboard(text: &str) -> Result<&'static str, String> {
+    let attempts: &[(&str, &[&str], &str)] = &[
+        ("wl-copy", &[], "system clipboard"),
+        ("xclip", &["-selection", "clipboard"], "xclip"),
+        ("xsel", &["--clipboard", "--input"], "xsel"),
+        ("pbcopy", &[], "pbcopy"),
     ];
-    for (cmd, args) in attempts {
+    for (cmd, args, label) in attempts {
         let mut child = match Command::new(cmd)
             .args(*args)
             .stdin(Stdio::piped())
@@ -73,45 +99,98 @@ fn copy_to_clipboard(text: &str) -> bool {
             };
         if let Some(mut stdin) = child.stdin.take() {
             if stdin.write_all(text.as_bytes()).is_ok() && child.wait().map(|s| s.success()).unwrap_or(false) {
-                return true;
+                return Ok(label);
             }
         }
     }
 
-    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-    let osc52 = format!("\x1b]52;c;{}\x07", encoded);
-    if let Ok(mut tty) = OpenOptions::new().write(true).open("/dev/tty") {
-        if tty.write_all(osc52.as_bytes()).is_ok() && tty.flush().is_ok() {
-            return true;
-        }
-    }
-    false
+    let seq = osc52_clipboard_sequence(text)?;
+    let mut tty = OpenOptions::new()
+        .write(true)
+        .open("/dev/tty")
+        .map_err(|e| format!("clipboard failed: {}", e))?;
+    tty.write_all(seq.as_bytes())
+        .and_then(|_| tty.flush())
+        .map_err(|e| format!("clipboard write failed: {}", e))?;
+    Ok(if std::env::var_os("TMUX").is_some() { "OSC52 via tmux" } else { "OSC52" })
 }
 
-fn parse_args() -> LaunchMode {
+fn parse_args() -> CliOptions {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.is_empty() {
-        return LaunchMode::AutoDiscover;
-    }
-    if args[0] == "--list" || args[0] == "-l" {
-        return LaunchMode::ListSessions;
-    }
-    if args[0] == "--attach" || args[0] == "-a" {
-        if let Some(name) = args.get(1) {
-            return LaunchMode::AttachSession(name.clone());
+    let mut provider = None;
+    let mut resume = None;
+    let mut agent = None;
+    let mut i = 0usize;
+    let mut remaining: Vec<String> = Vec::new();
+
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--" {
+            remaining.extend_from_slice(&args[i..]);
+            break;
+        } else if arg == "--provider" {
+            if let Some(val) = args.get(i + 1) { provider = Some(val.clone()); i += 2; continue; }
+            eprintln!("Error: --provider requires a value");
+            std::process::exit(1);
+        } else if let Some(val) = arg.strip_prefix("--provider=") {
+            provider = Some(val.to_string());
+            i += 1;
+            continue;
+        } else if arg == "--resume" {
+            if let Some(next) = args.get(i + 1) {
+                if next.starts_with('-') {
+                    resume = Some("latest".to_string());
+                    i += 1;
+                    continue;
+                }
+                resume = Some(next.clone());
+                i += 2;
+                continue;
+            }
+            resume = Some("latest".to_string());
+            i += 1;
+            continue;
+        } else if let Some(val) = arg.strip_prefix("--resume=") {
+            resume = Some(if val.is_empty() { "latest".to_string() } else { val.to_string() });
+            i += 1;
+            continue;
+        } else if arg == "--agent" {
+            if let Some(val) = args.get(i + 1) { agent = Some(val.clone()); i += 2; continue; }
+            eprintln!("Error: --agent requires a value");
+            std::process::exit(1);
+        } else if let Some(val) = arg.strip_prefix("--agent=") {
+            agent = Some(val.to_string());
+            i += 1;
+            continue;
         }
-        eprintln!("Error: --attach requires a session name");
-        std::process::exit(1);
+
+        remaining.push(arg.clone());
+        i += 1;
     }
-    if args[0] == "--" {
-        let cmd = args[1..].to_vec();
+
+    let launch_mode = if remaining.is_empty() {
+        LaunchMode::AutoDiscover
+    } else if remaining[0] == "--list" || remaining[0] == "-l" {
+        LaunchMode::ListSessions
+    } else if remaining[0] == "--attach" || remaining[0] == "-a" {
+        if let Some(name) = remaining.get(1) {
+            LaunchMode::AttachSession(name.clone())
+        } else {
+            eprintln!("Error: --attach requires a session name");
+            std::process::exit(1);
+        }
+    } else if remaining[0] == "--" {
+        let cmd = remaining[1..].to_vec();
         if cmd.is_empty() {
             eprintln!("Error: -- requires a command");
             std::process::exit(1);
         }
-        return LaunchMode::SpawnCommand(cmd);
-    }
-    LaunchMode::SpawnCommand(args)
+        LaunchMode::SpawnCommand(cmd)
+    } else {
+        LaunchMode::SpawnCommand(remaining)
+    };
+
+    CliOptions { launch_mode, provider, resume, agent }
 }
 
 fn encode_key(key: &KeyEvent) -> Vec<u8> {
@@ -381,7 +460,11 @@ fn draw_footer<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Resul
         }
         View::InterAgent => {
             let rooms = payload_inter_agent_rooms(app.chat.refresh_payload.as_ref());
-            format!(" Groups │ rooms:{} ", rooms.len())
+            if let Some((notice, _ok)) = app.inter_agent.clipboard_notice_text() {
+                format!(" Groups │ rooms:{} │ {} ", rooms.len(), notice)
+            } else {
+                format!(" Groups │ rooms:{} ", rooms.len())
+            }
         }
     };
     let visible: String = line.chars().take(w as usize).collect();
@@ -1308,56 +1391,51 @@ fn chat_selection_cols_for_row(row: usize, bounds: Option<(ChatTextPoint, ChatTe
     Some((0, usize::MAX))
 }
 
-fn chat_context_menu_items(app: &App) -> Vec<&'static str> {
-    let mut items = Vec::new();
-    if chat_selection_bounds(app).is_some() {
-        items.push("Copy selection");
-        items.push("Clear selection");
+fn copy_chat_selection(app: &mut App, w: u16, h: u16) -> bool {
+    let Some(bounds) = chat_selection_bounds(app) else {
+        app.chat.set_clipboard_notice("Nothing selected", false);
+        return false;
+    };
+    let area = chat_content_area(app, w, h);
+    let lines = build_chat_visual_lines(app, area.width as usize, chat_layout_variant(w, h));
+    let text = chat_selection_text(&lines, bounds);
+    if text.is_empty() {
+        app.chat.set_clipboard_notice("Nothing selected", false);
+        return false;
     }
-    items.push("Scroll to bottom");
-    items
+    match copy_to_clipboard(&text) {
+        Ok(path) => {
+            app.chat.set_clipboard_notice(format!("Copied via {}", path), true);
+            true
+        }
+        Err(err) => {
+            app.chat.set_clipboard_notice(err, false);
+            false
+        }
+    }
 }
 
-fn chat_context_menu_area(app: &App, w: u16, h: u16) -> Option<Rect> {
-    let menu = app.chat.context_menu.as_ref()?;
-    let items = chat_context_menu_items(app);
-    let width = items.iter().map(|s| s.chars().count()).max().unwrap_or(12) as u16 + 2;
-    let height = items.len() as u16;
-    let x = menu.x.min(w.saturating_sub(width + 2)).max(1);
-    let y = menu.y.min(h.saturating_sub(height + 2)).max(1);
-    Some(Rect { x, y, width, height })
-}
-
-fn activate_chat_context_menu(app: &mut App, w: u16, h: u16) -> bool {
-    let selected = app.chat.context_menu.as_ref().map(|m| m.selected).unwrap_or(0);
-    let items = chat_context_menu_items(app);
-    let choice = items.get(selected).copied().unwrap_or("");
-    match choice {
-        "Copy selection" => {
-            if let Some(bounds) = chat_selection_bounds(app) {
-                let area = chat_content_area(app, w, h);
-                let lines = build_chat_visual_lines(app, area.width as usize, chat_layout_variant(w, h));
-                let text = chat_selection_text(&lines, bounds);
-                app.chat.context_menu = None;
-                return !text.is_empty() && copy_to_clipboard(&text);
-            }
-        }
-        "Clear selection" => {
-            app.chat.selection_anchor = None;
-            app.chat.selection_focus = None;
-            app.chat.selection_dragging = false;
-            app.chat.context_menu = None;
-            return true;
-        }
-        "Scroll to bottom" => {
-            app.chat.scroll = 0;
-            app.chat.context_menu = None;
-            return true;
-        }
-        _ => {}
+fn copy_inter_agent_selection(app: &mut App, room: &Value, area: Rect) -> bool {
+    let Some(bounds) = transcript_selection_bounds(app) else {
+        app.inter_agent.set_clipboard_notice("Nothing selected", false);
+        return false;
+    };
+    let rows = conversation_transcript_rows(room, area.width as usize);
+    let text = transcript_selection_text(&rows, bounds);
+    if text.is_empty() {
+        app.inter_agent.set_clipboard_notice("Nothing selected", false);
+        return false;
     }
-    app.chat.context_menu = None;
-    false
+    match copy_to_clipboard(&text) {
+        Ok(path) => {
+            app.inter_agent.set_clipboard_notice(format!("Copied via {}", path), true);
+            true
+        }
+        Err(err) => {
+            app.inter_agent.set_clipboard_notice(err, false);
+            false
+        }
+    }
 }
 
 fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<()> {
@@ -1439,11 +1517,14 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
     } else {
         "  type / for commands".to_string()
     };
-    let right2 = if app.chat.streaming {
+    let mut right2 = if app.chat.streaming {
         "Esc:/interrupt  Enter:steer  /queue:follow-up".to_string()
     } else {
         "F1:chat  F2:dash  F3:sessions  Ctrl+P:info".to_string()
     };
+    if let Some((notice, _ok)) = app.chat.clipboard_notice_text() {
+        right2 = notice.to_string();
+    }
 
     if chat_rowing_active(app) && variant != ChatLayoutVariant::Tiny {
         let frame = ((animation_clock_start().elapsed().as_millis() / 300) % 4) as usize;
@@ -1540,22 +1621,6 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
         }
     }
 
-    if variant != ChatLayoutVariant::Tiny {
-        if let Some(area) = chat_context_menu_area(app, w, h) {
-            render::render_border(stdout, area, "", true)?;
-            let items = chat_context_menu_items(app);
-            let selected = app.chat.context_menu.as_ref().map(|m| m.selected).unwrap_or(0);
-            for (i, item) in items.iter().take(area.height as usize).enumerate() {
-                stdout.queue(cursor::MoveTo(area.x, area.y + i as u16))?;
-                stdout.queue(style::SetForegroundColor(if i == selected { style::Color::Rgb { r: 196, g: 181, b: 253 } } else { style::Color::Rgb { r: 226, g: 232, b: 240 } }))?;
-                let text = format!("{} {}", if i == selected { "▸" } else { " " }, item);
-                let visible: String = text.chars().take(area.width as usize).collect();
-                let pad = (area.width as usize).saturating_sub(visible.chars().count());
-                write!(stdout, "{}{}", visible, " ".repeat(pad))?;
-                stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
-            }
-        }
-    }
 
     if variant != ChatLayoutVariant::Tiny {
         if let Some(approval) = app.chat.approval.as_ref() {
@@ -1700,7 +1765,7 @@ fn inter_agent_event_lines(room: &Value, event_scroll: usize, max_lines: usize) 
         }).collect::<Vec<_>>().join(", ");
         if !participants.is_empty() { lines.push(format!("participants: {}", participants)); }
     }
-    lines.push("Wheel/PgUp/PgDn: scroll  •  drag: select  •  y/Ctrl+C: copy  •  d/Delete: remove room".to_string());
+    lines.push("Wheel/PgUp/PgDn: scroll  •  drag: select  •  right-click/Ctrl+C: copy  •  d/Delete: remove room".to_string());
     lines.push(String::new());
     if let Some(events) = room.get("events").and_then(|v| v.as_array()) {
         let start = events.len().saturating_sub(max_lines + event_scroll);
@@ -3287,9 +3352,10 @@ fn draw_sessions<W: Write>(stdout: &mut W, app: &mut App, rects: &[Rect], force_
 }
 
 fn main() -> io::Result<()> {
-    let mode = parse_args();
+    let cli = parse_args();
+    let mode = &cli.launch_mode;
 
-    if let LaunchMode::ListSessions = mode {
+    if matches!(mode, &LaunchMode::ListSessions) {
         let discovered = discover_sessions();
         if discovered.is_empty() {
             println!("No tmux sessions found.");
@@ -3303,10 +3369,15 @@ fn main() -> io::Result<()> {
     }
 
     let (mut outer_w, mut outer_h) = ct::size()?;
-    let panes = build_initial_sessions(&mode, outer_w, outer_h)?;
-    let mut app = App::new(panes)?;
+    let panes = build_initial_sessions(mode, outer_w, outer_h)?;
+    let launch = LaunchOptions {
+        provider: cli.provider.clone(),
+        resume: cli.resume.clone(),
+        agent: cli.agent.clone(),
+    };
+    let mut app = App::new(panes, launch)?;
     let native_session = NativeSessionServer::start(None).ok();
-    app.sessions.backend_filter_pending = matches!(mode, LaunchMode::AutoDiscover);
+    app.sessions.backend_filter_pending = matches!(mode, &LaunchMode::AutoDiscover);
     let _ = ensure_native_self_pane(&mut app, native_session.as_ref(), outer_w, outer_h);
     let mut session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
 
@@ -3332,6 +3403,8 @@ fn main() -> io::Result<()> {
     let mut last_session_poll = Instant::now() - Duration::from_secs(1);
 
     loop {
+        app.chat.clear_expired_notices();
+        app.inter_agent.clear_expired_notices();
         let mut any_dirty = false;
         let pane_poll_interval = match app.active_view {
             View::Sessions if app.sessions.terminal_mode => Duration::from_millis(16),
@@ -3498,47 +3571,14 @@ fn main() -> io::Result<()> {
 
                     match app.active_view {
                         View::Chat => {
-                            if app.chat.context_menu.is_some() {
-                                match key.code {
-                                    KeyCode::Esc => {
-                                        app.chat.context_menu = None;
-                                        local_view_dirty = true;
-                                    }
-                                    KeyCode::Up => {
-                                        if let Some(menu) = app.chat.context_menu.as_mut() {
-                                            menu.selected = menu.selected.saturating_sub(1);
-                                        }
-                                        local_view_dirty = true;
-                                    }
-                                    KeyCode::Down => {
-                                        let len = chat_context_menu_items(&app).len();
-                                        if let Some(menu) = app.chat.context_menu.as_mut() {
-                                            if menu.selected + 1 < len {
-                                                menu.selected += 1;
-                                            }
-                                        }
-                                        local_view_dirty = true;
-                                    }
-                                    KeyCode::Enter => {
-                                        let _ = activate_chat_context_menu(&mut app, outer_w, outer_h);
-                                        local_view_dirty = true;
-                                    }
-                                    _ => {}
-                                }
-                            } else if key.code == KeyCode::Esc {
+                            if key.code == KeyCode::Esc {
                                 app.chat.selection_anchor = None;
                                 app.chat.selection_focus = None;
                                 app.chat.selection_dragging = false;
                                 local_view_dirty = true;
                             } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-                                if let Some(bounds) = chat_selection_bounds(&app) {
-                                    let area = chat_content_area(&app, outer_w, outer_h);
-                                    let lines = build_chat_visual_lines(&app, area.width as usize, chat_layout_variant(outer_w, outer_h));
-                                    let text = chat_selection_text(&lines, bounds);
-                                    if !text.is_empty() && copy_to_clipboard(&text) {
-                                        local_view_dirty = true;
-                                    }
-                                }
+                                let _ = copy_chat_selection(&mut app, outer_w, outer_h);
+                                local_view_dirty = true;
                             } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p') {
                                 app.chat.info_pane_open = !app.chat.info_pane_open;
                                 needs_full_redraw = true;
@@ -3729,8 +3769,8 @@ fn main() -> io::Result<()> {
                         View::InterAgent => {
                             let rooms = payload_inter_agent_rooms(app.chat.refresh_payload.as_ref());
                             let room_count = rooms.len();
-                            let selected_room = rooms.get(app.inter_agent.selected);
-                            let selected_kind = selected_room
+                            let selected_room = rooms.get(app.inter_agent.selected).map(|room| (*room).clone());
+                            let selected_kind = selected_room.as_ref()
                                 .and_then(|r| r.get("kind")).and_then(|v| v.as_str()).unwrap_or("");
                             if app.inter_agent.delete_confirm_open {
                                 match key.code {
@@ -3762,35 +3802,15 @@ fn main() -> io::Result<()> {
                                     needs_full_redraw = true;
                                 }
                                 KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                    if let Some(room) = selected_room {
-                                        if let Some(bounds) = transcript_selection_bounds(&app) {
-                                            let area = inter_agent_stream_area(&app, outer_w, outer_h);
-                                            if let Some(area) = area {
-                                                let rows = conversation_transcript_rows(room, area.width as usize);
-                                                let text = transcript_selection_text(&rows, bounds);
-                                                if !text.is_empty() && copy_to_clipboard(&text) {
-                                                    needs_full_redraw = true;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                KeyCode::Char('y') | KeyCode::Char('Y') => {
-                                    if let Some(room) = selected_room {
-                                        if let Some(bounds) = transcript_selection_bounds(&app) {
-                                            let area = inter_agent_stream_area(&app, outer_w, outer_h);
-                                            if let Some(area) = area {
-                                                let rows = conversation_transcript_rows(room, area.width as usize);
-                                                let text = transcript_selection_text(&rows, bounds);
-                                                if !text.is_empty() && copy_to_clipboard(&text) {
-                                                    needs_full_redraw = true;
-                                                }
-                                            }
+                                    if let Some(room) = selected_room.as_ref() {
+                                        if let Some(area) = inter_agent_stream_area(&app, outer_w, outer_h) {
+                                            let _ = copy_inter_agent_selection(&mut app, room, area);
+                                            needs_full_redraw = true;
                                         }
                                     }
                                 }
                                 KeyCode::Char('d') | KeyCode::Delete => {
-                                    if let Some(room) = selected_room {
+                                    if let Some(room) = selected_room.as_ref() {
                                         let room_id = room.get("id").and_then(|v| v.as_str()).unwrap_or("");
                                         if !room_id.is_empty() {
                                             app.inter_agent.delete_confirm_open = true;
@@ -4106,17 +4126,6 @@ fn main() -> io::Result<()> {
                                 }
                             }
                             MouseEventKind::Down(MouseButton::Left) => {
-                                if let Some(menu_area) = chat_context_menu_area(&app, outer_w, outer_h) {
-                                    if point_in_rect(menu_area, mouse.column, mouse.row) {
-                                        if let Some(menu) = app.chat.context_menu.as_mut() {
-                                            menu.selected = mouse.row.saturating_sub(menu_area.y) as usize;
-                                        }
-                                        let _ = activate_chat_context_menu(&mut app, outer_w, outer_h);
-                                        local_view_dirty = true;
-                                        continue;
-                                    }
-                                    app.chat.context_menu = None;
-                                }
                                 if let Some(point) = chat_point_at_mouse(&lines, area, app.chat.scroll, mouse.column, mouse.row) {
                                     app.chat.selection_anchor = Some(point);
                                     app.chat.selection_focus = Some(point);
@@ -4152,11 +4161,7 @@ fn main() -> io::Result<()> {
                                 }
                             }
                             MouseEventKind::Down(MouseButton::Right) | MouseEventKind::Up(MouseButton::Right) => {
-                                app.chat.context_menu = Some(ChatContextMenu {
-                                    x: mouse.column,
-                                    y: mouse.row,
-                                    selected: 0,
-                                });
+                                let _ = copy_chat_selection(&mut app, outer_w, outer_h);
                                 local_view_dirty = true;
                             }
                             _ => {}
@@ -4218,14 +4223,10 @@ fn main() -> io::Result<()> {
                             }
                             MouseEventKind::Down(MouseButton::Right) | MouseEventKind::Up(MouseButton::Right) => {
                                 let rooms = payload_inter_agent_rooms(app.chat.refresh_payload.as_ref());
-                                if let (Some(room), Some(area)) = (rooms.get(app.inter_agent.selected), inter_agent_stream_area(&app, outer_w, outer_h)) {
-                                    let rows = conversation_transcript_rows(room, area.width as usize);
-                                    if let Some(bounds) = transcript_selection_bounds(&app) {
-                                        let text = transcript_selection_text(&rows, bounds);
-                                        if !text.is_empty() && copy_to_clipboard(&text) {
-                                            needs_full_redraw = true;
-                                        }
-                                    }
+                                let room_owned = rooms.get(app.inter_agent.selected).map(|room| (*room).clone());
+                                if let (Some(room), Some(area)) = (room_owned, inter_agent_stream_area(&app, outer_w, outer_h)) {
+                                    let _ = copy_inter_agent_selection(&mut app, &room, area);
+                                    needs_full_redraw = true;
                                 }
                             }
                             MouseEventKind::Drag(MouseButton::Left) => {
