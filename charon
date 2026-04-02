@@ -19,7 +19,6 @@ while [ -L "$SOURCE" ]; do
   [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 CHARON_ROOT="$(cd "$(dirname "$SOURCE")" && pwd)"
-LEGACY_TUI_DIR="${CHARON_ROOT}/apps/tui/opentui"
 RUST_TUI_MANIFEST="${CHARON_ROOT}/crates/charon-tui/Cargo.toml"
 RUST_TUI_BIN="${CHARON_ROOT}/crates/charon-tui/target/release/charon-tui"
 
@@ -27,10 +26,6 @@ case "${1:-}" in
   chat)
     shift
     exec python3 "${CHARON_ROOT}/scripts/charon_chat.py" "$@"
-    ;;
-  legacy-tui)
-    shift
-    exec bun "${LEGACY_TUI_DIR}/src/index.ts" "$@"
     ;;
   setup)
     shift
@@ -51,7 +46,6 @@ case "${1:-}" in
     echo "  charon --agent AG-0005       New session bound to a specific agent"
     echo "  charon --provider codex      Start with a specific provider"
     echo "  charon chat                  Direct CLI chat (no TUI)"
-    echo "  charon legacy-tui            Launch the old Bun/OpenTUI frontend"
     echo "  charon setup                 Run setup/onboarding"
     echo "  charon status                Show current config"
     echo "  charon agents                List agents"
@@ -60,9 +54,6 @@ case "${1:-}" in
     echo "  F1  Chat view"
     echo "  F2  Dashboard"
     echo "  F3  Session Grid"
-    echo ""
-    echo "Legacy frontend:"
-    echo "  charon legacy-tui"
     exit 0
     ;;
   --resume=*|--resume)
@@ -144,12 +135,7 @@ case "${1:-}" in
       exit 1
     fi
 
-    # Note: the Rust TUI does not yet support the old frontend's provider/resume/agent flags.
-    if [ -n "${CHARON_PROVIDER:-}" ] || [ -n "${CHARON_RESUME:-}" ] || [ -n "${CHARON_AGENT:-}" ]; then
-      echo "Note: provider/resume/agent launch flags are not yet wired into the Rust TUI; starting the Rust TUI normally."
-    fi
-
-    exec "${RUST_TUI_BIN}"
+    exec "${RUST_TUI_BIN}" "$@"
     ;;
   *)
     # Pass through to charon_agents.py

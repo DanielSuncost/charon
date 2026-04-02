@@ -1,10 +1,19 @@
 use serde_json::{json, Map, Value};
+use base64::Engine;
+use std::fs::OpenOptions;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[derive(Clone, Debug, Default)]
+pub struct LaunchOptions {
+    pub provider: Option<String>,
+    pub resume: Option<String>,
+    pub agent: Option<String>,
+}
 
 pub struct BackendProcess {
     _child: Child,
@@ -22,17 +31,28 @@ pub enum BackendEvent {
 }
 
 impl BackendProcess {
-    pub fn start() -> io::Result<Self> {
+    pub fn start(launch: &LaunchOptions) -> io::Result<Self> {
         let root = project_root();
         let script = root.join("apps/tui/opentui/chat_backend.py");
 
-        let mut child = Command::new("python3")
-            .arg(script)
+        let mut cmd = Command::new("python3");
+        cmd.arg(script)
             .current_dir(&root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+
+        if let Some(provider) = launch.provider.as_ref().filter(|s| !s.is_empty()) {
+            cmd.env("CHARON_PROVIDER", provider);
+        }
+        if let Some(resume) = launch.resume.as_ref().filter(|s| !s.is_empty()) {
+            cmd.env("CHARON_RESUME", resume);
+        }
+        if let Some(agent) = launch.agent.as_ref().filter(|s| !s.is_empty()) {
+            cmd.env("CHARON_AGENT", agent);
+        }
+
+        let mut child = cmd.spawn()?;
 
         let stdin = child.stdin.take().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "missing stdin"))?;
         let stdout = child.stdout.take().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "missing stdout"))?;
@@ -198,13 +218,6 @@ pub struct ProvisionalOutcome {
     pub done: bool,
 }
 
-#[derive(Clone, Debug)]
-pub struct ChatContextMenu {
-    pub x: u16,
-    pub y: u16,
-    pub selected: usize,
-}
-
 pub struct ChatState {
     pub transcript: Vec<String>,
     pub messages: Vec<ChatMessage>,
@@ -233,13 +246,13 @@ pub struct ChatState {
     pub selection_anchor: Option<ChatTextPoint>,
     pub selection_focus: Option<ChatTextPoint>,
     pub selection_dragging: bool,
-    pub context_menu: Option<ChatContextMenu>,
+    pub clipboard_notice: Option<(String, bool, Instant)>,
     pub provisional_outcomes: Vec<ProvisionalOutcome>,
 }
 
 impl ChatState {
-    pub fn new() -> io::Result<Self> {
-        let mut backend = BackendProcess::start()?;
+    pub fn new(launch: LaunchOptions) -> io::Result<Self> {
+        let mut backend = BackendProcess::start(&launch)?;
         let _ = backend.send(json!({"type": "refresh"}));
         Ok(Self {
             transcript: vec![],
@@ -269,7 +282,7 @@ impl ChatState {
             selection_anchor: None,
             selection_focus: None,
             selection_dragging: false,
-            context_menu: None,
+            clipboard_notice: None,
             provisional_outcomes: Vec::new(),
         })
     }
@@ -289,6 +302,24 @@ impl ChatState {
 
     pub fn request_refresh(&mut self) {
         self.backend.request_refresh();
+    }
+
+    pub fn set_clipboard_notice(&mut self, text: impl Into<String>, ok: bool) {
+        self.clipboard_notice = Some((text.into(), ok, Instant::now()));
+    }
+
+    pub fn clipboard_notice_text(&self) -> Option<(&str, bool)> {
+        let (text, ok, at) = self.clipboard_notice.as_ref()?;
+        if at.elapsed() > Duration::from_secs(2) {
+            return None;
+        }
+        Some((text.as_str(), *ok))
+    }
+
+    pub fn clear_expired_notices(&mut self) {
+        if self.clipboard_notice.as_ref().is_some_and(|(_, _, at)| at.elapsed() > Duration::from_secs(2)) {
+            self.clipboard_notice = None;
+        }
     }
 
     pub fn submit_input(&mut self) {
@@ -1342,6 +1373,23 @@ fn copy_to_clipboard(text: &str) -> bool {
             if stdin.write_all(text.as_bytes()).is_ok() && child.wait().map(|s| s.success()).unwrap_or(false) {
                 return true;
             }
+        }
+    }
+
+    let term = std::env::var("TERM").unwrap_or_default();
+    if term.is_empty() || term == "dumb" {
+        return false;
+    }
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    let inner = format!("\x1b]52;c;{}\x07", encoded);
+    let seq = if std::env::var_os("TMUX").is_some() {
+        format!("\x1bPtmux;\x1b{}\x1b\\", inner.replace("\x1b", "\x1b\x1b"))
+    } else {
+        inner
+    };
+    if let Ok(mut tty) = OpenOptions::new().write(true).open("/dev/tty") {
+        if tty.write_all(seq.as_bytes()).is_ok() && tty.flush().is_ok() {
+            return true;
         }
     }
     false

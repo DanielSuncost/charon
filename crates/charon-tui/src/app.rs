@@ -1,7 +1,8 @@
-use crate::chat::ChatState;
+use crate::chat::{ChatState, LaunchOptions};
 use crate::session::SessionCell;
 use std::collections::HashSet;
 use std::io;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
@@ -85,6 +86,7 @@ pub struct InterAgentState {
     pub transcript_anchor: Option<TextPoint>,
     pub transcript_focus: Option<TextPoint>,
     pub transcript_dragging: bool,
+    pub clipboard_notice: Option<(String, bool, Instant)>,
 }
 
 impl InterAgentState {
@@ -104,6 +106,25 @@ impl InterAgentState {
             transcript_anchor: None,
             transcript_focus: None,
             transcript_dragging: false,
+            clipboard_notice: None,
+        }
+    }
+
+    pub fn set_clipboard_notice(&mut self, text: impl Into<String>, ok: bool) {
+        self.clipboard_notice = Some((text.into(), ok, Instant::now()));
+    }
+
+    pub fn clipboard_notice_text(&self) -> Option<(&str, bool)> {
+        let (text, ok, at) = self.clipboard_notice.as_ref()?;
+        if at.elapsed() > Duration::from_secs(2) {
+            return None;
+        }
+        Some((text.as_str(), *ok))
+    }
+
+    pub fn clear_expired_notices(&mut self) {
+        if self.clipboard_notice.as_ref().is_some_and(|(_, _, at)| at.elapsed() > Duration::from_secs(2)) {
+            self.clipboard_notice = None;
         }
     }
 }
@@ -117,10 +138,10 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(panes: Vec<SessionCell>) -> io::Result<Self> {
+    pub fn new(panes: Vec<SessionCell>, launch: LaunchOptions) -> io::Result<Self> {
         Ok(Self {
             active_view: View::Chat,
-            chat: ChatState::new()?,
+            chat: ChatState::new(launch)?,
             dashboard: DashboardState::new(),
             sessions: SessionsState::new(panes),
             inter_agent: InterAgentState::new(),
