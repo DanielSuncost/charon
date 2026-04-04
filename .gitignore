@@ -19,6 +19,10 @@ __pycache__/
 # Build artifacts
 apps/tui/opentui/dist/
 
+# Rust / Cargo
+target/
+**/target/
+
 # Benchmark data and results (large files)
 data/
 results/

@@ -1,1 +1,0 @@
-/home/dopppo/Projects/charon/crates/charon-tui/target/debug/charon-tui: /home/dopppo/Projects/charon/crates/charon-tui/src/backend.rs /home/dopppo/Projects/charon/crates/charon-tui/src/main.rs /home/dopppo/Projects/charon/crates/charon-tui/src/parser.rs /home/dopppo/Projects/charon/crates/charon-tui/src/render.rs /home/dopppo/Projects/charon/crates/charon-tui/src/terminal.rs
