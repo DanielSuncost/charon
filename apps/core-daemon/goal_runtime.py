@@ -7,6 +7,10 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from project_registry_loader import load_ensure_project
+
+_ensure_project = load_ensure_project(__file__, 'goal_runtime')
+
 # SQLite store adapter (optional)
 try:
     from store_adapter import (
@@ -44,6 +48,9 @@ def _goals_root(state_dir: Path) -> Path:
 
 
 def _project_path(state_dir: Path, project_id: str) -> Path:
+    project_doc_path = state_dir / 'projects' / project_id / 'goals.json'
+    if project_doc_path.parent.exists() or (state_dir / 'projects').exists():
+        return project_doc_path
     return _goals_root(state_dir) / 'projects' / f'{project_id}.json'
 
 
@@ -122,7 +129,8 @@ def ingest_user_intent(
     conversation_id: str,
     text: str,
 ) -> dict:
-    project_id = _safe_id(project or 'default-project', 'project')
+    project_doc = _ensure_project(state_dir, Path(project or '.'))
+    project_id = str(project_doc.get('id') or _safe_id(project or 'default-project', 'project'))
     session_id = _safe_id(session_id or f'session-{agent_id}', 'session')
 
     project_path = _project_path(state_dir, project_id)
@@ -183,7 +191,8 @@ def ingest_idea(
     idea as the active goal. It just stores it in the project's goal
     list with status='backlog' for later prioritization.
     """
-    project_id = _safe_id(project or 'default-project', 'project')
+    project_doc = _ensure_project(state_dir, Path(project or '.'))
+    project_id = str(project_doc.get('id') or _safe_id(project or 'default-project', 'project'))
     session_id = _safe_id(f'ideas-{agent_id}', 'session')
 
     project_path = _project_path(state_dir, project_id)
@@ -240,7 +249,8 @@ def list_goals(
 
     status: 'active', 'backlog', 'blocked', 'completed', or None for all.
     """
-    project_id = _safe_id(project or 'default-project', 'project')
+    project_doc = _ensure_project(state_dir, Path(project or '.'))
+    project_id = str(project_doc.get('id') or _safe_id(project or 'default-project', 'project'))
     proj = _read_json(_project_path(state_dir, project_id), _default_project_doc(project_id))
     goals = [g for g in (proj.get('goals') or []) if isinstance(g, dict)]
     if status:
@@ -255,7 +265,8 @@ def promote_idea(
     goal_id: str,
 ) -> dict | None:
     """Move a backlog idea to active status."""
-    project_id = _safe_id(project or 'default-project', 'project')
+    project_doc = _ensure_project(state_dir, Path(project or '.'))
+    project_id = str(project_doc.get('id') or _safe_id(project or 'default-project', 'project'))
     ppath = _project_path(state_dir, project_id)
     proj = _read_json(ppath, _default_project_doc(project_id))
 

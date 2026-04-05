@@ -657,6 +657,12 @@ def _run_libris_role(
             agent_name=agent.get('name', ''),
             system_prompt=system_prompt,
             state_dir=state_dir,
+            operation_id=operation_id,
+            operation_domain='research',
+            work_unit_id=topic_slug,
+            operation_role=role,
+            runtime_role='background_agent',
+            parent_agent_id=agent.get('parent_agent_id', ''),
             max_tokens=16384,
         )
 

@@ -3,12 +3,24 @@
 > Visual design spec for rendering Libris research swarms inside the F4 agent chat-room view.
 >
 > Date: 2026-03-29
-> Status: Proposed
+> Status: Active
 > Related:
 > - `docs/plans/libris-autonomous-research-operation.md`
 > - `docs/plans/libris-implementation-architecture.md`
 
 ---
+
+## 0. Implementation note
+
+The current checked-in OpenTUI graph implementation is a text-mode topic-clustered MVP in `apps/tui/opentui/src/index.ts`. It already renders:
+- coordinator
+- topic clusters
+- researcher/judge lanes
+- shade groups beneath researchers
+- active vs dim edge intensity
+- focused-topic expansion behavior
+
+This document remains the higher-fidelity target for future visual/layout refinement.
 
 ## 1. Purpose
 

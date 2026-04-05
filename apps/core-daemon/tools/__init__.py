@@ -39,6 +39,13 @@ class ToolContext:
     shell_timeout: int = 120
     scope: list[str] | None = None  # shade scope restriction (list of allowed path prefixes)
     on_tool_output: Callable[[str, str], None] | None = None  # (tool_name, chunk)
+    operation_id: str = ''
+    operation_domain: str = ''
+    work_unit_id: str = ''
+    operation_role: str = ''
+    runtime_role: str = ''
+    parent_agent_id: str = ''
+    metadata: dict[str, Any] | None = None
 
 
 _active_bash_lock = threading.Lock()

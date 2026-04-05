@@ -25,10 +25,10 @@ def _now() -> str:
 
 DEFAULT_CONFIG = {
     'enabled': True,
-    'model_tier': 'fast',           # 'fast', 'strong', or specific model id
-    'scan_interval_heartbeats': 50,  # check every ~100 minutes
-    'scan_after_n_events': 10,       # also check after every N user events
-    'max_events_per_scan': 100,      # don't process more than this per scan
+    'model_tier': 'fast',              # 'fast', 'strong', or specific model id
+    'scan_interval_heartbeats': 50,    # check every ~100 minutes
+    'min_new_user_messages': 5,        # trigger after this many new user messages
+    'max_events_per_scan': 120,        # max messages to read per scan
 }
 
 
@@ -127,51 +127,52 @@ def list_traces(state_dir: Path, limit: int = 20) -> list[dict]:
 
 # ── Trigger check ───────────────────────────────────────────────────
 
-def _count_user_events_since(state_dir: Path, since_ts: str) -> int:
-    """Count user-origin events (messages, steers, ideas, commands) since a timestamp."""
-    count = 0
+def _ensure_conversation_messages(db) -> None:
+    """Ensure conversation_messages table exists (may live in context_store schema)."""
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS conversation_messages (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_id    TEXT NOT NULL DEFAULT '',
+            seq         INTEGER NOT NULL DEFAULT 0,
+            role        TEXT NOT NULL,
+            content     TEXT,
+            tool_calls  TEXT,
+            tool_call_id TEXT,
+            tool_name   TEXT,
+            is_error    INTEGER NOT NULL DEFAULT 0,
+            thinking    TEXT,
+            token_count INTEGER,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    db.commit()
+
+
+def _count_user_messages_since(state_dir: Path, since_ts: str) -> int:
+    """Count user messages in conversation_messages since a timestamp."""
     try:
         from store_adapter import get_db
         db = get_db(state_dir)
-        # Count from agent_inbox: user-origin events
+        _ensure_conversation_messages(db)
         row = db.fetchone(
-            "SELECT COUNT(*) as cnt FROM agent_inbox WHERE ts > ? AND event_type IN "
-            "('task_received', 'user_intent', 'steer', 'follow_up', 'idea_captured')",
+            "SELECT COUNT(*) as cnt FROM conversation_messages "
+            "WHERE role='user' AND created_at > ?",
             (since_ts,),
         )
-        count += (row['cnt'] if row else 0)
+        return row['cnt'] if row else 0
     except Exception:
-        pass
-
-    # Also count from run_log for broader coverage
-    try:
-        from store_adapter import get_db
-        db = get_db(state_dir)
-        row = db.fetchone(
-            "SELECT COUNT(*) as cnt FROM run_log WHERE ts > ? AND event IN "
-            "('task_start', 'task_success', 'task_failed_terminal')",
-            (since_ts,),
-        )
-        count += (row['cnt'] if row else 0)
-    except Exception:
-        pass
-
-    return count
+        return 0
 
 
 def should_run(state_dir: Path, config: dict) -> bool:
-    """Check if consolidation should run based on the trigger rule.
+    """Check if consolidation should run.
 
-    Only runs when there's fresh user signal:
-    - At least 1 new user-origin event since last consolidation, OR
-    - At least 3 new task completions since last consolidation
-
-    Returns False if no new signal. Zero cost when user is away.
+    Triggers after MIN_NEW_USER_MESSAGES new user messages since last run.
+    Zero cost when user is away.
     """
     if not config.get('enabled', True):
         return False
 
-    # Get last consolidation timestamp
     from user_model_structured import load_structured
     model = load_structured(state_dir)
     meta = model.get('_meta', {})
@@ -182,106 +183,112 @@ def should_run(state_dir: Path, config: dict) -> bool:
             meta = {}
     last_ts = meta.get('last_consolidated_at', '2000-01-01T00:00:00Z')
 
-    event_count = _count_user_events_since(state_dir, last_ts)
-    return event_count >= 1
+    min_msgs = config.get('min_new_user_messages', 5)
+    return _count_user_messages_since(state_dir, last_ts) >= min_msgs
 
 
 # ── Signal extraction ───────────────────────────────────────────────
 
-def _collect_recent_signals(state_dir: Path, since_ts: str, max_events: int = 100) -> str:
-    """Collect recent interaction signals as text for the LLM to analyze."""
+def _collect_recent_signals(state_dir: Path, since_ts: str, max_events: int = 120) -> str:
+    """Collect recent conversation signals for the LLM to analyze.
+
+    Reads user messages and short assistant replies from conversation_messages,
+    grouped into exchanges. This is the real interaction history.
+    """
     signals = []
 
-    # Recent inbox events across all agents
     try:
         from store_adapter import get_db
         db = get_db(state_dir)
+        _ensure_conversation_messages(db)
+
+        # Fetch recent messages (user + assistant) since last consolidation
         rows = db.fetchall(
-            "SELECT agent_id, ts, event_type, payload FROM agent_inbox "
-            "WHERE ts > ? ORDER BY ts DESC LIMIT ?",
+            """SELECT id, agent_id, role, content, created_at
+               FROM conversation_messages
+               WHERE role IN ('user', 'assistant')
+                 AND created_at > ?
+                 AND content IS NOT NULL
+                 AND length(content) > 0
+               ORDER BY id ASC
+               LIMIT ?""",
             (since_ts, max_events),
         )
+
         for r in rows:
-            payload = r.get('payload', {})
-            if isinstance(payload, str):
-                try:
-                    payload = json.loads(payload)
-                except Exception:
-                    payload = {}
-            evt = r.get('event_type', '')
-            if evt == 'task_received':
-                instruction = payload.get('instruction', '')
-                if instruction:
-                    signals.append(f'[task] {instruction[:200]}')
-            elif evt == 'task_succeeded':
-                summary = payload.get('summary', '')
-                if summary:
-                    signals.append(f'[completed] {summary[:200]}')
-            elif evt == 'task_failed':
-                error = payload.get('error', '')
-                if error:
-                    signals.append(f'[failed] {error[:200]}')
+            role = r['role']
+            content = str(r['content'] or '').strip()
+            if not content:
+                continue
+
+            if role == 'user':
+                # Include full user message (up to 300 chars)
+                signals.append(f'[user] {content[:300]}')
+            elif role == 'assistant':
+                # Include first 150 chars of assistant reply for context
+                # (enough to see topic/response type, not full output)
+                first_line = content.split('\n')[0].strip()
+                snippet = first_line[:150] if first_line else content[:150]
+                if snippet:
+                    signals.append(f'[agent] {snippet}')
+
     except Exception:
         pass
 
-    # Recent run log events
-    try:
-        from store_adapter import get_db
-        db = get_db(state_dir)
-        rows = db.fetchall(
-            "SELECT ts, event, data FROM run_log WHERE ts > ? ORDER BY ts DESC LIMIT ?",
-            (since_ts, 50),
-        )
-        for r in rows:
-            data = r.get('data', {})
-            if isinstance(data, str):
-                try:
-                    data = json.loads(data)
-                except Exception:
-                    data = {}
-            evt = r.get('event', '')
-            if evt in ('task_start', 'task_success'):
-                title = data.get('title', '')
-                if title:
-                    signals.append(f'[{evt}] {title[:150]}')
-    except Exception:
-        pass
-
-    signals.reverse()  # chronological order
     return '\n'.join(signals) if signals else ''
 
 
 # ── LLM-based analysis ─────────────────────────────────────────────
 
-CONSOLIDATION_PROMPT = """You are analyzing recent interactions between a user and their Charon coding agents. Your job is to extract user preferences, corrections, and patterns to update their profile.
+CONSOLIDATION_PROMPT = """You are a user model analyst for Charon, a coding agent OS. Analyze recent conversations and extract a rich profile update.
 
 Current user profile:
 {current_profile}
 
-Recent interaction signals (chronological):
+Recent conversation (chronological, [user] = user message, [agent] = agent reply snippet):
 {signals}
 
-Based on these signals, output a JSON object with ONLY the changes to make. Use these keys:
+Output a JSON object with ONLY the changes to make. Categories and what to put in each:
 
 {{
   "set": [
-    {{"category": "style|coding|tooling|workflow|patterns", "key": "field_name", "value": "value"}}
+    {{
+      "category": "style|coding|tooling|workflow|patterns|interests|mental_model",
+      "key": "short_snake_case_key",
+      "value": "concise value under 80 chars"
+    }}
   ],
-  "corrections": ["any explicit corrections the user made"],
+  "corrections": ["explicit corrections the user stated"],
   "intentions": [
-    {{"project": "name", "intent": "what they want", "priority": "high|normal|low"}}
+    {{"project": "project_name", "intent": "what they want to achieve", "priority": "high|normal|low"}}
   ],
-  "reasoning": "brief explanation of what you observed"
+  "reasoning": "1-2 sentences on what you observed"
 }}
 
-Rules:
-- Only include fields that have CLEAR evidence in the signals. Don't guess.
-- Corrections are things the user EXPLICITLY said "no, do it this way."
-- Patterns are OBSERVED behaviors, not stated preferences.
-- If there's nothing meaningful to extract, return {{"set": [], "corrections": [], "intentions": [], "reasoning": "No actionable signals found."}}
-- Keep values concise (under 60 chars each).
+Category guide:
+- style: communication preferences (verbosity, tone, format)
+- coding: code conventions (naming, error handling, language preferences)
+- tooling: tools and stack (languages, frameworks, package managers)
+- workflow: how they work (PR size, test habits, iteration style)
+- patterns: observed behavioral patterns (how they explore, how they give feedback, pacing)
+- interests: topics they return to frequently — map topic→frequency_or_depth description.
+  Examples: "agent_architectures: high interest, mentioned in 80% of sessions",
+            "memory_systems: deep — asks implementation questions not just overviews",
+            "rl_and_finetuning: growing interest, asked about traces and data collection"
+- mental_model: how they think about problems — their abstractions, framings, analogies.
+  Examples: "systems_thinking: frames features as system properties not isolated capabilities",
+            "build_vs_research: leans toward building first, research to validate",
+            "skeptical_of_bloat: questions whether new capabilities are truly needed"
 
-Output ONLY the JSON object, nothing else."""
+Rules:
+- interests and mental_model are the most valuable — fill them from topic frequency and reasoning patterns.
+- Only set fields with CLEAR evidence. Don't guess.
+- Corrections = things user explicitly pushed back on or corrected.
+- Keep all values under 100 chars.
+- Update existing keys rather than adding duplicates — if a key already exists in the profile, improve it.
+- If nothing meaningful: {{"set": [], "corrections": [], "intentions": [], "reasoning": "No actionable signals."}}
+
+Output ONLY valid JSON, nothing else."""
 
 
 async def _run_analysis(state_dir: Path, signals_text: str, current_profile: str, model_tier: str) -> dict:
@@ -355,7 +362,7 @@ def _apply_changes(model: dict, analysis: dict) -> list[dict]:
             scan = _scan_content(value)
             if scan:
                 continue  # Skip injected content
-            if cat in ('style', 'coding', 'tooling', 'workflow', 'patterns'):
+            if cat in ('style', 'coding', 'tooling', 'workflow', 'patterns', 'interests', 'mental_model'):
                 old_value = (model.get(cat) or {}).get(key)
                 set_field(model, cat, key, value)
                 changes.append({

@@ -13,12 +13,22 @@ pub enum View {
 }
 
 pub struct DashboardState {
-    pub selected: usize,
+    pub focus_row: usize,
+    pub focus_col: usize,
+    pub agent_index: usize,
+    pub project_index: usize,
+    pub automation_index: usize,
 }
 
 impl DashboardState {
     pub fn new() -> Self {
-        Self { selected: 0 }
+        Self {
+            focus_row: 0,
+            focus_col: 0,
+            agent_index: 0,
+            project_index: 0,
+            automation_index: 0,
+        }
     }
 }
 
@@ -86,6 +96,7 @@ pub struct InterAgentState {
     pub transcript_anchor: Option<TextPoint>,
     pub transcript_focus: Option<TextPoint>,
     pub transcript_dragging: bool,
+    pub app_mouse_mode: bool,
     pub clipboard_notice: Option<(String, bool, Instant)>,
 }
 
@@ -106,6 +117,7 @@ impl InterAgentState {
             transcript_anchor: None,
             transcript_focus: None,
             transcript_dragging: false,
+            app_mouse_mode: true,
             clipboard_notice: None,
         }
     }

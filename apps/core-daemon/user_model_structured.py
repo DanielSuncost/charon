@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Any
 
 
-CATEGORIES = ('style', 'coding', 'tooling', 'workflow', 'corrections', 'intentions', 'patterns')
-CHAR_LIMIT = 2000
+CATEGORIES = ('style', 'coding', 'tooling', 'workflow', 'corrections', 'intentions', 'patterns', 'interests', 'mental_model')
+CHAR_LIMIT = 5000
 
 _CATEGORY_LABELS = {
     'style': 'Style',
@@ -31,6 +31,8 @@ _CATEGORY_LABELS = {
     'corrections': 'Corrections',
     'intentions': 'Intentions',
     'patterns': 'Patterns',
+    'interests': 'Interests',
+    'mental_model': 'Mental Model',
 }
 
 
@@ -41,7 +43,7 @@ def _now() -> str:
 # ── Load / Save ─────────────────────────────────────────────────────
 
 def _default_model() -> dict:
-    return {cat: {} if cat not in ('corrections',) else [] for cat in CATEGORIES}
+    return {cat: {} if cat not in ('corrections', 'intentions') else [] for cat in CATEGORIES}
 
 
 def load_structured(state_dir: Path) -> dict:
@@ -239,6 +241,18 @@ def render_for_prompt(model: dict) -> str:
         if line:
             sections.append(line)
 
+    interests = model.get('interests')
+    if isinstance(interests, dict) and interests:
+        line = _render_dict_section('Interests', interests, include_keys=True)
+        if line:
+            sections.append(line)
+
+    mental_model = model.get('mental_model')
+    if isinstance(mental_model, dict) and mental_model:
+        line = _render_dict_section('Mental Model', mental_model, include_keys=True)
+        if line:
+            sections.append(line)
+
     if not sections:
         content = '(No profile yet. Save preferences with the UserModel tool.)'
     else:
@@ -297,6 +311,20 @@ def render_markdown(model: dict) -> str:
             lines.append(f'- **{k}**: {v}')
         lines.append('')
 
+    interests = model.get('interests')
+    if isinstance(interests, dict) and interests:
+        lines.append('## Interests')
+        for k, v in interests.items():
+            lines.append(f'- **{k}**: {v}')
+        lines.append('')
+
+    mental_model = model.get('mental_model')
+    if isinstance(mental_model, dict) and mental_model:
+        lines.append('## Mental Model')
+        for k, v in mental_model.items():
+            lines.append(f'- **{k}**: {v}')
+        lines.append('')
+
     if len(lines) <= 2:
         lines.append('(No profile yet.)')
 
@@ -306,8 +334,8 @@ def render_markdown(model: dict) -> str:
 # ── Category operations ─────────────────────────────────────────────
 
 def set_field(model: dict, category: str, key: str, value: str) -> dict:
-    """Set a field in a dict category (style, coding, tooling, workflow, patterns)."""
-    if category not in ('style', 'coding', 'tooling', 'workflow', 'patterns'):
+    """Set a field in a dict category (style, coding, tooling, workflow, patterns, interests, mental_model)."""
+    if category not in ('style', 'coding', 'tooling', 'workflow', 'patterns', 'interests', 'mental_model'):
         raise ValueError(f'Category {category} does not support set_field')
     if not isinstance(model.get(category), dict):
         model[category] = {}

@@ -193,15 +193,32 @@ def _build_project_knowledge(state_dir: Path, project: str) -> str:
     if not project:
         return ''
 
-    # Check for PROJECT_KNOWLEDGE.md or similar
     project_path = Path(project)
+    candidates: list[tuple[Path, str]] = []
+
+    try:
+        from project_registry import ensure_project
+        proj = ensure_project(state_dir, project_path)
+        pid = str(proj.get('id') or '').strip()
+        if pid:
+            candidates.append((state_dir / 'projects' / pid / 'KNOWLEDGE.md', 'KNOWLEDGE.md'))
+    except Exception:
+        pass
+
     for name in ['PROJECT_KNOWLEDGE.md', 'project_knowledge.md']:
-        p = project_path / '.charon' / name
+        candidates.append((project_path / '.charon' / name, name))
+
+    seen: set[str] = set()
+    for p, label in candidates:
+        key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
         if p.exists():
             try:
                 content = p.read_text(encoding='utf-8').strip()
                 if content:
-                    content = _scan_content(content, name)
+                    content = _scan_content(content, label)
                     content = _truncate_content(content, 3000)
                     sep = '═' * 46
                     return f'{sep}\nPROJECT KNOWLEDGE\n{sep}\n{content}'
