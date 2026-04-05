@@ -432,13 +432,7 @@ fn draw_header<W: Write>(stdout: &mut W, app: &App, w: u16) -> io::Result<()> {
 
     let extra = match app.active_view {
         View::Chat => match app.chat.view_mode {
-            ChatViewMode::Transcript => {
-                if app.chat.app_mouse_mode {
-                    " │ F5:workspace │ F6:mouse terminal"
-                } else {
-                    " │ F5:workspace │ F6:mouse app"
-                }
-            }
+            ChatViewMode::Transcript => " │ F5:workspace",
             ChatViewMode::Workspace => {
                 if app.chat.app_mouse_mode {
                     " │ F5:transcript │ F6:mouse terminal"
@@ -484,11 +478,19 @@ fn draw_footer<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Resul
         },
         View::Dashboard => {
             let payload = app.chat.refresh_payload.as_ref();
+            let row_name = match app.dashboard.focus_row {
+                0 => "agents",
+                1 => "projects",
+                2 => "automations",
+                _ => "dashboard",
+            };
             format!(
-                " Dashboard │ agents:{} │ projects:{} │ activity:{} ",
+                " Dashboard │ agents:{} │ projects:{} │ automations:{} │ focus:{}:{} ",
                 payload_agents(payload).len(),
                 payload_projects(payload).len(),
-                payload_activity(payload).len(),
+                payload_automations(payload).len(),
+                row_name,
+                app.dashboard.focus_col + 1,
             )
         }
         View::Sessions => {
@@ -1545,6 +1547,75 @@ fn tail_visible_text(text: &str, width: usize) -> String {
     chars[start..].iter().collect()
 }
 
+fn build_chat_transcript_log_lines(app: &App, w: u16, h: u16) -> Vec<String> {
+    let variant = chat_layout_variant(w, h);
+    let width = w.saturating_sub(2) as usize;
+    let mut out = Vec::new();
+    for line in build_chat_visual_lines(app, width.max(1), variant) {
+        let text = if line.selectable {
+            let mut s = String::new();
+            s.push_str(&" ".repeat(line.copy_offset));
+            s.push_str(&line.copy_text);
+            s
+        } else {
+            line.spans.iter().map(|s| s.text.as_str()).collect::<String>()
+        };
+        out.push(text.trim_end().to_string());
+    }
+    out
+}
+
+fn chat_transcript_prompt_line(app: &App, w: u16) -> String {
+    let prefix = "> ";
+    let suffix = if app.chat.streaming {
+        "  [streaming]".to_string()
+    } else {
+        "".to_string()
+    };
+    let reserve = suffix.chars().count();
+    let input_budget = (w as usize).saturating_sub(prefix.chars().count() + reserve + 1).max(8);
+    let visible_input = tail_visible_text(&app.chat.input, input_budget);
+    format!("{}{}{}", prefix, visible_input, suffix)
+}
+
+fn render_chat_transcript_mode<W: Write>(
+    stdout: &mut W,
+    app: &App,
+    w: u16,
+    h: u16,
+    last_lines: &mut Vec<String>,
+    force_reset: bool,
+) -> io::Result<()> {
+    let lines = build_chat_transcript_log_lines(app, w, h);
+    let prompt = chat_transcript_prompt_line(app, w);
+    let common_prefix = if force_reset {
+        0
+    } else {
+        last_lines.iter().zip(lines.iter()).take_while(|(a, b)| a == b).count()
+    };
+
+    if force_reset {
+        stdout.queue(ct::Clear(ct::ClearType::All))?;
+        stdout.queue(cursor::MoveTo(0, 0))?;
+        write!(stdout, "\x1b[3J")?;
+        for line in &lines {
+            stdout.queue(ct::Clear(ct::ClearType::CurrentLine))?;
+            write!(stdout, "{}\r\n", line)?;
+        }
+    } else {
+        stdout.queue(cursor::MoveToColumn(0))?;
+        stdout.queue(ct::Clear(ct::ClearType::CurrentLine))?;
+        for line in lines.iter().skip(common_prefix) {
+            write!(stdout, "{}\r\n", line)?;
+        }
+    }
+
+    stdout.queue(ct::Clear(ct::ClearType::CurrentLine))?;
+    write!(stdout, "{}", prompt)?;
+    *last_lines = lines;
+    Ok(())
+}
+
 fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<()> {
     let variant = chat_layout_variant(w, h);
     let reserved_bottom = chat_reserved_bottom(app, variant);
@@ -1573,6 +1644,16 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
             y: 2,
             width: info_pane_w.saturating_sub(2),
             height: h.saturating_sub(4),
+        };
+        draw_info_panel(stdout, app, area)?;
+    } else if app.chat.view_mode == ChatViewMode::Transcript && app.chat.info_pane_open && variant != ChatLayoutVariant::Tiny {
+        let overlay_w = (w.saturating_sub(8)).min(42).max(28);
+        let overlay_h = h.saturating_sub(8).min(28).max(12);
+        let area = Rect {
+            x: w.saturating_sub(overlay_w + 3),
+            y: 3,
+            width: overlay_w,
+            height: overlay_h,
         };
         draw_info_panel(stdout, app, area)?;
     }
@@ -1627,7 +1708,7 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
     let mouse_mode = if app.chat.app_mouse_mode { "mouse:app" } else { "mouse:terminal" };
     let mut right2 = match app.chat.view_mode {
         ChatViewMode::Transcript => {
-            format!("F5:{}  Wheel:scroll  Drag/Ctrl+C:copy  F6:{}", mode_label, mouse_mode)
+            format!("F5:{}  native select/right-click  wheel:terminal scrollback", mode_label)
         }
         ChatViewMode::Workspace => {
             if app.chat.streaming {
@@ -1800,67 +1881,233 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
     Ok(())
 }
 
-fn draw_dashboard<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<()> {
-    let left = Rect { x: 1, y: 2, width: (w / 2).saturating_sub(2), height: h.saturating_sub(4) };
-    let right = Rect { x: (w / 2) + 1, y: 2, width: (w / 2).saturating_sub(2), height: h.saturating_sub(4) };
+fn dashboard_sparkline(points: &[u64]) -> String {
+    let glyphs = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let max = points.iter().copied().max().unwrap_or(0);
+    if max == 0 {
+        return "▁".repeat(points.len().max(1));
+    }
+    points.iter().map(|v| {
+        let idx = ((*v as f64 / max as f64) * (glyphs.len() as f64 - 1.0)).round() as usize;
+        glyphs[idx.min(glyphs.len() - 1)]
+    }).collect()
+}
 
+fn draw_dashboard_panel<W: Write>(stdout: &mut W, area: Rect, title: &str, lines: &[String], focused: bool) -> io::Result<()> {
+    render::render_border(stdout, area, title, focused)?;
+    let max_lines = area.height as usize;
+    for (i, line) in lines.iter().take(max_lines).enumerate() {
+        stdout.queue(cursor::MoveTo(area.x, area.y + i as u16))?;
+        let visible: String = line.chars().take(area.width as usize).collect();
+        write!(stdout, "{}", visible)?;
+    }
+    Ok(())
+}
+
+fn rect_rows(area: Rect, rows: usize) -> Vec<Rect> {
+    let mut out = Vec::new();
+    let base_h = area.height / rows as u16;
+    let extra = area.height % rows as u16;
+    let mut y = area.y;
+    for idx in 0..rows {
+        let h = base_h + if idx < extra as usize { 1 } else { 0 };
+        out.push(Rect { x: area.x, y, width: area.width, height: h });
+        y += h;
+    }
+    out
+}
+
+fn rect_cols(area: Rect, widths: [u16; 3]) -> [Rect; 3] {
+    let total = widths[0] + widths[1] + widths[2];
+    let w1 = area.width.saturating_mul(widths[0]) / total.max(1);
+    let w2 = area.width.saturating_mul(widths[1]) / total.max(1);
+    let used = w1 + w2;
+    let w3 = area.width.saturating_sub(used);
+    [
+        Rect { x: area.x, y: area.y, width: w1.saturating_sub(1), height: area.height.saturating_sub(1) },
+        Rect { x: area.x + w1, y: area.y, width: w2.saturating_sub(1), height: area.height.saturating_sub(1) },
+        Rect { x: area.x + used, y: area.y, width: w3.saturating_sub(1), height: area.height.saturating_sub(1) },
+    ]
+}
+
+fn flatten_goal_tree(node: &Value, depth: usize, out: &mut Vec<String>) {
+    let title = node.get("title").and_then(|v| v.as_str()).unwrap_or("goal");
+    let status = node.get("status").and_then(|v| v.as_str()).unwrap_or("");
+    let marker = if matches!(status, "completed") { "[x]" } else if matches!(status, "active" | "executing" | "planning" | "verifying") { "[>]" } else { "[ ]" };
+    out.push(format!("{}{} {}", "  ".repeat(depth), marker, title));
+    if let Some(children) = node.get("children").and_then(|v| v.as_array()) {
+        for child in children {
+            flatten_goal_tree(child, depth + 1, out);
+        }
+    }
+}
+
+fn draw_dashboard<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<()> {
+    let outer = Rect { x: 1, y: 2, width: w.saturating_sub(2), height: h.saturating_sub(4) };
+    let rows = rect_rows(outer, 3);
     let payload = app.chat.refresh_payload.as_ref();
     let agents = payload_agents(payload);
     let projects = payload_projects(payload);
-    let activity = payload_activity(payload);
+    let automations = payload_automations(payload);
 
-    let mut left_lines = vec![
-        format!("Provider/model: {}", app.chat.provider_model()),
-        format!("Session: {}", if app.chat.session_id.is_empty() { "none" } else { &app.chat.session_id }),
-        "".to_string(),
-        "Agents".to_string(),
-    ];
-    for (i, agent) in agents.iter().enumerate() {
-        let prefix = if i == app.dashboard.selected { ">" } else { " " };
-        let name = agent.get("name").and_then(|v| v.as_str()).unwrap_or("agent");
-        let status = agent.get("status").and_then(|v| v.as_str()).unwrap_or("idle");
-        let role = agent.get("role").and_then(|v| v.as_str()).unwrap_or("");
-        left_lines.push(format!("{} {} [{}] {}", prefix, name, status, role));
-    }
+    let agent_idx = app.dashboard.agent_index.min(agents.len().saturating_sub(1));
+    let project_idx = app.dashboard.project_index.min(projects.len().saturating_sub(1));
+    let automation_idx = app.dashboard.automation_index.min(automations.len().saturating_sub(1));
 
-    let mut right_lines = Vec::new();
-    if let Some(agent) = agents.get(app.dashboard.selected) {
-        right_lines.push(format!("Name: {}", agent.get("name").and_then(|v| v.as_str()).unwrap_or("")));
-        right_lines.push(format!("ID: {}", agent.get("id").and_then(|v| v.as_str()).unwrap_or("")));
-        right_lines.push(format!("Status: {}", agent.get("status").and_then(|v| v.as_str()).unwrap_or("")));
-        right_lines.push(format!("Role: {}", agent.get("role").and_then(|v| v.as_str()).unwrap_or("")));
-        right_lines.push(format!("Project: {}", agent.get("project").and_then(|v| v.as_str()).unwrap_or("")));
-        right_lines.push(format!("Goal: {}", agent.get("goal").and_then(|v| v.as_str()).unwrap_or("")));
-        right_lines.push(format!("Summary: {}", agent.get("last_summary").and_then(|v| v.as_str()).unwrap_or("")));
-        right_lines.push("".to_string());
-        if let Some(stats) = agent.get("shade_stats") {
-            right_lines.push(format!("Shade stats: {}", stats));
+    // Row 1: Agents
+    {
+        let cols = rect_cols(rows[0], [28, 38, 34]);
+        let mut list = vec![format!("Provider/model: {}", app.chat.provider_model())];
+        for (i, agent) in agents.iter().enumerate() {
+            let prefix = if i == agent_idx { ">" } else { " " };
+            let name = agent.get("name").and_then(|v| v.as_str()).unwrap_or("agent");
+            let status = agent.get("status").and_then(|v| v.as_str()).unwrap_or("idle");
+            let role = agent.get("role").and_then(|v| v.as_str()).unwrap_or("");
+            list.push(format!("{} {} [{}] {}", prefix, name, status, role));
         }
-        if let Some(ledger) = agent.get("ledger").and_then(|v| v.as_array()) {
-            right_lines.push("Recent ledger:".to_string());
-            for item in ledger.iter().take(5) {
-                right_lines.push(format!("- {} {}", item.get("status").and_then(|v| v.as_str()).unwrap_or(""), item.get("task_id").and_then(|v| v.as_str()).unwrap_or("")));
+        if agents.is_empty() { list.push("No agents yet.".to_string()); }
+
+        let mut detail = Vec::new();
+        let mut recent = Vec::new();
+        if let Some(agent) = agents.get(agent_idx) {
+            detail.push(format!("Name: {}", agent.get("name").and_then(|v| v.as_str()).unwrap_or("")));
+            detail.push(format!("ID: {}", agent.get("id").and_then(|v| v.as_str()).unwrap_or("")));
+            detail.push(format!("Role: {}", agent.get("role").and_then(|v| v.as_str()).unwrap_or("")));
+            detail.push(format!("Status: {}", agent.get("status").and_then(|v| v.as_str()).unwrap_or("")));
+            detail.push(format!("Mode: {}", agent.get("mode").and_then(|v| v.as_str()).unwrap_or("")));
+            detail.push(format!("Project: {}", agent.get("project").and_then(|v| v.as_str()).unwrap_or("")));
+            detail.push(format!("Parent: {}", agent.get("parent_agent_id").and_then(|v| v.as_str()).unwrap_or("-")));
+            detail.push(format!("Last active: {}", agent.get("last_active").and_then(|v| v.as_str()).unwrap_or("-")));
+            detail.push(format!("Goal: {}", agent.get("goal").and_then(|v| v.as_str()).unwrap_or("")));
+            detail.push(format!("Summary: {}", agent.get("last_summary").and_then(|v| v.as_str()).unwrap_or("")));
+            recent.push("Recent outcomes".to_string());
+            if let Some(ledger) = agent.get("ledger").and_then(|v| v.as_array()) {
+                for item in ledger.iter().take(6) {
+                    recent.push(format!("- {} {}", item.get("status").and_then(|v| v.as_str()).unwrap_or(""), item.get("task_id").and_then(|v| v.as_str()).unwrap_or("")));
+                }
             }
+            if let Some(actions) = agent.get("recent_actions").and_then(|v| v.as_array()) {
+                for item in actions.iter().take(4) {
+                    if let Some(s) = item.as_str() { recent.push(format!("- {}", s)); }
+                }
+            }
+        } else {
+            detail.push("No agent selected.".to_string());
+            recent.push("No recent outcomes.".to_string());
         }
-    } else {
-        right_lines.push("No agent data yet.".to_string());
+        draw_dashboard_panel(stdout, cols[0], "agents list", &list, app.dashboard.focus_row == 0 && app.dashboard.focus_col == 0)?;
+        draw_dashboard_panel(stdout, cols[1], "agent details", &detail, app.dashboard.focus_row == 0 && app.dashboard.focus_col == 1)?;
+        draw_dashboard_panel(stdout, cols[2], "agent outcomes", &recent, app.dashboard.focus_row == 0 && app.dashboard.focus_col == 2)?;
     }
 
-    right_lines.push("".to_string());
-    right_lines.push(format!("Projects: {}", projects.len()));
-    for p in projects.iter().take(6) {
-        let name = p.get("name").and_then(|v| v.as_str()).unwrap_or("project");
-        let active = p.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
-        right_lines.push(format!("- {}{}", name, if active { " [active]" } else { "" }));
-    }
-    right_lines.push("".to_string());
-    right_lines.push("Activity:".to_string());
-    for line in activity.iter().rev().take(8) {
-        right_lines.push(format!("- {}", line));
+    // Row 2: Projects
+    {
+        let cols = rect_cols(rows[1], [24, 42, 34]);
+        let mut list = Vec::new();
+        for (i, project) in projects.iter().enumerate() {
+            let prefix = if i == project_idx { ">" } else { " " };
+            let name = project.get("name").and_then(|v| v.as_str()).unwrap_or("project");
+            let active = if project.get("active").and_then(|v| v.as_bool()).unwrap_or(false) { "active" } else { "idle" };
+            let agents_count = project.get("agent_details").and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0);
+            list.push(format!("{} {} [{}] {}a", prefix, name, active, agents_count));
+        }
+        if projects.is_empty() { list.push("No projects yet.".to_string()); }
+
+        let mut detail = Vec::new();
+        let mut goals = Vec::new();
+        if let Some(project) = projects.get(project_idx) {
+            let usage = project.get("usage").unwrap_or(&Value::Null);
+            let points: Vec<u64> = project.get("activity_points").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect()).unwrap_or_default();
+            detail.push(format!("Name: {}", project.get("name").and_then(|v| v.as_str()).unwrap_or("")));
+            detail.push(format!("Path: {}", project.get("path").and_then(|v| v.as_str()).unwrap_or("")));
+            detail.push(format!("Active: {}", project.get("active").and_then(|v| v.as_bool()).unwrap_or(false)));
+            detail.push(format!("Agents: {}", project.get("agent_details").and_then(|v| v.as_array()).map(|v| v.len()).unwrap_or(0)));
+            detail.push(format!("Tokens: {}", usage.get("total_tokens").and_then(|v| v.as_u64()).unwrap_or(0)));
+            detail.push(format!("Cost USD: {:.4}", usage.get("estimated_cost_usd").and_then(|v| v.as_f64()).unwrap_or(0.0)));
+            detail.push(format!("Hours est: {:.2}", usage.get("hours_spent_estimate").and_then(|v| v.as_f64()).unwrap_or(0.0)));
+            detail.push(format!("Libris ops: {}", usage.get("libris_operations").and_then(|v| v.as_u64()).unwrap_or(0)));
+            detail.push(format!("Dev ops: {}", usage.get("devop_operations").and_then(|v| v.as_u64()).unwrap_or(0)));
+            detail.push(format!("Activity: {}", dashboard_sparkline(&points)));
+            goals.push("Goal tree".to_string());
+            if let Some(tree) = project.get("goal_tree").and_then(|v| v.as_array()) {
+                for node in tree.iter().take(12) {
+                    flatten_goal_tree(node, 0, &mut goals);
+                }
+            }
+            if goals.len() == 1 {
+                goals.push("No goals recorded yet.".to_string());
+            }
+        } else {
+            detail.push("No project selected.".to_string());
+            goals.push("No goals recorded yet.".to_string());
+        }
+        draw_dashboard_panel(stdout, cols[0], "projects list", &list, app.dashboard.focus_row == 1 && app.dashboard.focus_col == 0)?;
+        draw_dashboard_panel(stdout, cols[1], "project details", &detail, app.dashboard.focus_row == 1 && app.dashboard.focus_col == 1)?;
+        draw_dashboard_panel(stdout, cols[2], "project goals", &goals, app.dashboard.focus_row == 1 && app.dashboard.focus_col == 2)?;
     }
 
-    draw_placeholder_panel(stdout, left, "agents", &left_lines)?;
-    draw_placeholder_panel(stdout, right, "details", &right_lines)?;
+    // Row 3: Automations
+    {
+        let cols = rect_cols(rows[2], [24, 40, 36]);
+        let mut list = Vec::new();
+        for (i, automation) in automations.iter().enumerate() {
+            let prefix = if i == automation_idx { ">" } else { " " };
+            let title = automation.get("title").and_then(|v| v.as_str()).unwrap_or("automation");
+            let status = automation.get("status").and_then(|v| v.as_str()).unwrap_or("active");
+            let health = automation.get("health").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let mode = automation.get("mode").and_then(|v| v.as_str()).unwrap_or("");
+            list.push(format!("{} {} [{}:{}]", prefix, title, status, if mode.is_empty() { health } else { mode }));
+        }
+        if automations.is_empty() { list.push("No automations yet.".to_string()); }
+
+        let mut detail = Vec::new();
+        let mut runs = Vec::new();
+        if let Some(automation) = automations.get(automation_idx) {
+            let schedule = automation.get("schedule").unwrap_or(&Value::Null);
+            let sched_desc = if schedule.get("type").and_then(|v| v.as_str()) == Some("cron") {
+                format!("cron {}", schedule.get("cron").and_then(|v| v.as_str()).unwrap_or(""))
+            } else if automation.get("mode").and_then(|v| v.as_str()) == Some("continuous") {
+                format!("continuous/{}s", schedule.get("poll_seconds").and_then(|v| v.as_u64()).unwrap_or(60))
+            } else {
+                format!("every {}s", schedule.get("interval_seconds").and_then(|v| v.as_u64()).unwrap_or(0))
+            };
+            detail.push(format!("Title: {}", automation.get("title").and_then(|v| v.as_str()).unwrap_or("")));
+            detail.push(format!("ID: {}", automation.get("automation_id").and_then(|v| v.as_str()).unwrap_or("")));
+            detail.push(format!("Kind: {}", automation.get("kind").and_then(|v| v.as_str()).unwrap_or("")));
+            detail.push(format!("Mode: {}", automation.get("mode").and_then(|v| v.as_str()).unwrap_or("")));
+            detail.push(format!("Schedule: {}", sched_desc));
+            detail.push(format!("Status: {}", automation.get("status").and_then(|v| v.as_str()).unwrap_or("")));
+            detail.push(format!("Health: {}", automation.get("health").and_then(|v| v.as_str()).unwrap_or("")));
+            detail.push(format!("Next run: {}", automation.get("next_run_at").and_then(|v| v.as_str()).unwrap_or("continuous")));
+            detail.push(format!("Heartbeat: {}", automation.get("last_heartbeat_at").and_then(|v| v.as_str()).unwrap_or("-")));
+            detail.push(format!("Last success: {}", automation.get("last_success_at").and_then(|v| v.as_str()).unwrap_or("-")));
+            detail.push(format!("Last failure: {}", automation.get("last_failure_at").and_then(|v| v.as_str()).unwrap_or("-")));
+            detail.push(format!("Consecutive failures: {}", automation.get("consecutive_failures").and_then(|v| v.as_u64()).unwrap_or(0)));
+            detail.push(format!("Result: {}", automation.get("last_result_summary").and_then(|v| v.as_str()).unwrap_or("")));
+            runs.push("Recent runs".to_string());
+            if let Some(items) = automation.get("runs_tail").and_then(|v| v.as_array()) {
+                for item in items.iter().rev().take(8) {
+                    let ts = item.get("ts").and_then(|v| v.as_str()).unwrap_or("");
+                    let ok = item.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let summary = item.get("summary").and_then(|v| v.as_str()).unwrap_or("");
+                    runs.push(format!("- {} [{}] {}", ts, if ok { "ok" } else { "fail" }, summary));
+                    if let Some(details) = item.get("details") {
+                        if let Some(path) = details.get("screenshot").and_then(|v| v.as_str()) {
+                            runs.push(format!("  screenshot: {}", path));
+                        }
+                    }
+                }
+            }
+            if runs.len() == 1 { runs.push("No runs yet.".to_string()); }
+        } else {
+            detail.push("No automation selected.".to_string());
+            runs.push("No runs yet.".to_string());
+        }
+        draw_dashboard_panel(stdout, cols[0], "automations list", &list, app.dashboard.focus_row == 2 && app.dashboard.focus_col == 0)?;
+        draw_dashboard_panel(stdout, cols[1], "automation details", &detail, app.dashboard.focus_row == 2 && app.dashboard.focus_col == 1)?;
+        draw_dashboard_panel(stdout, cols[2], "automation runs", &runs, app.dashboard.focus_row == 2 && app.dashboard.focus_col == 2)?;
+    }
+
     Ok(())
 }
 
@@ -3565,6 +3812,8 @@ fn main() -> io::Result<()> {
     let mut local_view_dirty = false;
     let mut last_rowing_tick = Instant::now();
     let mut last_session_poll = Instant::now() - Duration::from_secs(1);
+    let mut transcript_last_lines: Vec<String> = Vec::new();
+    let mut transcript_mode_active_last = false;
 
     loop {
         app.chat.clear_expired_notices();
@@ -3658,39 +3907,53 @@ fn main() -> io::Result<()> {
         let native_snapshot_dirty = native_input_dirty;
         if (needs_full_redraw || sessions_dirty || dashboard_dirty || chat_view_dirty || inter_agent_dirty || native_snapshot_dirty) && now.duration_since(last_render) >= frame_duration {
             stdout.queue(cursor::Hide)?;
+            let chat_transcript_mode = app.active_view == View::Chat && app.chat.view_mode == ChatViewMode::Transcript;
             let force_all = needs_full_redraw;
-            if needs_full_redraw {
-                stdout.queue(ct::Clear(ct::ClearType::All))?;
+            if chat_transcript_mode {
+                let force_reset = force_all || !transcript_mode_active_last;
+                render_chat_transcript_mode(&mut stdout, &app, outer_w, outer_h, &mut transcript_last_lines, force_reset)?;
                 needs_full_redraw = false;
-            }
+                stdout.flush()?;
+            } else {
+                if transcript_mode_active_last {
+                    stdout.queue(ct::Clear(ct::ClearType::All))?;
+                    stdout.queue(cursor::MoveTo(0, 0))?;
+                    transcript_last_lines.clear();
+                }
+                if needs_full_redraw {
+                    stdout.queue(ct::Clear(ct::ClearType::All))?;
+                    needs_full_redraw = false;
+                }
 
-            draw_header(&mut stdout, &app, outer_w)?;
-            match app.active_view {
-                View::Chat => draw_chat(&mut stdout, &app, outer_w, outer_h)?,
-                View::Dashboard => draw_dashboard(&mut stdout, &app, outer_w, outer_h)?,
-                View::Sessions => draw_sessions(
-                    &mut stdout,
-                    &mut app,
-                    &session_rects,
-                    force_all,
-                    outer_w,
-                    outer_h,
-                    native_session.as_ref().map(|s| s.socket_path().to_string_lossy().to_string()).as_deref(),
-                )?,
-                View::InterAgent => draw_inter_agent(&mut stdout, &mut app, outer_w, outer_h)?,
+                draw_header(&mut stdout, &app, outer_w)?;
+                match app.active_view {
+                    View::Chat => draw_chat(&mut stdout, &app, outer_w, outer_h)?,
+                    View::Dashboard => draw_dashboard(&mut stdout, &app, outer_w, outer_h)?,
+                    View::Sessions => draw_sessions(
+                        &mut stdout,
+                        &mut app,
+                        &session_rects,
+                        force_all,
+                        outer_w,
+                        outer_h,
+                        native_session.as_ref().map(|s| s.socket_path().to_string_lossy().to_string()).as_deref(),
+                    )?,
+                    View::InterAgent => draw_inter_agent(&mut stdout, &mut app, outer_w, outer_h)?,
+                }
+                draw_footer(&mut stdout, &app, outer_w, outer_h)?;
+                stdout.flush()?;
             }
-            draw_footer(&mut stdout, &app, outer_w, outer_h)?;
             if let Some(server) = &native_session {
                 let self_sock = server.socket_path().to_string_lossy().to_string();
                 let (snap_w, snap_h) = server.requested_size().unwrap_or((outer_w, outer_h));
                 server.update_snapshot(build_native_session_snapshot(&mut app, snap_w.max(1), snap_h.max(1), Some(&self_sock)));
             }
-            stdout.flush()?;
+            transcript_mode_active_last = chat_transcript_mode;
             last_render = now;
             local_view_dirty = false;
         }
 
-        let want_mouse_capture = (app.active_view == View::Chat && app.chat.app_mouse_mode)
+        let want_mouse_capture = (app.active_view == View::Chat && app.chat.view_mode == ChatViewMode::Workspace && app.chat.app_mouse_mode)
             || (app.active_view == View::Sessions && !app.sessions.terminal_mode)
             || (app.active_view == View::InterAgent && app.inter_agent.app_mouse_mode);
         if want_mouse_capture != mouse_capture_enabled {
@@ -3743,7 +4006,10 @@ fn main() -> io::Result<()> {
                                 match app.chat.view_mode {
                                     ChatViewMode::Transcript => {
                                         app.chat.info_pane_open = false;
-                                        app.chat.app_mouse_mode = true;
+                                        app.chat.app_mouse_mode = false;
+                                        app.chat.selection_anchor = None;
+                                        app.chat.selection_focus = None;
+                                        app.chat.selection_dragging = false;
                                     }
                                     ChatViewMode::Workspace => {
                                         app.chat.info_pane_open = true;
@@ -3931,14 +4197,52 @@ fn main() -> io::Result<()> {
                         }
                         View::Dashboard => {
                             let agent_count = payload_agents(app.chat.refresh_payload.as_ref()).len();
+                            let project_count = payload_projects(app.chat.refresh_payload.as_ref()).len();
+                            let automation_count = payload_automations(app.chat.refresh_payload.as_ref()).len();
                             match key.code {
+                                KeyCode::Left => {
+                                    app.dashboard.focus_col = app.dashboard.focus_col.saturating_sub(1);
+                                    needs_full_redraw = true;
+                                }
+                                KeyCode::Right => {
+                                    if app.dashboard.focus_col < 2 {
+                                        app.dashboard.focus_col += 1;
+                                    }
+                                    needs_full_redraw = true;
+                                }
+                                KeyCode::Tab => {
+                                    app.dashboard.focus_row = (app.dashboard.focus_row + 1) % 3;
+                                    app.dashboard.focus_col = 0;
+                                    needs_full_redraw = true;
+                                }
+                                KeyCode::BackTab => {
+                                    app.dashboard.focus_row = (app.dashboard.focus_row + 2) % 3;
+                                    app.dashboard.focus_col = 0;
+                                    needs_full_redraw = true;
+                                }
                                 KeyCode::Up => {
-                                    app.dashboard.selected = app.dashboard.selected.saturating_sub(1);
+                                    if app.dashboard.focus_col == 0 {
+                                        match app.dashboard.focus_row {
+                                            0 => app.dashboard.agent_index = app.dashboard.agent_index.saturating_sub(1),
+                                            1 => app.dashboard.project_index = app.dashboard.project_index.saturating_sub(1),
+                                            2 => app.dashboard.automation_index = app.dashboard.automation_index.saturating_sub(1),
+                                            _ => {}
+                                        }
+                                    } else {
+                                        app.dashboard.focus_row = app.dashboard.focus_row.saturating_sub(1);
+                                    }
                                     needs_full_redraw = true;
                                 }
                                 KeyCode::Down => {
-                                    if app.dashboard.selected + 1 < agent_count {
-                                        app.dashboard.selected += 1;
+                                    if app.dashboard.focus_col == 0 {
+                                        match app.dashboard.focus_row {
+                                            0 if app.dashboard.agent_index + 1 < agent_count => app.dashboard.agent_index += 1,
+                                            1 if app.dashboard.project_index + 1 < project_count => app.dashboard.project_index += 1,
+                                            2 if app.dashboard.automation_index + 1 < automation_count => app.dashboard.automation_index += 1,
+                                            _ => {}
+                                        }
+                                    } else if app.dashboard.focus_row < 2 {
+                                        app.dashboard.focus_row += 1;
                                     }
                                     needs_full_redraw = true;
                                 }
@@ -4297,7 +4601,7 @@ fn main() -> io::Result<()> {
                     }
                 }
                 Event::Mouse(mouse) => {
-                    if app.active_view == View::Chat && app.chat.app_mouse_mode {
+                    if app.active_view == View::Chat && app.chat.view_mode == ChatViewMode::Workspace && app.chat.app_mouse_mode {
                         let area = chat_content_area(&app, outer_w, outer_h);
                         let lines = build_chat_visual_lines(&app, area.width as usize, chat_layout_variant(outer_w, outer_h));
                         match mouse.kind {
