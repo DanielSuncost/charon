@@ -31,7 +31,7 @@ _INVISIBLE_CHARS = {
     '\u202a', '\u202b', '\u202c', '\u202d', '\u202e',
 }
 
-USER_MODEL_CHAR_LIMIT = 2000
+USER_MODEL_CHAR_LIMIT = 5000
 PROJECT_KNOWLEDGE_CHAR_LIMIT = 3000
 ENTRY_DELIMITER = '\n§\n'
 
@@ -76,7 +76,7 @@ USER_MODEL_TOOL_DEF = {
             },
             'category': {
                 'type': 'string',
-                'enum': ['style', 'coding', 'tooling', 'workflow', 'patterns'],
+                'enum': ['style', 'coding', 'tooling', 'workflow', 'patterns', 'interests', 'mental_model'],
                 'description': 'Category for "set" action.',
             },
             'key': {
@@ -218,7 +218,7 @@ def execute_user_model(params: dict, ctx: ToolContext) -> ToolResult:
         value = str(params.get('value', '')).strip()
         if not category or not key or not value:
             return ToolResult(content='Error: set requires category, key, and value.', is_error=True)
-        if category not in ('style', 'coding', 'tooling', 'workflow', 'patterns'):
+        if category not in ('style', 'coding', 'tooling', 'workflow', 'patterns', 'interests', 'mental_model'):
             return ToolResult(content=f'Error: invalid category "{category}".', is_error=True)
 
         scan_err = _scan_content(value)
@@ -367,14 +367,28 @@ PROJECT_KNOWLEDGE_TOOL_DEF = {
 }
 
 
-def _knowledge_path(project_root: Path) -> Path:
-    """Path to project knowledge file."""
+def _knowledge_path(project_root: Path, state_dir: Path | None = None) -> Path:
+    """Path to project knowledge file.
+
+    Prefer canonical project-local storage under state_dir/projects/<id>/KNOWLEDGE.md,
+    falling back to repo-local .charon/PROJECT_KNOWLEDGE.md for compatibility.
+    """
+    if state_dir is not None:
+        try:
+            from project_registry_loader import load_ensure_project_from_tools
+            ensure_project = load_ensure_project_from_tools(__file__, 'memory_tools')
+            proj = ensure_project(state_dir, project_root)
+            pid = str(proj.get('id') or '')
+            if pid:
+                return state_dir / 'projects' / pid / 'KNOWLEDGE.md'
+        except Exception:
+            pass
     return project_root / '.charon' / 'PROJECT_KNOWLEDGE.md'
 
 
-def _load_knowledge_entries(project_root: Path) -> list[str]:
+def _load_knowledge_entries(project_root: Path, state_dir: Path | None = None) -> list[str]:
     """Load project knowledge entries from the knowledge file."""
-    kp = _knowledge_path(project_root)
+    kp = _knowledge_path(project_root, state_dir)
     if not kp.exists():
         return []
     try:
@@ -386,9 +400,9 @@ def _load_knowledge_entries(project_root: Path) -> list[str]:
         return []
 
 
-def _save_knowledge_entries(project_root: Path, entries: list[str]) -> None:
+def _save_knowledge_entries(project_root: Path, entries: list[str], state_dir: Path | None = None) -> None:
     """Save project knowledge entries."""
-    kp = _knowledge_path(project_root)
+    kp = _knowledge_path(project_root, state_dir)
     kp.parent.mkdir(parents=True, exist_ok=True)
     kp.write_text(ENTRY_DELIMITER.join(entries) if entries else '(empty)', encoding='utf-8')
 
@@ -399,7 +413,7 @@ def execute_project_knowledge(params: dict, ctx: ToolContext) -> ToolResult:
     content = str(params.get('content', '')).strip()
     old_text = str(params.get('old_text', '')).strip()
 
-    entries = _load_knowledge_entries(ctx.project_root)
+    entries = _load_knowledge_entries(ctx.project_root, ctx.state_dir)
 
     if action == 'read':
         return ToolResult(content=_format_entries(
@@ -430,7 +444,7 @@ def execute_project_knowledge(params: dict, ctx: ToolContext) -> ToolResult:
             )
 
         entries.append(content)
-        _save_knowledge_entries(ctx.project_root, entries)
+        _save_knowledge_entries(ctx.project_root, entries, ctx.state_dir)
         return ToolResult(content='Entry added.\n\n'
                           + _format_entries(entries, PROJECT_KNOWLEDGE_CHAR_LIMIT,
                                             f'Project Knowledge ({ctx.project_root.name})'))
@@ -461,7 +475,7 @@ def execute_project_knowledge(params: dict, ctx: ToolContext) -> ToolResult:
             return ToolResult(content=f'Error: Replacement would exceed limit.', is_error=True)
 
         entries[idx] = content
-        _save_knowledge_entries(ctx.project_root, entries)
+        _save_knowledge_entries(ctx.project_root, entries, ctx.state_dir)
         return ToolResult(content='Entry replaced.\n\n'
                           + _format_entries(entries, PROJECT_KNOWLEDGE_CHAR_LIMIT,
                                             f'Project Knowledge ({ctx.project_root.name})'))
@@ -477,7 +491,7 @@ def execute_project_knowledge(params: dict, ctx: ToolContext) -> ToolResult:
             return ToolResult(content=f'Error: Multiple entries matched. Be more specific.', is_error=True)
 
         entries.pop(matches[0][0])
-        _save_knowledge_entries(ctx.project_root, entries)
+        _save_knowledge_entries(ctx.project_root, entries, ctx.state_dir)
         return ToolResult(content='Entry removed.\n\n'
                           + _format_entries(entries, PROJECT_KNOWLEDGE_CHAR_LIMIT,
                                             f'Project Knowledge ({ctx.project_root.name})'))

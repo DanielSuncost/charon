@@ -598,7 +598,7 @@ def _run_task_with_engine(
 
     # Index conversation into semantic memory (background, non-blocking)
     try:
-        from memory_indexer import index_conversation
+        from memory_indexer import index_conversation, extract_and_index_facts
         # Reconstruct turns from what the engine produced
         index_turns = []
         if instruction:
@@ -608,7 +608,10 @@ def _run_task_with_engine(
         for tc in tool_calls_made:
             if tc.get('result') and not tc.get('is_error'):
                 index_turns.append({'role': 'tool', 'content': tc['result']})
+        # Fast path: verbatim embedding of all turns
         index_conversation(state_dir, index_turns, agent_id=agent_id, conv_id=task_id)
+        # Slow path: LLM-based structured fact extraction (skips trivial sessions)
+        extract_and_index_facts(state_dir, index_turns, agent_id=agent_id, conv_id=task_id)
     except ImportError:
         pass
     record_attempt_event(

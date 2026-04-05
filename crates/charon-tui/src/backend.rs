@@ -470,6 +470,22 @@ impl ByteStream for BoatPane {
 }
 
 fn project_root() -> PathBuf {
+    if let Ok(root) = std::env::var("CHARON_ROOT") {
+        let path = PathBuf::from(root);
+        if path.exists() {
+            return path;
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        for anc in exe.ancestors() {
+            let marker = anc.join("apps").join("core-daemon");
+            if marker.exists() {
+                return anc.to_path_buf();
+            }
+        }
+    }
+
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf()
 }
 

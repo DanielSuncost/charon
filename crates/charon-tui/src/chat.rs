@@ -161,6 +161,22 @@ fn merge_json_objects(dst: &mut Map<String, Value>, src: &Map<String, Value>) {
 }
 
 fn project_root() -> PathBuf {
+    if let Ok(root) = std::env::var("CHARON_ROOT") {
+        let path = PathBuf::from(root);
+        if path.exists() {
+            return path;
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        for anc in exe.ancestors() {
+            let marker = anc.join("apps").join("core-daemon");
+            if marker.exists() {
+                return anc.to_path_buf();
+            }
+        }
+    }
+
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent().unwrap()
         .parent().unwrap()
@@ -212,6 +228,12 @@ pub struct ChatTextPoint {
     pub col: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChatViewMode {
+    Transcript,
+    Workspace,
+}
+
 #[derive(Clone, Debug)]
 pub struct ProvisionalOutcome {
     pub summary: String,
@@ -240,9 +262,11 @@ pub struct ChatState {
     pub auth_url: Option<String>,
     pub auth_action_index: usize,
     pub approval: Option<ApprovalRequest>,
+    pub view_mode: ChatViewMode,
     pub info_pane_open: bool,
     pub info_pane_tab: usize,
     pub copy_mode: bool,
+    pub app_mouse_mode: bool,
     pub selection_anchor: Option<ChatTextPoint>,
     pub selection_focus: Option<ChatTextPoint>,
     pub selection_dragging: bool,
@@ -276,9 +300,11 @@ impl ChatState {
             auth_url: None,
             auth_action_index: 0,
             approval: None,
-            info_pane_open: true,
+            view_mode: ChatViewMode::Transcript,
+            info_pane_open: false,
             info_pane_tab: 0,
             copy_mode: false,
+            app_mouse_mode: true,
             selection_anchor: None,
             selection_focus: None,
             selection_dragging: false,
@@ -885,6 +911,9 @@ impl ChatState {
                 }
             }
             "model_picker" => {
+                self.auth_provider = None;
+                self.auth_url = None;
+                self.auth_action_index = 0;
                 let picker_type = v.get("provider").and_then(|x| x.as_str()).unwrap_or("");
                 let title = if picker_type == "resume" {
                     "Resume Session"
@@ -945,7 +974,14 @@ impl ChatState {
                 self.auth_url = Some(url.to_string());
                 self.auth_action_index = 0;
                 self.push_status(&format!("Authentication required for {}", provider));
-                self.push_status("A browser window should open automatically.");
+                if open_url(url) {
+                    self.push_status("Opened auth link in browser.");
+                } else {
+                    self.push_status("Could not open browser automatically.");
+                }
+                if copy_to_clipboard(url) {
+                    self.push_status("Copied auth link to clipboard.");
+                }
                 self.push_status(&format!("Open this URL: {}", url));
                 self.push_status("Fallback: /setup auth-code <CODE>");
             }
@@ -1007,9 +1043,8 @@ impl ChatState {
                     let step = p.get("onboarding").and_then(|o| o.get("step")).and_then(|x| x.as_str()).unwrap_or("");
                     if step != "provider-auth" {
                         self.auth_provider = None;
-                        if step == "done" {
-                            self.auth_url = None;
-                        }
+                        self.auth_url = None;
+                        self.auth_action_index = 0;
                     }
                 }
                 if let Some(id) = v.get("session_id").and_then(|x| x.as_str()) {
@@ -1340,7 +1375,11 @@ impl ChatState {
 fn open_url(url: &str) -> bool {
     let attempts: &[(&str, &[&str])] = &[
         ("xdg-open", &[]),
+        ("gio", &["open"]),
+        ("sensible-browser", &[]),
         ("open", &[]),
+        ("wslview", &[]),
+        ("cmd.exe", &["/C", "start", ""]),
     ];
     for (cmd, args) in attempts {
         let mut command = Command::new(cmd);

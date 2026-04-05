@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Multi-session terminal grid with embedded VTE emulators and backend-agnostic byte streams"
 
+[[bin]]
+name = "charon"
+path = "src/main.rs"
+
 [dependencies]
 vte = "0.15"
 crossterm = "0.28"

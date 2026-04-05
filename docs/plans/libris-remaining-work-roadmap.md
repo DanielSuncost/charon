@@ -76,20 +76,21 @@ Finish Libris as a native Charon research system with:
 - procurement shade outputs can now be summarized and partially ingested
 - still needs more reliable source/claim extraction and stronger evidence integration
 
-### Graph-ready backend
+### Libris F4 refinement
 - backend shape is strong enough for F4
-- frontend implementation still pending
+- OpenTUI now has a working Libris F4 room renderer
+- remaining work is refinement: topology-aware navigation, richer graph rendering, and further operator polish
 
 ---
 
 ## Not yet done
 
 ### UI / room experience
-- actual F4 room implementation
-- room switching between Libris/dev-team/conversation rooms
-- graph rendering
+- topology-aware graph navigation beyond current index-based cycling
+- richer geometric / box-drawn graph rendering
 - animated bright/dim communication lines
-- intervention UX in the room
+- intervention UX polish beyond current target-aware prefills and steering routing
+- further mixed-room polish between Libris/dev-team/conversation rooms
 
 ### Stronger research quality loop
 - critique decomposition into bounded follow-up questions
@@ -119,8 +120,8 @@ Finish Libris as a native Charon research system with:
 
 ## Priority 1 — highest value now
 
-### P1. F4 room + graph UI
-Build the first working F4 Libris room using current swarm state.
+### P1. F4 room + graph UI refinement
+Refine the shipped F4 Libris room using current swarm state.
 
 Acceptance:
 - can switch to F4
@@ -129,6 +130,7 @@ Acceptance:
 - edges brighten when active
 - topic clusters are visible
 - selection/detail panel works
+- intervention targeting feels operator-grade rather than merely functional
 
 ### P2. Improve canonical ingestion from shade outputs
 Make procurement and future research shades feed structured outputs into:
@@ -197,10 +199,10 @@ Targets:
 - stronger budget adaptation
 
 ### P9. Richer room/intervention semantics
-- room-level interventions
-- node-targeted interventions
-- room message provenance
-- mixed-agent room polish (Charon/Hermes/Pi)
+- topic-aware / topology-aware intervention flows beyond current target-prefill model
+- stronger room message provenance and intervention auditability
+- richer mixed-agent room polish (Charon/Hermes/Pi)
+- deeper operator actions beyond today’s steering-only path
 
 ### P10. Advanced graph UX
 - topic focus mode
@@ -213,7 +215,7 @@ Targets:
 ## 4. Immediate next build sequence
 
 ### Step 1
-Implement the first working F4 room UI against the existing swarm-state backend.
+Refine the shipped F4 room UI against the existing swarm-state backend.
 
 ### Step 2
 Strengthen procurement ingestion so completed shade contracts produce better canonical source/claim records.
@@ -243,14 +245,17 @@ Expand shade contract taxonomy.
 - [ ] Add stronger budget adaptation logic in coordinator
 
 ## TUI / room system
-- [ ] Add F4 room registration
-- [ ] Add Libris room type
-- [ ] Poll `get_swarm_state(operation_id)`
-- [ ] Render topic-clustered graph
-- [ ] Render communication edges with brightness from `activity_strength`
-- [ ] Add detail panel for selected node/topic
-- [ ] Add room event log panel
-- [ ] Add intervention controls
+- [x] Add F4 room registration
+- [x] Add Libris room type
+- [x] Poll shared room refresh payload carrying Libris swarm state into F4
+- [x] Render topic-clustered graph (text-mode MVP)
+- [x] Render communication edges with brightness from `activity_strength`
+- [x] Add detail panel for selected node/topic
+- [x] Add room event log panel
+- [x] Add intervention controls
+- [x] Add Libris-specific intervention targets and target-aware prefills
+- [ ] Make graph navigation topology-aware
+- [ ] Upgrade graph rendering from text-mode MVP toward the full viz spec
 
 ## Specs / docs
 - [ ] Add Libris intake contract doc
@@ -283,7 +288,10 @@ Libris v1.0 is done when all of the following are true:
 The best parallel split is:
 
 ### TUI side
-Build the first working F4 room against the current swarm-state backend.
+Refine the shipped F4 Libris room toward release quality:
+- topology-aware navigation
+- richer graph rendering
+- continued operator/intervention polish
 
 ### Backend side
 Continue strengthening:
@@ -291,4 +299,4 @@ Continue strengthening:
 - critique-driven reruns
 - final delivery bundle
 
-This gets Libris to a compelling demo state fastest.
+This gets Libris from compelling demo to stronger release quality fastest.

@@ -196,10 +196,19 @@ def _evaluate_budget(operation: dict[str, Any]) -> dict[str, Any]:
 
 # ── Project paths / metadata ────────────────────────────────────────
 
+from project_registry_loader import load_ensure_project
+
+_ensure_project_registry = load_ensure_project(__file__, 'libris_runtime')
+
 
 def derive_project_id(project_root: Path) -> str:
-    base = _slug(project_root.name or 'project', 'project', 48)
-    return f'{base}-{_short_hash(str(project_root.resolve()))}'
+    state_dir = project_root.parent / '.charon_state'
+    try:
+        proj = _ensure_project_registry(state_dir, project_root, provisional=True)
+        return str(proj.get('id') or '') or _slug(project_root.name or 'project', 'project', 48)
+    except Exception:
+        base = _slug(project_root.name or 'project', 'project', 48)
+        return f'{base}-{_short_hash(str(project_root.resolve()))}'
 
 
 def project_dir(state_dir: Path, project_root: Path) -> Path:
@@ -220,23 +229,26 @@ def ensure_project_metadata(
     summary: str | None = None,
 ) -> dict[str, Any]:
     root = project_root.resolve()
-    pid = derive_project_id(root)
+    base = _ensure_project_registry(state_dir, root, kind=kind or 'software', summary=summary or '', provisional=True)
+    pid = str(base.get('id') or derive_project_id(root))
     path = project_json_path(state_dir, root)
     existing = _read_json(path, {})
     now = _now_iso()
 
     doc = {
         'id': existing.get('id') or pid,
-        'name': existing.get('name') or (root.name or pid),
-        'kind': existing.get('kind') or 'software',
+        'name': existing.get('name') or base.get('name') or (root.name or pid),
+        'kind': existing.get('kind') or base.get('kind') or 'software',
         'research_mode': existing.get('research_mode'),
         'status': existing.get('status') or 'active',
         'root_path': str(root),
+        'roots': existing.get('roots') or base.get('roots') or [str(root)],
         'linked_paths': existing.get('linked_paths') or [],
         'parent_project_id': existing.get('parent_project_id'),
         'tags': existing.get('tags') or [],
-        'summary': existing.get('summary') or '',
-        'created_at': existing.get('created_at') or now,
+        'summary': existing.get('summary') or base.get('summary') or '',
+        'provisional': existing.get('provisional', base.get('provisional', True)),
+        'created_at': existing.get('created_at') or base.get('created_at') or now,
         'updated_at': now,
     }
 

@@ -45,23 +45,31 @@ Persisted runner state currently includes:
 
 ### F4 room controls
 
-Added an initial F4 room view in the OpenTUI.
+Added an initial F4 room view in the OpenTUI, later extended with a dedicated Libris room renderer.
 
-Current controls:
+Current generic room controls:
 
 - `F4` to open room controls
 - `↑↓` select room
 - `p` pause/resume selected room, with immediate local UI feedback
 - `i` jump back to chat with a next-turn `/inject-room ...` command prefilled
-- `Enter` jump back to chat with `/say-room ...` prefilled
+- `Enter` jump back to chat with `/say-room ...` prefilled for generic rooms
 - `d` delete the selected room and close its participant sessions
 - `r` refresh
+
+Current Libris-specific F4 controls additionally include:
+- `1` / `2` / `g` / `v` / `Tab` for Team Grid vs Swarm Graph switching
+- node/topic/detail navigation inside the room
+- `f` topic focus
+- `m` intervention target mode cycling
+- `Enter` prefilled immediate targeted `/inject-room ... --when now ...`
+- `i` prefilled queued targeted `/inject-room ... --when next ...`
 
 ### User interjection / steering
 
 Added command:
 
-- `/inject-room <room-id> [--target whole|teacher|student|<participant>] [--when now|next] <message>`
+- `/inject-room <room-id> [--target whole|teacher|student|<participant>|coordinator|topic:<slug>|node:<agent-id>|researcher:<slug>|judge:<slug>|shade:<agent-id>] [--when now|next] <message>`
 
 Behavior:
 
@@ -73,6 +81,13 @@ Behavior:
   - teacher
   - student
   - a participant id / name / session substring
+  - for Libris rooms specifically:
+    - coordinator
+    - topic slug via `topic:<slug>`
+    - selected/explicit node via `node:<agent-id>`
+    - topic researcher via `researcher:<slug>`
+    - topic judge via `judge:<slug>`
+    - shade via `shade:<agent-id>`
 - `--when now` is currently best-effort: it is prioritized for the next runnable turn, not a hard mid-generation abort
 - Matching interjections are consumed when the targeted participant is about to speak
 - Applied interjections are appended into the turn prompt as room steering notes

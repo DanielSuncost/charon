@@ -3,12 +3,23 @@
 > Room-level UX spec for Libris inside the generalized F4 multi-agent chat-room view.
 >
 > Date: 2026-03-29
-> Status: Proposed
+> Status: Active
 > Related:
 > - `docs/plans/libris-f4-graph-viz-spec.md`
 > - `docs/plans/libris-swarm-state-data-contract.md`
 
 ---
+
+## 0. Implementation note
+
+The current checked-in OpenTUI implementation in `apps/tui/opentui/src/index.ts` now includes a working Libris-specific F4 room renderer with:
+- Team Grid mode
+- Swarm Graph mode
+- a shared detail panel
+- room-local event/source/delivery views
+- selection-aware intervention targeting and prefills
+
+This document should now be read as the target UX and refinement guide for that implementation, not as a description of a completely missing feature.
 
 ## 1. Purpose
 
@@ -122,10 +133,11 @@ This mode uses the graph spec in `libris-f4-graph-viz-spec.md`.
 ## 5. Mode switching
 
 Recommended keys:
-- `g` → graph mode
+- `g` or `2` → graph mode
 - `v` or `tab` → cycle between room views
 - `1` → team grid
 - `2` → swarm graph
+- `m` → cycle intervention target mode (`auto` / `whole` / `coordinator` / `topic` / `node`)
 
 The current mode should be visible in the header.
 
@@ -232,9 +244,20 @@ The user should be able to intervene from either mode.
 Targets:
 - whole room
 - coordinator
+- selected topic
 - selected researcher
 - selected judge
+- selected shade
 - selected node in graph
+
+Current checked-in target forms supported by `/inject-room` for Libris rooms:
+- `whole`
+- `coordinator`
+- `topic:<slug>`
+- `researcher:<slug>`
+- `judge:<slug>`
+- `shade:<agent-id>`
+- `node:<agent-id>`
 
 Intervention types:
 - suggestion

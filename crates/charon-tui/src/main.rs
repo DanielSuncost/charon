@@ -37,7 +37,7 @@ use crossterm::{
 };
 
 use backend::discover_sessions;
-use chat::{ChatMessage, ChatTextPoint, LaunchOptions};
+use chat::{ChatMessage, ChatTextPoint, ChatViewMode, LaunchOptions};
 use grid::compute_grid;
 use native_session::{NativeCommand, NativeSessionServer};
 use parser::AnsiParser;
@@ -381,6 +381,14 @@ fn payload_projects(payload: Option<&Value>) -> Vec<&Value> {
         .unwrap_or_default()
 }
 
+fn payload_automations(payload: Option<&Value>) -> Vec<&Value> {
+    payload
+        .and_then(|p| p.get("automations"))
+        .and_then(|a| a.as_array())
+        .map(|v| v.iter().collect())
+        .unwrap_or_default()
+}
+
 fn payload_activity(payload: Option<&Value>) -> Vec<String> {
     payload
         .and_then(|p| p.get("activity"))
@@ -413,21 +421,52 @@ fn draw_header<W: Write>(stdout: &mut W, app: &App, w: u16) -> io::Result<()> {
     stdout.queue(style::SetForegroundColor(style::Color::Rgb { r: 167, g: 139, b: 250 }))?;
 
     let view = match app.active_view {
-        View::Chat => "F1 Chat",
-        View::Dashboard => "F2 Dashboard",
-        View::Sessions => "F3 Sessions",
-        View::InterAgent => "F4 Inter-Agent",
+        View::Chat => match app.chat.view_mode {
+            ChatViewMode::Transcript => "Chat/Transcript",
+            ChatViewMode::Workspace => "Chat/Workspace",
+        },
+        View::Dashboard => "Dashboard",
+        View::Sessions => "Sessions",
+        View::InterAgent => "Groups",
     };
 
-    let sessions_mode = if app.active_view == View::Sessions {
-        if app.sessions.terminal_mode { " │ terminal mode (Ctrl+] / Ctrl+G / F4)" } else { " │ grid mode (Enter to interact)" }
-    } else {
-        ""
+    let extra = match app.active_view {
+        View::Chat => match app.chat.view_mode {
+            ChatViewMode::Transcript => {
+                if app.chat.app_mouse_mode {
+                    " │ F5:workspace │ F6:mouse terminal"
+                } else {
+                    " │ F5:workspace │ F6:mouse app"
+                }
+            }
+            ChatViewMode::Workspace => {
+                if app.chat.app_mouse_mode {
+                    " │ F5:transcript │ F6:mouse terminal"
+                } else {
+                    " │ F5:transcript │ F6:mouse app"
+                }
+            }
+        },
+        View::Sessions => {
+            if app.sessions.terminal_mode {
+                " │ terminal mode (Ctrl+] / Ctrl+G / F4)"
+            } else {
+                " │ grid mode (Enter to interact)"
+            }
+        }
+        View::InterAgent => {
+            if app.inter_agent.app_mouse_mode {
+                " │ F6:mouse terminal"
+            } else {
+                " │ F6:mouse app"
+            }
+        }
+        View::Dashboard => "",
     };
 
     let header = format!(
-        " CHARON │ {} │ F1 Chat │ F2 Dashboard │ F3 Sessions │ F4 Groups │ Ctrl+Q Quit{} ",
-        view, sessions_mode
+        " CHARON │ {} │ F1:chat │ F2:dash │ F3:sessions │ F4:groups │ Ctrl+Q:quit{} ",
+        view, extra
     );
     let visible: String = header.chars().take(w as usize).collect();
     let pad = (w as usize).saturating_sub(visible.chars().count());
@@ -569,6 +608,9 @@ fn rowing_indicator_lines(frame: usize) -> Vec<ChatRenderLine> {
     let mk = |spans: Vec<(style::Color, &str)>| ChatRenderLine {
         spans: spans.into_iter().map(|(fg, text)| ChatSpan { fg, text: text.to_string() }).collect(),
         bg: None,
+        copy_text: String::new(),
+        copy_offset: 0,
+        selectable: false,
     };
     match frame % 4 {
         0 => vec![
@@ -693,12 +735,30 @@ struct ChatSpan {
 struct ChatRenderLine {
     spans: Vec<ChatSpan>,
     bg: Option<style::Color>,
+    copy_text: String,
+    copy_offset: usize,
+    selectable: bool,
 }
 
 fn single_span_line(fg: style::Color, bg: Option<style::Color>, text: impl Into<String>) -> ChatRenderLine {
+    let text = text.into();
     ChatRenderLine {
-        spans: vec![ChatSpan { fg, text: text.into() }],
+        spans: vec![ChatSpan { fg, text: text.clone() }],
         bg,
+        copy_text: text,
+        copy_offset: 0,
+        selectable: true,
+    }
+}
+
+fn nonselectable_line(fg: style::Color, bg: Option<style::Color>, text: impl Into<String>) -> ChatRenderLine {
+    let text = text.into();
+    ChatRenderLine {
+        spans: vec![ChatSpan { fg, text }],
+        bg,
+        copy_text: String::new(),
+        copy_offset: 0,
+        selectable: false,
     }
 }
 
@@ -719,9 +779,12 @@ fn brand_lines(width: usize, variant: ChatLayoutVariant) -> Vec<ChatRenderLine> 
                 ChatSpan { fg: style::Color::Rgb { r: 90, g: 68, b: 40 }, text: " ━━━".to_string() },
             ],
             bg: None,
+            copy_text: String::new(),
+            copy_offset: 0,
+            selectable: false,
         });
-        out.push(single_span_line(subtitle_color, None, "  Agent Operating System"));
-        out.push(single_span_line(style::Color::Reset, None, String::new()));
+        out.push(nonselectable_line(subtitle_color, None, "  Agent Operating System"));
+        out.push(nonselectable_line(style::Color::Reset, None, String::new()));
         return out;
     }
 
@@ -789,11 +852,17 @@ fn brand_lines(width: usize, variant: ChatLayoutVariant) -> Vec<ChatRenderLine> 
             }
             spans.push(ChatSpan { fg: color, text: buf });
         }
-        out.push(ChatRenderLine { spans, bg: None });
+        out.push(ChatRenderLine {
+            copy_text: String::new(),
+            copy_offset: 0,
+            selectable: false,
+            spans,
+            bg: None,
+        });
     }
 
-    out.push(single_span_line(subtitle_color, None, "  Agent Operating System"));
-    out.push(single_span_line(style::Color::Reset, None, String::new()));
+    out.push(nonselectable_line(subtitle_color, None, "  Agent Operating System"));
+    out.push(nonselectable_line(style::Color::Reset, None, String::new()));
     out
 }
 
@@ -820,10 +889,16 @@ fn normalize_inline_markdown(text: &str) -> String {
 fn push_chat_block(lines: &mut Vec<ChatRenderLine>, text: &str, width: usize, fg: style::Color, bg: Option<style::Color>, left_pad: usize) {
     let inner = width.saturating_sub(left_pad);
     for wrapped in wrap_plain_text(text, inner.max(1)) {
-        let mut line = String::new();
-        line.push_str(&" ".repeat(left_pad));
-        line.push_str(&wrapped);
-        lines.push(single_span_line(fg, bg, line));
+        let mut render_line = String::new();
+        render_line.push_str(&" ".repeat(left_pad));
+        render_line.push_str(&wrapped);
+        lines.push(ChatRenderLine {
+            spans: vec![ChatSpan { fg, text: render_line }],
+            bg,
+            copy_text: wrapped,
+            copy_offset: left_pad,
+            selectable: true,
+        });
     }
 }
 
@@ -839,9 +914,9 @@ fn build_chat_visual_lines(app: &App, width: usize, variant: ChatLayoutVariant) 
     let code_bg = style::Color::Rgb { r: 22, g: 27, b: 34 };
     let mut visual_lines = brand_lines(width, variant);
 
-    if app.chat.messages.len() <= 1 {
-        visual_lines.push(single_span_line(style::Color::DarkGrey, None, "  Welcome to Charon. Type a message to begin."));
-        visual_lines.push(single_span_line(style::Color::Reset, None, String::new()));
+    if app.chat.messages.is_empty() {
+        visual_lines.push(nonselectable_line(style::Color::DarkGrey, None, "  Welcome to Charon. Type a message to begin."));
+        visual_lines.push(nonselectable_line(style::Color::Reset, None, String::new()));
     }
 
     for message in &app.chat.messages {
@@ -1304,14 +1379,19 @@ fn draw_popup_box<W: Write>(stdout: &mut W, area: Rect, title: &str, lines: &[(s
     Ok(())
 }
 
-fn chat_content_area(app: &App, w: u16, h: u16) -> Rect {
+fn chat_info_pane_width(app: &App, w: u16, h: u16) -> u16 {
     let variant = chat_layout_variant(w, h);
-    let reserved_bottom = chat_reserved_bottom(app, variant);
-    let info_pane_w = if app.chat.info_pane_open && variant == ChatLayoutVariant::Full && w >= 100 {
+    if app.chat.view_mode == ChatViewMode::Workspace && app.chat.info_pane_open && variant == ChatLayoutVariant::Full && w >= 100 {
         ((w as f32) * 0.15).floor().max(18.0) as u16
     } else {
         0
-    };
+    }
+}
+
+fn chat_content_area(app: &App, w: u16, h: u16) -> Rect {
+    let variant = chat_layout_variant(w, h);
+    let reserved_bottom = chat_reserved_bottom(app, variant);
+    let info_pane_w = chat_info_pane_width(app, w, h);
     let pane_gutter = if info_pane_w > 0 { 5 } else { 0 };
     let left_w = if info_pane_w > 0 { w.saturating_sub(info_pane_w + pane_gutter) } else { w };
     Rect {
@@ -1350,45 +1430,62 @@ fn chat_point_at_mouse(lines: &[ChatRenderLine], area: Rect, scroll: usize, x: u
     }
     let rel_y = clamped_y.saturating_sub(area.y) as usize;
     let row_idx = start + rel_y.min(visible.len().saturating_sub(1));
-    let text_len = lines.get(row_idx).map(|r| chat_line_text(r).chars().count()).unwrap_or(0);
-    let col = (clamped_x.saturating_sub(area.x) as usize).min(text_len);
+    let line = lines.get(row_idx)?;
+    if !line.selectable {
+        return None;
+    }
+    let text_len = line.copy_text.chars().count();
+    let rel_x = clamped_x.saturating_sub(area.x) as usize;
+    let col = rel_x.saturating_sub(line.copy_offset).min(text_len);
     Some(ChatTextPoint { row: row_idx, col })
 }
 
 fn chat_selection_text(lines: &[ChatRenderLine], bounds: (ChatTextPoint, ChatTextPoint)) -> String {
     let (start, end) = bounds;
     let mut out = String::new();
+    let mut wrote_any = false;
     for row_idx in start.row..=end.row {
-        let line = lines.get(row_idx).map(chat_line_text).unwrap_or_default();
-        let chars: Vec<char> = line.chars().collect();
+        let Some(line) = lines.get(row_idx) else { continue; };
+        if !line.selectable {
+            continue;
+        }
+        let chars: Vec<char> = line.copy_text.chars().collect();
         let line_len = chars.len();
         let from = if row_idx == start.row { start.col.min(line_len) } else { 0 };
         let to = if row_idx == end.row { end.col.min(line_len) } else { line_len };
+        if wrote_any {
+            out.push('\n');
+        }
         if from < to {
             out.extend(chars[from..to].iter().copied());
         }
-        if row_idx != end.row {
-            out.push('\n');
-        }
+        wrote_any = true;
+    }
+    while out.ends_with('\n') {
+        out.pop();
     }
     out
 }
 
-fn chat_selection_cols_for_row(row: usize, bounds: Option<(ChatTextPoint, ChatTextPoint)>) -> Option<(usize, usize)> {
+fn chat_selection_cols_for_row(line: &ChatRenderLine, row: usize, bounds: Option<(ChatTextPoint, ChatTextPoint)>) -> Option<(usize, usize)> {
     let (start, end) = bounds?;
-    if row < start.row || row > end.row {
+    if !line.selectable || row < start.row || row > end.row {
         return None;
     }
-    if start.row == end.row {
-        return Some((start.col, end.col));
+    let copy_len = line.copy_text.chars().count();
+    let (sel_start, sel_end) = if start.row == end.row {
+        (start.col.min(copy_len), end.col.min(copy_len))
+    } else if row == start.row {
+        (start.col.min(copy_len), copy_len)
+    } else if row == end.row {
+        (0, end.col.min(copy_len))
+    } else {
+        (0, copy_len)
+    };
+    if sel_start >= sel_end && copy_len > 0 {
+        return None;
     }
-    if row == start.row {
-        return Some((start.col, usize::MAX));
-    }
-    if row == end.row {
-        return Some((0, end.col));
-    }
-    Some((0, usize::MAX))
+    Some((line.copy_offset + sel_start, line.copy_offset + sel_end))
 }
 
 fn copy_chat_selection(app: &mut App, w: u16, h: u16) -> bool {
@@ -1438,14 +1535,20 @@ fn copy_inter_agent_selection(app: &mut App, room: &Value, area: Rect) -> bool {
     }
 }
 
+fn tail_visible_text(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let start = len.saturating_sub(width);
+    chars[start..].iter().collect()
+}
+
 fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<()> {
     let variant = chat_layout_variant(w, h);
     let reserved_bottom = chat_reserved_bottom(app, variant);
-    let info_pane_w = if app.chat.info_pane_open && variant == ChatLayoutVariant::Full && w >= 100 {
-        ((w as f32) * 0.15).floor().max(18.0) as u16
-    } else {
-        0
-    };
+    let info_pane_w = chat_info_pane_width(app, w, h);
     let pane_gutter = if info_pane_w > 0 { 5 } else { 0 };
     let left_w = if info_pane_w > 0 { w.saturating_sub(info_pane_w + pane_gutter) } else { w };
     let content = chat_content_area(app, w, h);
@@ -1460,7 +1563,7 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
 
     for (i, line) in slice.iter().enumerate() {
         let row_idx = start + i;
-        let selection_cols = chat_selection_cols_for_row(row_idx, selection_bounds);
+        let selection_cols = chat_selection_cols_for_row(line, row_idx, selection_bounds);
         draw_chat_line(stdout, content.x, content.y + i as u16, content_w, line, selection_cols)?;
     }
 
@@ -1517,10 +1620,22 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
     } else {
         "  type / for commands".to_string()
     };
-    let mut right2 = if app.chat.streaming {
-        "Esc:/interrupt  Enter:steer  /queue:follow-up".to_string()
-    } else {
-        "F1:chat  F2:dash  F3:sessions  Ctrl+P:info".to_string()
+    let mode_label = match app.chat.view_mode {
+        ChatViewMode::Transcript => "transcript",
+        ChatViewMode::Workspace => "workspace",
+    };
+    let mouse_mode = if app.chat.app_mouse_mode { "mouse:app" } else { "mouse:terminal" };
+    let mut right2 = match app.chat.view_mode {
+        ChatViewMode::Transcript => {
+            format!("F5:{}  Wheel:scroll  Drag/Ctrl+C:copy  F6:{}", mode_label, mouse_mode)
+        }
+        ChatViewMode::Workspace => {
+            if app.chat.streaming {
+                format!("F5:{}  Wheel:scroll  Right-click/Ctrl+C:copy  F6:{}", mode_label, mouse_mode)
+            } else {
+                format!("F5:{}  Wheel:scroll  Right-click/Ctrl+C:copy  Ctrl+P:info  F6:{}", mode_label, mouse_mode)
+            }
+        }
     };
     if let Some((notice, _ok)) = app.chat.clipboard_notice_text() {
         right2 = notice.to_string();
@@ -1552,7 +1667,7 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
             stdout.queue(cursor::MoveTo(input_area.x, input_area.y))?;
             stdout.queue(style::SetForegroundColor(style::Color::Rgb { r: 248, g: 250, b: 252 }))?;
             let prompt = format!("> {}", app.chat.input);
-            let visible: String = prompt.chars().take(input_area.width as usize).collect();
+            let visible = tail_visible_text(&prompt, input_area.width as usize);
             let pad = (input_area.width as usize).saturating_sub(visible.chars().count());
             write!(stdout, "{}{}", visible, " ".repeat(pad))?;
             stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
@@ -1566,7 +1681,7 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
         stdout.queue(cursor::MoveTo(input_area.x, input_area.y))?;
         stdout.queue(style::SetForegroundColor(style::Color::Rgb { r: 248, g: 250, b: 252 }))?;
         let prompt = format!("> {}", app.chat.input);
-        let visible: String = prompt.chars().take(input_area.width as usize).collect();
+        let visible = tail_visible_text(&prompt, input_area.width as usize);
         let pad = (input_area.width as usize).saturating_sub(visible.chars().count());
         write!(stdout, "{}{}", visible, " ".repeat(pad))?;
         stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
@@ -1652,7 +1767,7 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
         }
     }
 
-    if variant != ChatLayoutVariant::Tiny {
+    if variant != ChatLayoutVariant::Tiny && !app.chat.menu_open() {
         if let Some(url) = app.chat.auth_url.as_ref() {
             let provider = app.chat.auth_provider.as_deref().unwrap_or("provider");
             let popup_w = (w.saturating_sub(8)).min(96);
@@ -1749,14 +1864,22 @@ fn draw_dashboard<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Re
     Ok(())
 }
 
-fn inter_agent_event_lines(room: &Value, event_scroll: usize, max_lines: usize) -> Vec<String> {
+fn inter_agent_event_lines(room: &Value, event_scroll: usize, max_lines: usize, app_mouse_mode: bool) -> Vec<String> {
     let mut lines = Vec::new();
     let title = room.get("title").and_then(|v| v.as_str()).unwrap_or("untitled");
     let kind = room.get("kind").and_then(|v| v.as_str()).unwrap_or("group");
     let status = room.get("status").and_then(|v| v.as_str()).unwrap_or("active");
     let active_speaker = room.get("active_speaker").and_then(|v| v.as_str()).unwrap_or("");
+    let active_state = room.get("active_state").and_then(|v| v.as_str()).unwrap_or("");
     lines.push(format!("{}  [{}]", title, kind));
-    lines.push(format!("status: {}{}", status, if active_speaker.is_empty() { String::new() } else { format!("  • active: {}", active_speaker) }));
+    let mut status_bits = vec![format!("status: {}", status)];
+    if !active_speaker.is_empty() {
+        status_bits.push(format!("active: {}", active_speaker));
+    }
+    if !active_state.is_empty() {
+        status_bits.push(format!("state: {}", active_state));
+    }
+    lines.push(status_bits.join("  • "));
     if let Some(parts) = room.get("participants").and_then(|v| v.as_array()) {
         let participants = parts.iter().filter_map(|p| {
             let role = p.get("role").and_then(|v| v.as_str()).unwrap_or("");
@@ -1765,32 +1888,73 @@ fn inter_agent_event_lines(room: &Value, event_scroll: usize, max_lines: usize) 
         }).collect::<Vec<_>>().join(", ");
         if !participants.is_empty() { lines.push(format!("participants: {}", participants)); }
     }
-    lines.push("Wheel/PgUp/PgDn: scroll  •  drag: select  •  right-click/Ctrl+C: copy  •  d/Delete: remove room".to_string());
+    lines.push(format!(
+        "{}  •  d/Delete: remove room",
+        if app_mouse_mode {
+            "Wheel/PgUp/PgDn: scroll  •  drag: select  •  right-click/Ctrl+C: copy  •  F6:mouse app"
+        } else {
+            "Terminal selection/right-click active  •  Ctrl+C: copy selection  •  F6:mouse terminal"
+        }
+    ));
     lines.push(String::new());
     if let Some(events) = room.get("events").and_then(|v| v.as_array()) {
-        let start = events.len().saturating_sub(max_lines + event_scroll);
-        let end = events.len().saturating_sub(event_scroll);
-        for event in &events[start.min(events.len())..end.min(events.len())] {
+        let mut filtered: Vec<&Value> = Vec::new();
+        let mut last_tool_key = String::new();
+        for event in events {
+            let typ = event.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            if typ == "participant_tool_progress" {
+                let role = event.get("speaker_role").and_then(|v| v.as_str()).unwrap_or("");
+                let turn = event.get("turn").and_then(|v| v.as_u64()).unwrap_or(0);
+                let tool = event.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
+                let phase = event.get("tool_phase").and_then(|v| v.as_str()).unwrap_or("");
+                let key = format!("{}:{}:{}:{}", role, turn, tool, phase);
+                if key == last_tool_key {
+                    continue;
+                }
+                last_tool_key = key;
+            } else {
+                last_tool_key.clear();
+            }
+            filtered.push(event);
+        }
+        let start = filtered.len().saturating_sub(max_lines + event_scroll);
+        let end = filtered.len().saturating_sub(event_scroll);
+        for event in &filtered[start.min(filtered.len())..end.min(filtered.len())] {
             let ts = event.get("ts").or_else(|| event.get("timestamp")).and_then(|v| v.as_str()).unwrap_or("");
             let typ = event.get("type").and_then(|v| v.as_str()).unwrap_or("event");
             let role = event.get("speaker_role").and_then(|v| v.as_str()).unwrap_or("");
             let label = match typ {
                 "conversation_turn_started" => format!("▶ {} turn", if role.is_empty() { "agent" } else { role }),
                 "participant_output" => format!("💬 {}", if role.is_empty() { "agent" } else { role }),
+                "participant_tool_progress" => format!("🛠 {}", if role.is_empty() { "agent" } else { role }),
                 "turn_timeout" => format!("⏱ {} timeout", if role.is_empty() { "agent" } else { role }),
+                "turn_nudged" => format!("↪ {} nudged", if role.is_empty() { "agent" } else { role }),
                 "conversation_started" => "✓ started".to_string(),
                 "conversation_stopped" => "■ stopped".to_string(),
                 other => other.to_string(),
             };
             let mut msg = String::new();
-            if let Some(summary) = event.get("summary").and_then(|v| v.as_str()) {
-                msg.push_str(summary);
-            } else if let Some(topic) = event.get("topic").and_then(|v| v.as_str()) {
+            if typ == "participant_tool_progress" {
+                let tool = event.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
+                let phase = event.get("tool_phase").and_then(|v| v.as_str()).unwrap_or("");
+                if !tool.is_empty() && !phase.is_empty() {
+                    msg.push_str(&format!("{} {}", tool, phase));
+                } else if !tool.is_empty() {
+                    msg.push_str(tool);
+                } else if !phase.is_empty() {
+                    msg.push_str(phase);
+                }
+            }
+            if msg.is_empty() {
+                if let Some(summary) = event.get("summary").and_then(|v| v.as_str()) {
+                    msg.push_str(summary);
+                } else if let Some(topic) = event.get("topic").and_then(|v| v.as_str()) {
                 msg.push_str(topic);
-            } else if let Some(title) = event.get("title").and_then(|v| v.as_str()) {
-                msg.push_str(title);
-            } else if let Some(session) = event.get("session").and_then(|v| v.as_str()) {
-                msg.push_str(session);
+                } else if let Some(title) = event.get("title").and_then(|v| v.as_str()) {
+                    msg.push_str(title);
+                } else if let Some(session) = event.get("session").and_then(|v| v.as_str()) {
+                    msg.push_str(session);
+                }
             }
             let line = if msg.is_empty() { format!("{}  {}", ts, label) } else { format!("{}  {}  {}", ts, label, msg) };
             lines.push(line);
@@ -2020,10 +2184,10 @@ fn row_index_selected(row: usize, col: usize, start: TextPoint, end: TextPoint) 
     true
 }
 
-fn draw_conversation_stream<W: Write>(stdout: &mut W, room: &Value, area: Rect, event_scroll: usize, selection: Option<(TextPoint, TextPoint)>) -> io::Result<()> {
+fn draw_conversation_stream<W: Write>(stdout: &mut W, room: &Value, area: Rect, event_scroll: usize, selection: Option<(TextPoint, TextPoint)>, app_mouse_mode: bool) -> io::Result<()> {
     let rows = conversation_transcript_rows(room, area.width as usize);
     if rows.is_empty() {
-        let lines = inter_agent_event_lines(room, event_scroll, area.height.saturating_sub(1) as usize);
+        let lines = inter_agent_event_lines(room, event_scroll, area.height.saturating_sub(1) as usize, app_mouse_mode);
         for (i, line) in lines.into_iter().take(area.height as usize).enumerate() {
             stdout.queue(cursor::MoveTo(area.x, area.y + i as u16))?;
             let visible: String = line.chars().take(area.width as usize).collect();
@@ -2702,7 +2866,7 @@ fn draw_inter_agent<W: Write>(stdout: &mut W, app: &mut App, w: u16, h: u16) -> 
                 }
             }
 
-            let lines = inter_agent_event_lines(room, app.inter_agent.event_scroll, event_area.height.saturating_sub(1) as usize);
+            let lines = inter_agent_event_lines(room, app.inter_agent.event_scroll, event_area.height.saturating_sub(1) as usize, app.inter_agent.app_mouse_mode);
             for (i, line) in lines.into_iter().take(event_area.height as usize).enumerate() {
                 stdout.queue(cursor::MoveTo(event_area.x, event_area.y + i as u16))?;
                 let visible: String = line.chars().take(event_area.width as usize).collect();
@@ -2730,7 +2894,7 @@ fn draw_inter_agent<W: Write>(stdout: &mut W, app: &mut App, w: u16, h: u16) -> 
             } else {
                 draw_room_panes(stdout, app, room, session_area, true)?;
             }
-            draw_conversation_stream(stdout, room, detail_area, app.inter_agent.event_scroll, transcript_selection_bounds(app))?;
+            draw_conversation_stream(stdout, room, detail_area, app.inter_agent.event_scroll, transcript_selection_bounds(app), app.inter_agent.app_mouse_mode)?;
         }
     }
     draw_delete_room_modal(stdout, app, w, h)?;
@@ -3526,9 +3690,9 @@ fn main() -> io::Result<()> {
             local_view_dirty = false;
         }
 
-        let want_mouse_capture = app.active_view == View::Chat
+        let want_mouse_capture = (app.active_view == View::Chat && app.chat.app_mouse_mode)
             || (app.active_view == View::Sessions && !app.sessions.terminal_mode)
-            || app.active_view == View::InterAgent;
+            || (app.active_view == View::InterAgent && app.inter_agent.app_mouse_mode);
         if want_mouse_capture != mouse_capture_enabled {
             if want_mouse_capture {
                 stdout.queue(EnableMouseCapture)?;
@@ -3571,7 +3735,33 @@ fn main() -> io::Result<()> {
 
                     match app.active_view {
                         View::Chat => {
-                            if key.code == KeyCode::Esc {
+                            if key.code == KeyCode::F(5) {
+                                app.chat.view_mode = match app.chat.view_mode {
+                                    ChatViewMode::Transcript => ChatViewMode::Workspace,
+                                    ChatViewMode::Workspace => ChatViewMode::Transcript,
+                                };
+                                match app.chat.view_mode {
+                                    ChatViewMode::Transcript => {
+                                        app.chat.info_pane_open = false;
+                                        app.chat.app_mouse_mode = true;
+                                    }
+                                    ChatViewMode::Workspace => {
+                                        app.chat.info_pane_open = true;
+                                        app.chat.app_mouse_mode = true;
+                                    }
+                                }
+                                needs_full_redraw = true;
+                            } else if key.code == KeyCode::F(6) {
+                                if app.chat.view_mode == ChatViewMode::Workspace {
+                                    app.chat.app_mouse_mode = !app.chat.app_mouse_mode;
+                                    app.chat.selection_dragging = false;
+                                    if !app.chat.app_mouse_mode {
+                                        app.chat.selection_anchor = None;
+                                        app.chat.selection_focus = None;
+                                    }
+                                    needs_full_redraw = true;
+                                }
+                            } else if key.code == KeyCode::Esc {
                                 app.chat.selection_anchor = None;
                                 app.chat.selection_focus = None;
                                 app.chat.selection_dragging = false;
@@ -3604,9 +3794,6 @@ fn main() -> io::Result<()> {
                                 && key.code == KeyCode::Left {
                                 app.chat.info_pane_tab = (app.chat.info_pane_tab + 2) % 3;
                                 local_view_dirty = true;
-                            } else if key.code == KeyCode::F(6) {
-                                app.chat.copy_mode = !app.chat.copy_mode;
-                                local_view_dirty = true;
                             } else if app.chat.copy_mode {
                                 if key.code == KeyCode::Esc {
                                     app.chat.copy_mode = false;
@@ -3628,6 +3815,34 @@ fn main() -> io::Result<()> {
                                     }
                                     KeyCode::Enter => {
                                         app.chat.approval_accept_selected();
+                                        local_view_dirty = true;
+                                    }
+                                    _ => {}
+                                }
+                            } else if app.chat.menu_open() {
+                                match key.code {
+                                    KeyCode::Esc => {
+                                        app.chat.close_menu();
+                                        local_view_dirty = true;
+                                    }
+                                    KeyCode::Up => {
+                                        app.chat.menu_move_up();
+                                        local_view_dirty = true;
+                                    }
+                                    KeyCode::Down => {
+                                        app.chat.menu_move_down();
+                                        local_view_dirty = true;
+                                    }
+                                    KeyCode::Enter => {
+                                        app.chat.menu_select();
+                                        local_view_dirty = true;
+                                    }
+                                    KeyCode::Tab => {
+                                        app.chat.menu_move_down();
+                                        local_view_dirty = true;
+                                    }
+                                    KeyCode::BackTab => {
+                                        app.chat.menu_move_up();
                                         local_view_dirty = true;
                                     }
                                     _ => {}
@@ -3658,42 +3873,6 @@ fn main() -> io::Result<()> {
                                     KeyCode::Char('c') | KeyCode::Char('C') => {
                                         app.chat.auth_action_index = 1;
                                         app.chat.auth_activate_selected();
-                                        local_view_dirty = true;
-                                    }
-                                    _ => {}
-                                }
-                            } else if app.chat.menu_open() {
-                                match key.code {
-                                    KeyCode::Esc => {
-                                        app.chat.close_menu();
-                                        local_view_dirty = true;
-                                    }
-                                    KeyCode::Up => {
-                                        app.chat.menu_move_up();
-                                        local_view_dirty = true;
-                                    }
-                                    KeyCode::Down => {
-                                        app.chat.menu_move_down();
-                                        local_view_dirty = true;
-                                    }
-                                    KeyCode::Tab => {
-                                        app.chat.menu_fill_input();
-                                        app.chat.close_menu();
-                                        app.chat.maybe_open_command_menu();
-                                        local_view_dirty = true;
-                                    }
-                                    KeyCode::Enter => {
-                                        app.chat.menu_select();
-                                        local_view_dirty = true;
-                                    }
-                                    KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                        app.chat.input.push(c);
-                                        app.chat.maybe_open_command_menu();
-                                        local_view_dirty = true;
-                                    }
-                                    KeyCode::Backspace => {
-                                        app.chat.input.pop();
-                                        app.chat.maybe_open_command_menu();
                                         local_view_dirty = true;
                                     }
                                     _ => {}
@@ -3767,6 +3946,16 @@ fn main() -> io::Result<()> {
                             }
                         }
                         View::InterAgent => {
+                            if key.code == KeyCode::F(6) {
+                                app.inter_agent.app_mouse_mode = !app.inter_agent.app_mouse_mode;
+                                app.inter_agent.transcript_dragging = false;
+                                if !app.inter_agent.app_mouse_mode {
+                                    app.inter_agent.transcript_anchor = None;
+                                    app.inter_agent.transcript_focus = None;
+                                }
+                                needs_full_redraw = true;
+                                continue;
+                            }
                             let rooms = payload_inter_agent_rooms(app.chat.refresh_payload.as_ref());
                             let room_count = rooms.len();
                             let selected_room = rooms.get(app.inter_agent.selected).map(|room| (*room).clone());
@@ -4108,7 +4297,7 @@ fn main() -> io::Result<()> {
                     }
                 }
                 Event::Mouse(mouse) => {
-                    if app.active_view == View::Chat {
+                    if app.active_view == View::Chat && app.chat.app_mouse_mode {
                         let area = chat_content_area(&app, outer_w, outer_h);
                         let lines = build_chat_visual_lines(&app, area.width as usize, chat_layout_variant(outer_w, outer_h));
                         match mouse.kind {
@@ -4187,7 +4376,7 @@ fn main() -> io::Result<()> {
                             }
                             _ => {}
                         }
-                    } else if app.active_view == View::InterAgent {
+                    } else if app.active_view == View::InterAgent && app.inter_agent.app_mouse_mode {
                         match mouse.kind {
                             MouseEventKind::ScrollUp => {
                                 if let Some(area) = inter_agent_stream_area(&app, outer_w, outer_h) {

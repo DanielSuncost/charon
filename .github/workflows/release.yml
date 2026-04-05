@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: charon-linux-x86_64
+          - os: macos-latest
+            artifact_name: charon-macos-aarch64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Rust TUI
+        run: cargo build --release --manifest-path crates/charon-tui/Cargo.toml
+
+      - name: Assemble release bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$PWD"
+          OUT="$ROOT/dist/${{ matrix.artifact_name }}"
+          mkdir -p "$OUT/bin"
+
+          cp "$ROOT/crates/charon-tui/target/release/charon" "$OUT/bin/charon"
+          cp "$ROOT/charon" "$OUT/charon"
+          cp "$ROOT/requirements.txt" "$OUT/requirements.txt"
+          cp "$ROOT/pyproject.toml" "$OUT/pyproject.toml"
+          mkdir -p "$OUT/apps/tui/opentui"
+          cp "$ROOT/apps/tui/opentui/chat_backend.py" "$OUT/apps/tui/opentui/chat_backend.py"
+          cp -R "$ROOT/apps/core-daemon" "$OUT/apps/core-daemon"
+          cp -R "$ROOT/scripts" "$OUT/scripts"
+          cp -R "$ROOT/tools" "$OUT/tools"
+          cp -R "$ROOT/assets" "$OUT/assets"
+          cp -R "$ROOT/docs" "$OUT/docs"
+          chmod +x "$OUT/bin/charon" "$OUT/charon" "$OUT/scripts/install-dev.sh"
+          cp "$ROOT/scripts/install.sh" "$OUT/scripts/install.sh"
+          cp "$ROOT/scripts/install-release.sh" "$OUT/scripts/install-release.sh"
+          chmod +x "$OUT/scripts/install.sh" "$OUT/scripts/install-release.sh"
+
+          cat > "$OUT/README-release.txt" <<'EOF'
+          Charon release bundle
+
+          Current status:
+          - includes the Rust TUI binary as bin/charon
+          - includes backend/runtime source files
+          - still expects local Python dependencies to be installed
+
+          Quick start:
+            ./scripts/install.sh
+            charon
+          EOF
+
+          cd "$ROOT/dist"
+          tar -czf "${{ matrix.artifact_name }}.tar.gz" "${{ matrix.artifact_name }}"
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.artifact_name }}.tar.gz

@@ -11,6 +11,20 @@ from typing import Callable
 
 from conversation_participants import ConversationParticipantSpec, get_conversation_adapter
 
+import os
+import uuid
+from datetime import datetime, timezone
+
+# SQLite store adapter (optional)
+try:
+    from store_adapter import (
+        get_db as _get_db,
+        task_insert as _db_task_insert,
+    )
+    _HAS_STORE = True
+except ImportError:
+    _HAS_STORE = False
+
 
 @dataclass
 class ConversationTurnResult:
@@ -22,6 +36,115 @@ class ConversationTurnResult:
 
     def as_dict(self) -> dict:
         return asdict(self)
+
+
+def _use_store() -> bool:
+    return _HAS_STORE and os.environ.get('CHARON_NO_SQLITE', '0') != '1'
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _queue_path(state_dir: Path) -> Path:
+    return Path(state_dir) / 'queue.json'
+
+
+def _load_queue(state_dir: Path) -> list[dict]:
+    path = _queue_path(state_dir)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_queue(state_dir: Path, queue: list[dict]) -> None:
+    path = _queue_path(state_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(queue, indent=2, ensure_ascii=False), encoding='utf-8')
+
+
+def _enqueue_task(state_dir: Path, task: dict) -> dict:
+    queue = _load_queue(state_dir)
+    queue.append(task)
+    _save_queue(state_dir, queue)
+    if _use_store():
+        try:
+            _db_task_insert(_get_db(state_dir), dict(task))
+        except Exception:
+            pass
+    return task
+
+
+def enqueue_agent_task(
+    state_dir: Path,
+    *,
+    owner_agent_id: str,
+    instruction: str,
+    title: str,
+    project: str | None = None,
+    priority: str = 'normal',
+    correlation_id: str | None = None,
+    interval_minutes: float | None = None,
+    not_before: str | None = None,
+    max_attempts: int = 3,
+) -> dict:
+    now = _utc_now_iso()
+    task = {
+        'id': f"task-{uuid.uuid4().hex[:10]}",
+        'title': str(title or '').strip()[:120],
+        'instruction': str(instruction or '').strip(),
+        'status': 'pending',
+        'task_type': 'agent_task',
+        'owner_agent_id': str(owner_agent_id or '').strip(),
+        'project': str(project or '').strip() or None,
+        'priority': str(priority or 'normal').strip() or 'normal',
+        'created_at': now,
+        'updated_at': now,
+        'attempt_count': 0,
+        'max_attempts': int(max_attempts or 3),
+    }
+    if correlation_id:
+        task['correlation_id'] = str(correlation_id)
+    if interval_minutes:
+        task['interval_minutes'] = float(interval_minutes)
+    if not_before:
+        task['not_before'] = str(not_before)
+    return _enqueue_task(state_dir, task)
+
+
+def enqueue_user_intent_task(
+    state_dir: Path,
+    *,
+    actor_agent_id: str,
+    message: str,
+    project: str | None = None,
+    priority: str = 'normal',
+    conversation_id: str | None = None,
+    max_attempts: int = 3,
+) -> dict:
+    now = _utc_now_iso()
+    text = str(message or '').strip()
+    task = {
+        'id': f"task-{uuid.uuid4().hex[:10]}",
+        'title': (text[:117] + '...') if len(text) > 120 else text,
+        'instruction': text,
+        'status': 'pending',
+        'task_type': 'user_intent',
+        'actor_agent_id': str(actor_agent_id or '').strip(),
+        'project': str(project or '').strip() or None,
+        'priority': str(priority or 'normal').strip() or 'normal',
+        'created_at': now,
+        'updated_at': now,
+        'attempt_count': 0,
+        'max_attempts': int(max_attempts or 3),
+    }
+    if conversation_id:
+        task['conversation_id'] = str(conversation_id)
+    return _enqueue_task(state_dir, task)
 
 
 class ConversationSessionRuntime:
@@ -205,10 +328,17 @@ class BoatConversationRuntime(ConversationSessionRuntime):
                     )
                     meaningful = _extract_meaningful_text(aggregate, prompt_hint)
                     has_real_response = bool(meaningful) and not is_echo
-                    if on_event and _looks_like_tool_activity(text_chunk):
+                    tool_info = _extract_tool_activity_info(text_chunk)
+                    if on_event and tool_info is not None:
                         now = time.time()
                         if now - last_progress_emit >= 0.35:
-                            on_event({'type': 'tool_progress', 'session': self.session_name, 'summary': _summarize_tool_activity(text_chunk)})
+                            on_event({
+                                'type': 'tool_progress',
+                                'session': self.session_name,
+                                'summary': tool_info.get('summary') or _summarize_tool_activity(text_chunk),
+                                'tool_name': tool_info.get('tool_name') or '',
+                                'tool_phase': tool_info.get('tool_phase') or '',
+                            })
                             last_progress_emit = now
                     if has_real_response:
                         now = time.time()
@@ -303,21 +433,53 @@ def _looks_like_runtime_footer_line(norm: str) -> bool:
     return any(re.search(p, norm) for p in footer_patterns)
 
 
-def _looks_like_tool_activity(text: str) -> bool:
-    norm = _normalize_visible_text(text)
-    patterns = [
-        r'\bbrowser_[a-z_]+\b',
-        r'\btool[_ ]call\b',
-        r'\bnavigat(?:e|ing)\b',
-        r'\bsnapshot\b',
-        r'\bvision\b',
-        r'\bsearch(?:ing)?\b',
-        r'\bfetch(?:ing)?\b',
-        r'\bscroll(?:ing)?\b',
-        r'\bclicked?\b',
-        r'\btyped?\b',
+def _extract_tool_activity_info(text: str) -> dict | None:
+    cleaned = _strip_ansi(text).replace('\r', '\n')
+    norm = _normalize_visible_text(cleaned)
+    tool_name = ''
+    tool_phase = ''
+
+    name_patterns = [
+        r'\b(browser_[a-z_]+)\b',
+        r'\b(read|edit|write|grep|sed|bash|python)\b',
     ]
-    return any(re.search(p, norm) for p in patterns)
+    for pat in name_patterns:
+        m = re.search(pat, norm)
+        if m:
+            tool_name = m.group(1)
+            break
+
+    phase_patterns = [
+        ('navigating', r'\bnavigat(?:e|ing)\b'),
+        ('snapshot', r'\bsnapshot\b'),
+        ('vision', r'\bvision\b'),
+        ('searching', r'\bsearch(?:ing)?\b'),
+        ('fetching', r'\bfetch(?:ing)?\b'),
+        ('scrolling', r'\bscroll(?:ing)?\b'),
+        ('typing', r'\btyped?\b'),
+        ('clicking', r'\bclicked?\b'),
+        ('executing', r'\btool[_ ]call\b|\bbash\b|\bpython\b|\bread\b|\bedit\b|\bwrite\b'),
+    ]
+    for label, pat in phase_patterns:
+        if re.search(pat, norm):
+            tool_phase = label
+            break
+
+    if not tool_name and not tool_phase:
+        return None
+
+    summary = _summarize_tool_activity(cleaned)
+    if tool_name and tool_phase:
+        summary = f'{tool_name} ({tool_phase})'
+    elif tool_name:
+        summary = tool_name
+    elif tool_phase:
+        summary = tool_phase
+    return {
+        'tool_name': tool_name,
+        'tool_phase': tool_phase,
+        'summary': summary,
+    }
 
 
 def _summarize_tool_activity(text: str) -> str:

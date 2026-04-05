@@ -291,6 +291,22 @@ def _load_working_memory(state_dir: Path, agent_id: str | None) -> dict[str, Any
 
 
 def _load_project_knowledge(state_dir: Path, project_root: Path) -> str:
+    try:
+        from project_registry import ensure_project
+        proj = ensure_project(state_dir, project_root)
+        pid = str(proj.get('id') or '').strip()
+        if pid:
+            canonical = state_dir / 'projects' / pid / 'KNOWLEDGE.md'
+            if canonical.exists():
+                try:
+                    text = canonical.read_text(encoding='utf-8').strip()
+                    if text:
+                        return text[:4000]
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     candidates = [
         state_dir / 'projects',
         state_dir / 'project',

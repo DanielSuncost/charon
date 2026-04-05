@@ -336,6 +336,12 @@ class ConversationEngine:
         system_prompt: str = '',
         project_context: str = '',
         state_dir: str | Path | None = None,
+        operation_id: str = '',
+        operation_domain: str = '',
+        work_unit_id: str = '',
+        operation_role: str = '',
+        runtime_role: str = '',
+        parent_agent_id: str = '',
         max_turns: int = 50,
         max_tool_calls_per_turn: int = 25,
         max_tokens: int = 32768,
@@ -353,6 +359,12 @@ class ConversationEngine:
         self.agent_id = agent_id
         self.agent_name = agent_name
         self.state_dir = Path(state_dir) if state_dir else None
+        self.operation_id = operation_id
+        self.operation_domain = operation_domain
+        self.work_unit_id = work_unit_id
+        self.operation_role = operation_role
+        self.runtime_role = runtime_role
+        self.parent_agent_id = parent_agent_id
         self.scope: list[str] | None = None  # set for shade agents
         self.max_turns = max_turns
         self.max_tool_calls_per_turn = max_tool_calls_per_turn
@@ -509,6 +521,12 @@ class ConversationEngine:
             agent_id=self.agent_id,
             state_dir=self.state_dir,
             scope=self.scope,
+            operation_id=self.operation_id,
+            operation_domain=self.operation_domain,
+            work_unit_id=self.work_unit_id,
+            operation_role=self.operation_role,
+            runtime_role=self.runtime_role,
+            parent_agent_id=self.parent_agent_id,
         )
 
     # ── Browser visibility helpers ────────────────────────────────────────────
@@ -822,6 +840,12 @@ class ConversationEngine:
                     state_dir=self.state_dir,
                     scope=self.scope,
                     on_tool_output=lambda tool_name, chunk: output_q.put(chunk) if tool_name == tc.name else None,
+                    operation_id=self.operation_id,
+                    operation_domain=self.operation_domain,
+                    work_unit_id=self.work_unit_id,
+                    operation_role=self.operation_role,
+                    runtime_role=self.runtime_role,
+                    parent_agent_id=self.parent_agent_id,
                 )
 
                 _tool_t0 = time.time()

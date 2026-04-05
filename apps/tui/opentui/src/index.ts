@@ -32,7 +32,30 @@ type ViewName = 'chat' | 'dashboard' | 'sessions' | 'rooms'
 interface Agent { id: string; name: string; status: string; role: string; goal: string; project: string; mode: string }
 interface Project { name: string; path: string; agents: string[] }
 interface Session { id: string; agentId: string; agentName: string; status: string; project: string; location: string }
-interface InterAgentRoom { id: string; kind: string; title: string; status: string; summary?: string; participants?: any[]; events?: any[]; active_speaker?: string; meta?: any }
+interface InterAgentRoom {
+  id: string
+  kind: string
+  title: string
+  status: string
+  summary?: string
+  participants?: any[]
+  events?: any[]
+  active_speaker?: string
+  meta?: any
+  operation_id?: string
+  nodes?: any[]
+  edges?: any[]
+  topics?: any[]
+  team_grid_nodes?: any[]
+  non_shade_members?: any[]
+  views?: any
+  counts?: any
+  budget_status?: any
+  promising_sources?: any[]
+  final_selection_markdown?: string
+  executive_summary_markdown?: string
+  delivery_bundle?: any
+}
 
 interface MenuItem {
   cmd: string
@@ -99,6 +122,12 @@ const S = {
   interAgentRooms: [] as InterAgentRoom[],
   activity: [] as string[],
   roomIdx: 0,
+  roomViewMode: 'grid' as 'list' | 'grid' | 'graph',
+  roomNodeIdx: 0,
+  roomTopicIdx: 0,
+  roomDetailTab: 'node' as 'node' | 'topic' | 'events' | 'sources' | 'delivery',
+  roomTargetMode: 'auto' as 'auto' | 'whole' | 'coordinator' | 'topic' | 'node',
+  roomGraphFocus: null as string | null,
   dashIdx: 0,
   dashSection: 'agents' as 'agents' | 'projects',
   projIdx: 0,
@@ -1028,6 +1057,428 @@ async function main() {
   const roomsScroll = instantiate(renderer, ScrollBox({ flexGrow: 1, width: '100%', stickyScroll: true, stickyStart: 'top' })) as any
   roomsScroll.add(roomsText)
 
+  function librisNodesForGrid(room: any): any[] {
+    const topicOrdered: any[] = []
+    const seen = new Set<string>()
+    const addNode = (node: any) => {
+      const id = String(node?.agent_id || node?.id || '').trim()
+      if (!node || !id || seen.has(id)) return
+      seen.add(id)
+      topicOrdered.push(node)
+    }
+    addNode((room?.views?.grid?.nodes || room?.team_grid_nodes || []).find?.((n: any) => String(n?.role || '') === 'coordinator'))
+    for (const topic of (room?.topics || [])) {
+      addNode(topic?.researcher)
+      addNode(topic?.judge)
+    }
+    for (const node of (room?.views?.grid?.nodes || room?.team_grid_nodes || room?.non_shade_members || (room?.nodes || []).filter((n: any) => String(n?.role || '') !== 'shade'))) addNode(node)
+    return topicOrdered as any[]
+  }
+
+  function librisNodesForGraph(room: any): any[] {
+    return (room?.views?.graph?.nodes || room?.nodes || room?.members || []) as any[]
+  }
+
+  function librisEdgesForGraph(room: any): any[] {
+    return (room?.views?.graph?.edges || room?.edges || []) as any[]
+  }
+
+  function clampLibrisSelection(room: any) {
+    const nodes = S.roomViewMode === 'graph' ? librisNodesForGraph(room) : librisNodesForGrid(room)
+    const topics = (room?.topics || []) as any[]
+    S.roomNodeIdx = Math.max(0, Math.min(S.roomNodeIdx, Math.max(0, nodes.length - 1)))
+    S.roomTopicIdx = Math.max(0, Math.min(S.roomTopicIdx, Math.max(0, topics.length - 1)))
+  }
+
+  function setLibrisViewMode(room: any, nextMode: 'grid' | 'graph') {
+    const prevNodes = S.roomViewMode === 'graph' ? librisNodesForGraph(room) : librisNodesForGrid(room)
+    const prev = prevNodes[Math.max(0, Math.min(S.roomNodeIdx, Math.max(0, prevNodes.length - 1)))]
+    const prevId = String(prev?.agent_id || prev?.id || '').trim()
+    S.roomViewMode = nextMode
+    const nextNodes = S.roomViewMode === 'graph' ? librisNodesForGraph(room) : librisNodesForGrid(room)
+    const nextIdx = prevId ? nextNodes.findIndex((n: any) => String(n?.agent_id || n?.id || '').trim() === prevId) : -1
+    if (nextIdx >= 0) S.roomNodeIdx = nextIdx
+    clampLibrisSelection(room)
+  }
+
+  function oneLine(text: any, max = 72): string {
+    const s = String(text || '').replace(/\s+/g, ' ').trim()
+    if (!s) return '—'
+    return s.length > max ? s.slice(0, max - 1) + '…' : s
+  }
+
+  function budgetBadge(b: any): string {
+    if (!b || typeof b !== 'object') return 'budget: unknown'
+    const reasons = Array.isArray(b.reasons) ? b.reasons.length : 0
+    if (b.continue_running === false) return `budget: exhausted${reasons ? ` (${reasons})` : ''}`
+    if (reasons) return `budget: caution (${reasons})`
+    return 'budget: healthy'
+  }
+
+  function findSelectedLibrisNode(room: any): any | null {
+    const nodes = S.roomViewMode === 'graph' ? librisNodesForGraph(room) : librisNodesForGrid(room)
+    if (!nodes.length) return null
+    return nodes[Math.max(0, Math.min(S.roomNodeIdx, nodes.length - 1))] || null
+  }
+
+  function findSelectedLibrisTopic(room: any): any | null {
+    const topics = (room?.topics || []) as any[]
+    if (!topics.length) return null
+    return topics[Math.max(0, Math.min(S.roomTopicIdx, topics.length - 1))] || null
+  }
+
+  function activeEdgeCount(room: any): number {
+    return librisEdgesForGraph(room).filter((e: any) => Boolean(e?.active_now)).length
+  }
+
+  function budgetStateLabel(b: any): string {
+    if (!b || typeof b !== 'object') return 'unknown'
+    if (b.continue_running === false) return 'exhausted'
+    if (Array.isArray(b.reasons) && b.reasons.length) return 'caution'
+    return 'healthy'
+  }
+
+  function graphTopicFocus(room: any): string | null {
+    if (S.roomGraphFocus) return S.roomGraphFocus
+    if (S.roomDetailTab === 'topic') return String(findSelectedLibrisTopic(room)?.topic_slug || findSelectedLibrisTopic(room)?.slug || '').trim() || null
+    return null
+  }
+
+  function findNodeById(room: any, nodeId: string): any | null {
+    const all = [...librisNodesForGraph(room), ...librisNodesForGrid(room)]
+    return all.find((n: any) => String(n?.agent_id || n?.id || '') === nodeId) || null
+  }
+
+  function renderLibrisGrid(room: any, parts: (StyledText | string)[]) {
+    const nodes = librisNodesForGrid(room)
+    if (!nodes.length) {
+      parts.push(t`${dim(' No non-shade Libris members available.')}`)
+      return
+    }
+    const cols = 2
+    for (let i = 0; i < nodes.length; i += cols) {
+      const row = nodes.slice(i, i + cols)
+      const lineParts: (StyledText | string)[] = []
+      row.forEach((node: any, j: number) => {
+        const idx = i + j
+        const sel = idx === S.roomNodeIdx
+        const name = oneLine(node?.name || node?.agent_id || 'agent', 18)
+        const role = oneLine(node?.role || '', 10)
+        const phase = oneLine(node?.phase || node?.status || '', 16)
+        const topic = oneLine(node?.topic_slug || node?.topic || '', 16)
+        const live = oneLine(node?.live_line || node?.summary || node?.goal || '', 26)
+        const block = [
+          sel ? '▣' : '□',
+          ` ${name}`,
+          role ? `  ${role}` : '',
+          phase ? `  • ${phase}` : '',
+          topic && topic !== '—' ? `  @${topic}` : '',
+          `  → ${live}`,
+        ].join('')
+        lineParts.push(sel ? t`${bold(fg('#c4b5fd')(block))}` : t`${fg('#cbd5e1')(block)}`)
+        if (j < row.length - 1) lineParts.push(t`${dim('    │    ')}`)
+      })
+      parts.push(joinStyled(...lineParts))
+      parts.push('\n')
+    }
+  }
+
+  function renderLibrisGraph(room: any, parts: (StyledText | string)[]) {
+    const coordinator = room?.coordinator || (librisNodesForGraph(room).find((n: any) => String(n?.role || '') === 'coordinator'))
+    const topics = (room?.topics || []) as any[]
+    const edges = (room?.edges || []) as any[]
+    if (coordinator) {
+      const sel = findSelectedLibrisNode(room)
+      const selectedCoordinator = sel && String(sel?.agent_id || sel?.id || '') === String(coordinator?.agent_id || coordinator?.id || '')
+      parts.push(selectedCoordinator ? t`${bold(fg('#d8b4fe')(`        [ Coordinator: ${oneLine(coordinator?.name || coordinator?.agent_id || 'coordinator', 28)} ]`))}` : t`${fg('#d8b4fe')(`        [ Coordinator: ${oneLine(coordinator?.name || coordinator?.agent_id || 'coordinator', 28)} ]`)}`)
+      parts.push('\n\n')
+    }
+    if (!topics.length) {
+      parts.push(t`${dim(' No Libris topics available for graph view.')}`)
+      return
+    }
+    const selNode = findSelectedLibrisNode(room)
+    for (const topic of topics) {
+      const slug = String(topic?.topic_slug || topic?.slug || '').trim()
+      const researcher = (topic?.members || []).find((m: any) => String(m?.role || '') === 'researcher') || (librisNodesForGraph(room).find((n: any) => String(n?.role || '') === 'researcher' && String(n?.topic_slug || '') === slug))
+      const judge = (topic?.members || []).find((m: any) => String(m?.role || '') === 'judge') || (librisNodesForGraph(room).find((n: any) => String(n?.role || '') === 'judge' && String(n?.topic_slug || '') === slug))
+      const shades = (topic?.shades || []).length ? topic.shades : librisNodesForGraph(room).filter((n: any) => String(n?.role || '') === 'shade' && String(n?.topic_slug || '') === slug)
+      const tsel = findSelectedLibrisTopic(room)
+      const topicSelected = tsel && String(tsel?.topic_slug || tsel?.slug || '') === slug
+      parts.push(topicSelected ? t`${bold(fg('#93c5fd')(`┌─ Topic ${oneLine(topic?.title || slug || 'topic', 56)} ─┐`))}` : t`${fg('#93c5fd')(`┌─ Topic ${oneLine(topic?.title || slug || 'topic', 56)} ─┐`)}`)
+      parts.push('\n')
+      const leftName = oneLine(researcher?.name || researcher?.agent_id || 'researcher', 18)
+      const rightName = oneLine(judge?.name || judge?.agent_id || 'judge', 18)
+      const edge = edges.find((e: any) => String(e?.topic_slug || '') === slug && String(e?.from_role || '') === 'researcher' && String(e?.to_role || '') === 'judge')
+      const active = Boolean(edge?.active_now)
+      const edgeStrength = Number(edge?.activity_strength || 0)
+      const edgeGlyph = active ? '════▶' : edgeStrength >= 0.45 ? '───▶' : '···▶'
+      const lsel = selNode && String(selNode?.agent_id || selNode?.id || '') === String(researcher?.agent_id || researcher?.id || '')
+      const rsel = selNode && String(selNode?.agent_id || selNode?.id || '') === String(judge?.agent_id || judge?.id || '')
+      parts.push(joinStyled(
+        lsel ? t`${bold(fg('#67e8f9')(`[ ${leftName} ]`))}` : t`${fg('#67e8f9')(`[ ${leftName} ]`)}`,
+        active ? t`${bold(fg('#fbbf24')(` ${edgeGlyph} `))}` : t`${fg('#64748b')(` ${edgeGlyph} `)}`,
+        rsel ? t`${bold(fg('#f59e0b')(`[ ${rightName} ]`))}` : t`${fg('#f59e0b')(`[ ${rightName} ]`)}`,
+      ))
+      parts.push('\n')
+      for (const sh of shades.slice(0, 6)) {
+        const shSel = selNode && String(selNode?.agent_id || selNode?.id || '') === String(sh?.agent_id || sh?.id || '')
+        const live = oneLine(sh?.live_line || sh?.summary || sh?.goal || '', 42)
+        parts.push(shSel ? t`${bold(fg('#94a3b8')(`   ↳ [shade] ${oneLine(sh?.name || sh?.agent_id || 'shade', 18)}  → ${live}`))}` : t`${fg('#94a3b8')(`   ↳ [shade] ${oneLine(sh?.name || sh?.agent_id || 'shade', 18)}  → ${live}`)}`)
+        parts.push('\n')
+      }
+      if (shades.length > 6) {
+        parts.push(t`${dim(`   ↳ … ${shades.length - 6} more shades`)}`)
+        parts.push('\n')
+      }
+      parts.push(t`${fg('#93c5fd')('└' + '─'.repeat(64))}`)
+      parts.push('\n\n')
+    }
+  }
+
+  function renderLibrisDetail(room: any, parts: (StyledText | string)[]) {
+    const lines = buildLibrisDetailLines(room, 72)
+    for (const line of lines) {
+      parts.push(line)
+      parts.push('\n')
+    }
+  }
+
+  function wrapPlain(text: any, width: number): string[] {
+    const raw = String(text || '').replace(/\s+/g, ' ').trim()
+    if (!raw) return ['—']
+    const out: string[] = []
+    const words = raw.split(' ')
+    let line = ''
+    for (const word of words) {
+      const next = line ? `${line} ${word}` : word
+      if (next.length <= width) {
+        line = next
+      } else if (!line) {
+        out.push(word.slice(0, width))
+      } else {
+        out.push(line)
+        line = word.length > width ? word.slice(0, width) : word
+      }
+    }
+    if (line) out.push(line)
+    return out.length ? out : ['—']
+  }
+
+  function padPlain(text: string, width: number): string {
+    if (text.length >= width) return text.slice(0, width)
+    return text + ' '.repeat(width - text.length)
+  }
+
+  function buildLibrisMainLines(room: any, width: number): string[] {
+    const lines: string[] = []
+    if (S.roomViewMode === 'graph') {
+      const coordinator = room?.coordinator || (librisNodesForGraph(room).find((n: any) => String(n?.role || '') === 'coordinator'))
+      const topics = (room?.topics || []) as any[]
+      const edges = librisEdgesForGraph(room)
+      const selNode = findSelectedLibrisNode(room)
+      const selTopic = findSelectedLibrisTopic(room)
+      const focusedTopic = graphTopicFocus(room)
+      if (coordinator) {
+        lines.push(`╔═ Coordinator ═ ${oneLine(coordinator?.name || coordinator?.agent_id || 'coordinator', Math.max(12, width - 18))}`)
+        lines.push(`║ ${oneLine(coordinator?.phase || coordinator?.status || '—', Math.max(8, width - 4))}`)
+        lines.push(`║ ${oneLine(coordinator?.live_line || coordinator?.phase_summary || coordinator?.goal || '', Math.max(8, width - 4))}`)
+        lines.push('')
+      }
+      if (!topics.length) return ['No Libris topics available for graph view.']
+      for (const topic of topics) {
+        const slug = String(topic?.topic_slug || topic?.slug || '').trim()
+        const researcher = topic?.researcher || (topic?.members || []).find((m: any) => String(m?.role || '') === 'researcher') || (librisNodesForGraph(room).find((n: any) => String(n?.role || '') === 'researcher' && String(n?.topic_slug || '') === slug))
+        const judge = topic?.judge || (topic?.members || []).find((m: any) => String(m?.role || '') === 'judge') || (librisNodesForGraph(room).find((n: any) => String(n?.role || '') === 'judge' && String(n?.topic_slug || '') === slug))
+        const shades = (topic?.shades || []).length ? topic.shades : librisNodesForGraph(room).filter((n: any) => String(n?.role || '') === 'shade' && String(n?.topic_slug || '') === slug)
+        const focusThis = focusedTopic && focusedTopic === slug
+        const dimThis = Boolean(focusedTopic && focusedTopic !== slug)
+        const rjEdges = edges.filter((e: any) => String(e?.topic_slug || '') === slug && ((String(e?.from_role || '') === 'researcher' && String(e?.to_role || '') === 'judge') || (String(e?.from_role || '') === 'judge' && String(e?.to_role || '') === 'researcher')))
+        const strongest = rjEdges.sort((a: any, b: any) => Number(b?.activity_strength || 0) - Number(a?.activity_strength || 0))[0]
+        const edgeStrength = Number(strongest?.activity_strength || 0)
+        const edgeGlyph = strongest?.active_now ? '════▶' : edgeStrength >= 0.75 ? '━━━▶' : edgeStrength >= 0.45 ? '───▶' : '···▶'
+        const topicMark = selTopic && String(selTopic?.topic_slug || selTopic?.slug || '') === slug ? '▣' : focusThis ? '◆' : '□'
+        const prefix = dimThis ? '·' : topicMark
+        lines.push(`${prefix} Topic ${oneLine(topic?.title || slug || 'topic', Math.max(12, width - 8))}`)
+        lines.push(`  status:${topic?.status || '—'}  phase:${topic?.phase || '—'}  ckpt:${topic?.checkpoint_count || 0}`.slice(0, width))
+        lines.push(`${selNode && String(selNode?.agent_id || selNode?.id || '') === String(researcher?.agent_id || researcher?.id || '') ? '▸' : ' '} R ${oneLine(researcher?.name || researcher?.agent_id || 'researcher', 18)} ${edgeGlyph} J ${oneLine(judge?.name || judge?.agent_id || 'judge', 18)}`.slice(0, width))
+        lines.push(`    ${oneLine(researcher?.phase || researcher?.status || '—', 14)} ↔ ${oneLine(judge?.phase || judge?.status || '—', 14)}`.slice(0, width))
+        const showAllShades = focusThis || (selNode && String(selNode?.topic_slug || '') === slug)
+        for (const sh of shades.slice(0, showAllShades ? 8 : 3)) {
+          const shSel = selNode && String(selNode?.agent_id || selNode?.id || '') === String(sh?.agent_id || sh?.id || '')
+          const contract = sh?.contract_type ? ` ${sh.contract_type}` : ''
+          lines.push(`${shSel ? '▸' : ' '} shade ${oneLine(sh?.name || sh?.agent_id || 'shade', 16)}${contract} → ${oneLine(sh?.live_line || sh?.phase_summary || sh?.goal || '', Math.max(12, width - 34))}`.slice(0, width))
+        }
+        if (shades.length > (showAllShades ? 8 : 3)) lines.push(`  … ${shades.length - (showAllShades ? 8 : 3)} more shades ${focusThis ? '' : '(focus topic to expand)'}`.trim())
+        const activeTopicEdges = edges.filter((e: any) => String(e?.topic_slug || '') === slug && Boolean(e?.active_now)).length
+        if (activeTopicEdges) lines.push(`  active edges: ${activeTopicEdges}`)
+        lines.push('')
+      }
+      return lines
+    }
+
+    const nodes = librisNodesForGrid(room)
+    if (!nodes.length) return ['No non-shade Libris members available.']
+    const colW = Math.max(30, Math.floor((width - 4) / 2))
+    for (let i = 0; i < nodes.length; i += 2) {
+      const row = nodes.slice(i, i + 2)
+      const left = row[0]
+      const right = row[1]
+      const renderCellHead = (node: any, idx: number) => {
+        if (!node) return ' '.repeat(colW)
+        const sel = idx === S.roomNodeIdx ? '▣' : '□'
+        const shadeCount = String(node?.role || '') === 'researcher'
+          ? (((room?.topics || []).find((t: any) => String(t?.topic_slug || '') === String(node?.topic_slug || ''))?.shades || []).length)
+          : 0
+        const badges = [oneLine(node?.role || '', 10), oneLine(node?.phase || '', 12), oneLine(node?.status || '', 10)]
+        if (node?.topic_slug || node?.topic) badges.push(`@${oneLine(node?.topic_slug || node?.topic || '', 12)}`)
+        if (shadeCount) badges.push(`${shadeCount} shades`)
+        return padPlain(`${sel} ${oneLine(node?.name || node?.agent_id || 'agent', 16)}  ${badges.filter(Boolean).join(' • ')}`.trim(), colW)
+      }
+      const renderCellBody = (node: any) => node
+        ? padPlain(`   → ${oneLine(node?.live_line || node?.phase_summary || node?.goal || '', Math.max(12, colW - 5))}`, colW)
+        : ' '.repeat(colW)
+      lines.push(`${renderCellHead(left, i)}    ${renderCellHead(right, i + 1)}`)
+      lines.push(`${renderCellBody(left)}    ${renderCellBody(right)}`)
+      lines.push('')
+    }
+    return lines
+  }
+
+  function buildLibrisDetailLines(room: any, width: number): string[] {
+    const node = findSelectedLibrisNode(room)
+    const topic = findSelectedLibrisTopic(room)
+    const tab = S.roomDetailTab
+    const lines: string[] = []
+    const pushSection = (title: string) => {
+      if (lines.length) lines.push('')
+      lines.push(title)
+      lines.push('─'.repeat(Math.max(10, width - 1)))
+    }
+    lines.push('Detail')
+    lines.push(`${tab === 'node' ? '[node]' : ' node '} ${tab === 'topic' ? '[topic]' : ' topic '} ${tab === 'events' ? '[events]' : ' events '} ${tab === 'sources' ? '[sources]' : ' sources '} ${tab === 'delivery' ? '[delivery]' : ' delivery '}`)
+    lines.push('═'.repeat(Math.max(12, width - 1)))
+    lines.push(`TARGET → ${librisInterventionTarget(room)}`.slice(0, width))
+    lines.push(...wrapPlain(`mode: ${S.roomTargetMode}  •  Enter=send now  •  i=queue next`, width))
+    lines.push(...wrapPlain('Targets: coordinator, topic:<slug>, researcher:<slug>, judge:<slug>, shade:<id>, node:<id>  •  m=cycle mode', width))
+
+    if (tab === 'node' && node) {
+      pushSection(oneLine(node?.name || node?.agent_id || 'node', width))
+      lines.push(`role: ${node?.role || '—'}  status: ${node?.status || '—'}`.slice(0, width))
+      lines.push(`phase: ${node?.phase || '—'}  topic: ${node?.topic_slug || node?.topic || '—'}`.slice(0, width))
+      lines.push(...wrapPlain(`phase summary: ${node?.phase_summary || '—'}`, width))
+      lines.push(...wrapPlain(`live: ${node?.live_line || node?.summary || node?.goal || '—'}`, width))
+      lines.push(...wrapPlain(`goal: ${node?.goal || '—'}`, width))
+      lines.push(`session: ${node?.hasTmux ? 'tmux' : node?.source || '—'}`.slice(0, width))
+      if (node?.contract_id) lines.push(`contract: ${node.contract_id}`.slice(0, width))
+      if (node?.contract_type) lines.push(`contract type: ${node.contract_type}`.slice(0, width))
+      if (node?.contract_status) lines.push(`contract status: ${node.contract_status}`.slice(0, width))
+      if (node?.contract_current_phase_id) lines.push(`contract phase: ${node.contract_current_phase_id}`.slice(0, width))
+      if (Array.isArray(node?.contract_expected_outputs) && node.contract_expected_outputs.length) lines.push(...wrapPlain(`expected outputs: ${node.contract_expected_outputs.join(', ')}`, width))
+    } else if (tab === 'topic' && topic) {
+      pushSection(oneLine(topic?.title || topic?.topic_slug || topic?.slug || 'topic', width))
+      lines.push(`slug: ${topic?.topic_slug || topic?.slug || '—'}`.slice(0, width))
+      lines.push(`phase: ${topic?.phase || '—'}  status: ${topic?.status || '—'}`.slice(0, width))
+      lines.push(`checkpoints: ${topic?.checkpoint_count || 0}  best: ${topic?.best_checkpoint_id || '—'}`.slice(0, width))
+      if (topic?.draft_report_path) lines.push(...wrapPlain(`draft: ${topic.draft_report_path}`, width))
+      const contracts = (topic?.contracts || []) as any[]
+      if (contracts.length) {
+        pushSection('Contracts')
+        for (const c of contracts.slice(0, 4)) {
+          lines.push(...wrapPlain(`• ${c?.contract_type || c?.current_phase_name || 'contract'}  status=${c?.status || '—'}  shade=${c?.shade_agent_id || '—'}`, width))
+          if (c?.current_phase_objective) lines.push(...wrapPlain(`  ${c.current_phase_objective}`, width))
+        }
+      }
+      const topSources = (room?.promising_sources || []).filter((s: any) => !topic?.topic_slug || String(s?.topic_slug || '') === String(topic?.topic_slug || '') || String(s?.topic || '') === String(topic?.topic_slug || '')).slice(0, 3)
+      if (topSources.length) {
+        pushSection('Top sources')
+        for (const src of topSources) lines.push(...wrapPlain(`• ${src?.title || src?.url || 'source'}`, width))
+      }
+    } else if (tab === 'events') {
+      pushSection('Recent events')
+      const events = (room?.events || []).slice(-16)
+      if (!events.length) lines.push('No recent room events.')
+      for (const ev of events) lines.push(...wrapPlain(`• ${ev?.type || 'event'} — ${ev?.summary || ev?.message || ev?.text || ev?.topic || JSON.stringify(ev?.payload || {})}`, width))
+    } else if (tab === 'sources') {
+      pushSection('Promising sources')
+      const sources = (room?.promising_sources || []).slice(0, 8)
+      if (!sources.length) lines.push('No promising sources yet.')
+      for (const src of sources) {
+        lines.push(...wrapPlain(`• ${src?.title || src?.url || 'source'}${src?.lead_score != null ? ` score=${src.lead_score}` : ''}`, width))
+        if (src?.url) lines.push(...wrapPlain(`  ${src.url}`, width))
+      }
+    } else if (tab === 'delivery') {
+      pushSection('Delivery')
+      const raw = String(room?.final_selection_markdown || room?.executive_summary_markdown || '').trim()
+      if (raw) {
+        for (const para of raw.split(/\n+/)) lines.push(...wrapPlain(para, width))
+      } else {
+        lines.push('No final delivery yet.')
+      }
+      const bundle = room?.delivery_bundle || {}
+      if (bundle && Object.keys(bundle).length) {
+        pushSection('Bundle overview')
+        lines.push(...wrapPlain(`delivery bundle keys: ${Object.keys(bundle).slice(0, 8).join(', ')}`, width))
+      }
+    } else {
+      pushSection('Room summary')
+      lines.push(...wrapPlain(`prompt: ${room?.summary || room?.title || '—'}`, width))
+      lines.push(`budget: ${budgetBadge(room?.budget_status)}`.slice(0, width))
+      if (room?.final_selection_markdown || room?.executive_summary_markdown) lines.push(...wrapPlain(room?.final_selection_markdown || room?.executive_summary_markdown, width))
+    }
+
+    pushSection('Event tail')
+    const miniEvents = (room?.events || []).slice(-6)
+    if (!miniEvents.length) lines.push('No recent room events.')
+    for (const ev of miniEvents) lines.push(...wrapPlain(`• ${ev?.type || 'event'} — ${ev?.summary || ev?.message || ev?.text || ev?.topic || ''}`, width))
+    return lines
+  }
+
+  function mergePlainColumns(left: string[], right: string[], leftW: number, rightW: number): string[] {
+    const out: string[] = []
+    const rows = Math.max(left.length, right.length)
+    for (let i = 0; i < rows; i++) {
+      out.push(`${padPlain(left[i] || '', leftW)}  │  ${padPlain(right[i] || '', rightW)}`)
+    }
+    return out
+  }
+
+  function librisInterventionTarget(room: any): string {
+    const topic = findSelectedLibrisTopic(room)
+    const node = findSelectedLibrisNode(room)
+    const mode = S.roomTargetMode || 'auto'
+    if (mode === 'whole') return 'whole'
+    if (mode === 'coordinator') return 'coordinator'
+    if (mode === 'topic') {
+      const slug = String(topic?.topic_slug || topic?.slug || '').trim()
+      return slug ? `topic:${slug}` : 'whole'
+    }
+    if (mode === 'node') {
+      const role = String(node?.role || '').trim().toLowerCase()
+      const agentId = String(node?.agent_id || node?.id || '').trim()
+      const topicSlug = String(node?.topic_slug || '').trim()
+      if (role === 'coordinator') return 'coordinator'
+      if (role === 'researcher' && topicSlug) return `researcher:${topicSlug}`
+      if (role === 'judge' && topicSlug) return `judge:${topicSlug}`
+      if (role === 'shade' && agentId) return `shade:${agentId}`
+      if (agentId) return `node:${agentId}`
+      return 'whole'
+    }
+    if (S.roomDetailTab === 'topic' && topic) {
+      const slug = String(topic?.topic_slug || topic?.slug || '').trim()
+      if (slug) return `topic:${slug}`
+    }
+    const role = String(node?.role || '').trim().toLowerCase()
+    const agentId = String(node?.agent_id || node?.id || '').trim()
+    const topicSlug = String(node?.topic_slug || '').trim()
+    if (role === 'coordinator') return 'coordinator'
+    if (role === 'researcher' && topicSlug) return `researcher:${topicSlug}`
+    if (role === 'judge' && topicSlug) return `judge:${topicSlug}`
+    if (role === 'shade' && agentId) return `shade:${agentId}`
+    if (agentId) return `node:${agentId}`
+    return 'whole'
+  }
+
   function buildRooms(): StyledText {
     const parts: (StyledText | string)[] = []
     const rooms = S.interAgentRooms || []
@@ -1037,7 +1488,7 @@ async function main() {
 
     parts.push(t`${bold(fg('#a78bfa')(' Room Controls (F4)'))}`)
     parts.push('\n')
-    parts.push(t`${dim(' ↑↓ select  p pause/resume  i inject-next  Enter say-to-room  d delete-room  r refresh  F1/F2/F3 switch ')}`)
+    parts.push(t`${dim(' ↑↓ rooms  h/l or j/k cycle  1:grid  2/g:graph  tab/v:view  n/t/e/s/d tabs  m:target mode  [/]:cycle tabs  f:focus topic ')}`)
     parts.push('\n\n')
 
     if (!rooms.length) {
@@ -1053,47 +1504,102 @@ async function main() {
       const prefix = sel ? '▸ ' : '  '
       const status = String(room.status || 'unknown')
       const marker = status === 'paused' ? '⏸' : status === 'active' ? '▶' : '•'
-      const line = `${prefix}${marker} ${room.id}  ${room.title || room.kind || 'room'}`
-      const extras = []
-      if (room.active_speaker) extras.push(`speaker:${room.active_speaker}`)
-      const pending = Array.isArray(room.meta?.pending_injections) ? room.meta.pending_injections.length : 0
-      if (pending) extras.push(`queued:${pending}`)
       const badge = status === 'paused' ? '[PAUSED]' : status === 'active' ? '[RUNNING]' : `[${status.toUpperCase()}]`
+      const roomLabel = room.kind === 'libris' ? `${room.title || room.operation_id || room.id}  {libris}` : `${room.title || room.kind || 'room'}`
+      const line = `${prefix}${marker} ${room.id}  ${roomLabel}`
       parts.push(sel
         ? t`${bold(fg('#c4b5fd')(line))} ${bold(fg(statusColor(status))(badge))}`
         : t`${fg('#9ca3af')(line)} ${bold(fg(statusColor(status))(badge))}`)
+      const extras: string[] = []
+      if (room.kind === 'libris') {
+        const counts = room.counts || {}
+        if (counts.topics != null) extras.push(`topics:${counts.topics}`)
+        if (counts.non_shade_members != null) extras.push(`team:${counts.non_shade_members}`)
+        extras.push(budgetBadge(room.budget_status))
+      } else {
+        if (room.active_speaker) extras.push(`speaker:${room.active_speaker}`)
+        const pending = Array.isArray(room.meta?.pending_injections) ? room.meta.pending_injections.length : 0
+        if (pending) extras.push(`queued:${pending}`)
+      }
       if (room.summary || extras.length) {
         parts.push('\n')
-        parts.push(t`${dim(`    ${(room.summary || '').slice(0, 90)}${extras.length ? `  [${extras.join('  ')}]` : ''}`)}`)
+        parts.push(t`${dim(`    ${oneLine(room.summary || '', 86)}${extras.length ? `  [${extras.join('  ')}]` : ''}`)}`)
       }
       parts.push('\n')
     }
 
-    if (selected) {
+    if (!selected) return joinStyled(...parts)
+
+    parts.push('\n')
+    if (selected.kind === 'libris') {
+      clampLibrisSelection(selected)
+      const counts = selected.counts || {}
+      parts.push(t`${bold(fg('#d8b4fe')(` Libris Room • ${selected.operation_id || selected.id}`))}`)
       parts.push('\n')
-      parts.push(t`${bold(' Selected')}`)
+      parts.push(joinStyled(
+        t`${fg('#e2e8f0')(` status: ${selected.status || '—'}`)}`,
+        t`${dim('  •  ')}`,
+        t`${fg('#e2e8f0')(` view: ${S.roomViewMode === 'graph' ? 'Swarm Graph' : 'Team Grid'}`)}`,
+        t`${dim('  •  ')}`,
+        t`${fg('#e2e8f0')(` topics: ${counts.topics ?? (selected.topics || []).length}`)}`,
+        t`${dim('  •  ')}`,
+        t`${fg('#e2e8f0')(` agents: ${counts.members ?? (selected.nodes || []).length}`)}`,
+        t`${dim('  •  ')}`,
+        t`${fg('#e2e8f0')(` active-edges: ${activeEdgeCount(selected)}`)}`,
+        t`${dim('  •  ')}`,
+        t`${fg('#e2e8f0')(` budget: ${budgetStateLabel(selected.budget_status)}`)}`,
+      ))
       parts.push('\n')
-      parts.push(t`${fg('#e2e8f0')(` id: ${selected.id}`)}`)
+      parts.push(t`${dim(oneLine(selected.summary || selected.title || '', 110))}`)
       parts.push('\n')
-      const selectedStatus = String(selected.status || 'unknown')
-      const selectedBadge = selectedStatus === 'paused' ? 'PAUSED' : selectedStatus === 'active' ? 'RUNNING' : selectedStatus.toUpperCase()
-      parts.push(joinStyled(t`${fg('#e2e8f0')(' state: ')}`, t`${bold(fg(statusColor(selectedStatus))(selectedBadge))}`))
+      if (graphTopicFocus(selected)) parts.push(t`${dim(` focus: ${graphTopicFocus(selected)}  (f to clear/focus selected topic)` )}`)
+      else parts.push(t`${dim(` focus: all topics  •  updated: ${oneLine(selected.updated_at || selected.last_activity || '—', 48)}`)}`)
       parts.push('\n')
-      parts.push(t`${fg('#e2e8f0')(` title: ${selected.title || ''}`)}`)
+      parts.push(joinStyled(
+        t`${dim(' intervention target: ')}`,
+        t`${bold(fg('#fbbf24')(librisInterventionTarget(selected)))}`,
+        t`${dim(`  •  mode=${S.roomTargetMode}  •  Enter=now  i=next`)}`,
+      ))
       parts.push('\n')
-      const participants = (selected.participants || []).map((p: any) => `${p.role || 'participant'}:${p.name || p.id || '?'}`).join(', ')
-      parts.push(t`${dim(` participants: ${participants || '—'}`)}`)
-      parts.push('\n')
-      const events = (selected.events || []).slice(-8)
-      if (events.length) {
-        parts.push(t`${bold(' recent events')}`)
+      parts.push(t`${dim(' target legend: coordinator | topic:<slug> | researcher:<slug> | judge:<slug> | shade:<agent-id> | node:<agent-id>  •  m:cycle mode')}`)
+      parts.push('\n\n')
+
+      const termW = renderer.terminalWidth || process.stdout.columns || 80
+      const bodyW = Math.max(64, termW - 4)
+      const mainW = Math.max(36, Math.floor(bodyW * 0.6))
+      const detailW = Math.max(24, bodyW - mainW - 5)
+      const mainLines = buildLibrisMainLines(selected, mainW)
+      const detailLines = buildLibrisDetailLines(selected, detailW)
+      const merged = mergePlainColumns(mainLines, detailLines, mainW, detailW)
+      for (const line of merged) {
+        parts.push(line)
         parts.push('\n')
-        for (const ev of events) {
-          const type = String(ev.type || 'event')
-          const summary = String(ev.summary || ev.message || ev.text || ev.topic || '').replace(/\s+/g, ' ').slice(0, 100)
-          parts.push(t`${dim(`  • ${type}${summary ? ` — ${summary}` : ''}`)}`)
-          parts.push('\n')
-        }
+      }
+      return joinStyled(...parts)
+    }
+
+    parts.push(t`${bold(' Selected')}`)
+    parts.push('\n')
+    parts.push(t`${fg('#e2e8f0')(` id: ${selected.id}`)}`)
+    parts.push('\n')
+    const selectedStatus = String(selected.status || 'unknown')
+    const selectedBadge = selectedStatus === 'paused' ? 'PAUSED' : selectedStatus === 'active' ? 'RUNNING' : selectedStatus.toUpperCase()
+    parts.push(joinStyled(t`${fg('#e2e8f0')(' state: ')}`, t`${bold(fg(statusColor(selectedStatus))(selectedBadge))}`))
+    parts.push('\n')
+    parts.push(t`${fg('#e2e8f0')(` title: ${selected.title || ''}`)}`)
+    parts.push('\n')
+    const participants = (selected.participants || []).map((p: any) => `${p.role || 'participant'}:${p.name || p.id || '?'}`).join(', ')
+    parts.push(t`${dim(` participants: ${participants || '—'}`)}`)
+    parts.push('\n')
+    const events = (selected.events || []).slice(-8)
+    if (events.length) {
+      parts.push(t`${bold(' recent events')}`)
+      parts.push('\n')
+      for (const ev of events) {
+        const type = String(ev.type || 'event')
+        const summary = String(ev.summary || ev.message || ev.text || ev.topic || '').replace(/\s+/g, ' ').slice(0, 100)
+        parts.push(t`${dim(`  • ${type}${summary ? ` — ${summary}` : ''}`)}`)
+        parts.push('\n')
       }
     }
 
@@ -1571,8 +2077,15 @@ async function main() {
       return
     }
     if (S.view === 'rooms') {
-      statusBar.content = t`${dim('  ↑↓:select  p:pause/resume  i:inject-next  Enter:say-room  d:delete-room  r:refresh  F1/F2/F3/F4:switch')}`
-      statusBar2.content = ''
+      const rooms = S.interAgentRooms || []
+      const selected = rooms[S.roomIdx] as any
+      if (selected?.kind === 'libris') {
+        statusBar.content = t`${dim('  ↑↓:rooms  h/l or j/k:cycle  1:grid  2/g:graph  tab/v:toggle view  n/t/e/s/d:detail tab  m:target mode')}`
+        statusBar2.content = t`${dim('  [/]:next-prev tab  f:focus topic  Enter:inject-now  i:inject-next  Del:delete-room  p:pause  r:refresh')}`
+      } else {
+        statusBar.content = t`${dim('  ↑↓:select  p:pause/resume  i:inject-next  Enter:say-room  Del:delete-room  r:refresh  F1/F2/F3/F4:switch')}`
+        statusBar2.content = ''
+      }
       return
     }
 
@@ -2231,8 +2744,48 @@ async function main() {
       const rooms = S.interAgentRooms || []
       const selected = rooms[S.roomIdx]
       const keySeq = String((key as any).sequence || '')
-      if (key.name === 'up' && S.roomIdx > 0) { S.roomIdx--; rebuildView(); return }
-      if (key.name === 'down' && S.roomIdx < rooms.length - 1) { S.roomIdx++; rebuildView(); return }
+      if (key.name === 'up' && S.roomIdx > 0) { S.roomIdx--; S.roomNodeIdx = 0; S.roomTopicIdx = 0; S.roomGraphFocus = null; rebuildView(); return }
+      if (key.name === 'down' && S.roomIdx < rooms.length - 1) { S.roomIdx++; S.roomNodeIdx = 0; S.roomTopicIdx = 0; S.roomGraphFocus = null; rebuildView(); return }
+      if (selected?.kind === 'libris') {
+        clampLibrisSelection(selected)
+        const nodes = S.roomViewMode === 'graph' ? librisNodesForGraph(selected) : librisNodesForGrid(selected)
+        const topics = (selected.topics || []) as any[]
+        if (keySeq === '1') { setLibrisViewMode(selected, 'grid'); rebuildView(); updateStatus(); return }
+        if (keySeq === '2' || keySeq === 'g' || keySeq === 'G') { setLibrisViewMode(selected, 'graph'); rebuildView(); updateStatus(); return }
+        if (key.name === 'tab' || keySeq === 'v' || keySeq === 'V') { setLibrisViewMode(selected, S.roomViewMode === 'grid' ? 'graph' : 'grid'); rebuildView(); updateStatus(); return }
+        if (keySeq === 'e' || keySeq === 'E') { S.roomDetailTab = 'events'; rebuildView(); return }
+        if (keySeq === 's' || keySeq === 'S') { S.roomDetailTab = 'sources'; rebuildView(); return }
+        if (keySeq === 'd' || keySeq === 'D') { S.roomDetailTab = 'delivery'; rebuildView(); return }
+        if (keySeq === 'n' || keySeq === 'N') { S.roomDetailTab = 'node'; rebuildView(); return }
+        if (keySeq === 't' || keySeq === 'T') { S.roomDetailTab = 'topic'; rebuildView(); return }
+        if (keySeq === 'm' || keySeq === 'M') {
+          const order: any[] = ['auto', 'whole', 'coordinator', 'topic', 'node']
+          const idx = Math.max(0, order.indexOf(S.roomTargetMode))
+          S.roomTargetMode = order[(idx + 1) % order.length]
+          rebuildView(); return
+        }
+        if ((keySeq === '[' || keySeq === '{')) {
+          const order: any[] = ['node', 'topic', 'events', 'sources', 'delivery']
+          const idx = Math.max(0, order.indexOf(S.roomDetailTab))
+          S.roomDetailTab = order[(idx + order.length - 1) % order.length]
+          rebuildView(); return
+        }
+        if ((keySeq === ']' || keySeq === '}')) {
+          const order: any[] = ['node', 'topic', 'events', 'sources', 'delivery']
+          const idx = Math.max(0, order.indexOf(S.roomDetailTab))
+          S.roomDetailTab = order[(idx + 1) % order.length]
+          rebuildView(); return
+        }
+        if (keySeq === 'f' || keySeq === 'F') {
+          const focusSlug = String(findSelectedLibrisTopic(selected)?.topic_slug || findSelectedLibrisTopic(selected)?.slug || '').trim()
+          S.roomGraphFocus = focusSlug && S.roomGraphFocus !== focusSlug ? focusSlug : null
+          rebuildView(); return
+        }
+        if ((key.name === 'left' || keySeq === 'h' || keySeq === 'H' || keySeq === 'k' || keySeq === 'K') && S.roomDetailTab === 'topic' && topics.length) { S.roomTopicIdx = Math.max(0, S.roomTopicIdx - 1); rebuildView(); return }
+        if ((key.name === 'right' || keySeq === 'l' || keySeq === 'L' || keySeq === 'j' || keySeq === 'J') && S.roomDetailTab === 'topic' && topics.length) { S.roomTopicIdx = Math.min(topics.length - 1, S.roomTopicIdx + 1); rebuildView(); return }
+        if ((key.name === 'left' || keySeq === 'h' || keySeq === 'H' || keySeq === 'k' || keySeq === 'K') && S.roomDetailTab !== 'topic' && nodes.length) { S.roomNodeIdx = Math.max(0, S.roomNodeIdx - 1); rebuildView(); return }
+        if ((key.name === 'right' || keySeq === 'l' || keySeq === 'L' || keySeq === 'j' || keySeq === 'J') && S.roomDetailTab !== 'topic' && nodes.length) { S.roomNodeIdx = Math.min(nodes.length - 1, S.roomNodeIdx + 1); rebuildView(); return }
+      }
       if (key.name === 'r' || keySeq === 'r' || keySeq === 'R') {
         backend.sendRefresh()
         statusBar.content = t`${fg('#93c5fd')('  ↻ Refreshing rooms…')}`
@@ -2242,16 +2795,23 @@ async function main() {
       if ((key.name === 'return' || key.name === 'enter' || keySeq === '\r' || keySeq === '\n') && selected) {
         switchView('chat')
         input.focus()
-        input.value = `/say-room ${selected.id} `
-        statusBar.content = t`${fg('#f59e0b')(`  Ready to speak into ${selected.id}`)}`
+        if ((selected as any)?.kind === 'libris') {
+          const target = librisInterventionTarget(selected)
+          input.value = `/inject-room ${selected.id} --target ${target} --when now `
+          statusBar.content = t`${fg('#f59e0b')(`  Ready to send immediate steering to ${target} in ${selected.id}`)}`
+        } else {
+          input.value = `/say-room ${selected.id} `
+          statusBar.content = t`${fg('#f59e0b')(`  Ready to speak into ${selected.id}`)}`
+        }
         renderer.requestRender()
         return
       }
       if ((key.name === 'i' || keySeq === 'i' || keySeq === 'I') && selected) {
         switchView('chat')
         input.focus()
-        input.value = `/inject-room ${selected.id} --target whole --when next `
-        statusBar.content = t`${fg('#a78bfa')(`  Ready to queue steering for ${selected.id}`)}`
+        const target = (selected as any)?.kind === 'libris' ? librisInterventionTarget(selected) : 'whole'
+        input.value = `/inject-room ${selected.id} --target ${target} --when next `
+        statusBar.content = t`${fg('#a78bfa')(`  Ready to queue steering for ${selected.id}${target !== 'whole' ? ` → ${target}` : ''}`)}`
         renderer.requestRender()
         return
       }
@@ -2267,7 +2827,7 @@ async function main() {
         backend.sendRefresh()
         return
       }
-      if ((key.name === 'd' || keySeq === 'd' || keySeq === 'D' || key.name === 'delete' || key.name === 'backspace') && selected) {
+      if ((key.name === 'd' || key.name === 'delete' || key.name === 'backspace') && selected) {
         const roomId = String(selected.id || '')
         if (!roomId) return
         S.interAgentRooms = rooms.filter((r: any) => String(r.id || '') !== roomId)
@@ -2918,6 +3478,8 @@ async function main() {
         if (p?.inter_agent_rooms) {
           S.interAgentRooms = p.inter_agent_rooms as any
           if (S.roomIdx >= S.interAgentRooms.length) S.roomIdx = Math.max(0, S.interAgentRooms.length - 1)
+          const room = S.interAgentRooms[S.roomIdx] as any
+          if (room?.kind === 'libris') clampLibrisSelection(room)
         }
 
         // Merge session data into agents list:

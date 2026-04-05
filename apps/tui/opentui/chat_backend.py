@@ -503,8 +503,221 @@ def _project_slug(text: str) -> str:
     return slug[:96] or 'project'
 
 
+def _collect_devop_rooms(state_dir: Path, project_root: Path) -> list[dict]:
+    rooms = []
+    try:
+        from devop_runtime import software_ops_root, get_operation_state
+        from devop_projection import project_graph, project_f4_stream, summarize_operation
+
+        ops_dir = software_ops_root(state_dir)
+        if not ops_dir.exists():
+            return []
+        wanted_root = str(project_root.resolve())
+        for op_path in sorted(ops_dir.glob('*')):
+            if not op_path.is_dir():
+                continue
+            op = get_operation_state(state_dir, op_path.name)
+            if not op:
+                continue
+            op_root = str(op.get('project_root') or '').strip()
+            if op_root and op_root != wanted_root:
+                continue
+            op_id = str(op.get('operation_id') or '').strip()
+            if not op_id:
+                continue
+            graph = project_graph(state_dir, op_id)
+            f4 = project_f4_stream(state_dir, op_id)
+            summary = summarize_operation(state_dir, op_id)
+            rooms.append({
+                'id': f'devop-{op_id}',
+                'kind': 'software_dev',
+                'title': str(op.get('title') or op.get('prompt') or op_id)[:120],
+                'project': str(op.get('project_root') or project_root),
+                'status': str(op.get('status') or 'active'),
+                'created_at': str(op.get('created_at') or ''),
+                'updated_at': str(op.get('updated_at') or ''),
+                'last_activity': str((summary.get('last_event') or {}).get('ts') or op.get('updated_at') or op.get('created_at') or ''),
+                'participants': [
+                    {
+                        'id': str(n.get('id') or ''),
+                        'name': str(n.get('label') or n.get('id') or ''),
+                        'role': str(n.get('operation_role') or n.get('node_type') or ''),
+                        'status': str(n.get('status') or ''),
+                    }
+                    for n in (graph.get('nodes') or []) if str(n.get('node_type') or '') == 'agent'
+                ],
+                'summary': str(op.get('prompt') or '')[:200],
+                'operation_id': op_id,
+                'domain': 'software_dev',
+                'nodes': graph.get('nodes') or [],
+                'edges': graph.get('edges') or [],
+                'workstreams': f4.get('workstreams') or [],
+                'active_reviews': f4.get('active_reviews') or [],
+                'events': f4.get('stream') or [],
+            })
+    except Exception:
+        return []
+    return rooms
+
+
+def _dashboard_spark_points(values: list[int], limit: int = 12) -> list[int]:
+    vals = [max(0, int(v or 0)) for v in values][-limit:]
+    return vals or [0]
+
+
+def _project_goal_tree(state_dir: Path, project_path: str) -> list[dict]:
+    try:
+        from goal_runtime import list_goals
+        goals = list_goals(state_dir, project=project_path)
+    except Exception:
+        goals = []
+    if not goals:
+        return []
+    by_parent: dict[str, list[dict]] = {}
+    roots: list[dict] = []
+    for g in goals:
+        pid = str(g.get('parent_goal_id') or '')
+        by_parent.setdefault(pid, []).append(g)
+    def build(node: dict) -> dict:
+        gid = str(node.get('goal_id') or '')
+        children = [build(c) for c in by_parent.get(gid, [])]
+        return {
+            'goal_id': gid,
+            'title': str(node.get('title') or ''),
+            'status': str(node.get('status') or ''),
+            'children': children,
+        }
+    roots = [build(g) for g in by_parent.get('', [])]
+    if not roots:
+        roots = [build(g) for g in goals[:20]]
+    return roots[:20]
+
+
+def _project_usage_summary(state_dir: Path, project_path: str) -> dict:
+    summary = {
+        'input_tokens': 0,
+        'output_tokens': 0,
+        'total_tokens': 0,
+        'estimated_cost_usd': 0.0,
+        'hours_spent_estimate': 0.0,
+        'libris_operations': 0,
+        'devop_operations': 0,
+    }
+    try:
+        from libris_runtime import research_root
+        rroot = research_root(state_dir, Path(project_path))
+        ops_dir = rroot / 'operations'
+        if ops_dir.exists():
+            for op_path in ops_dir.glob('*'):
+                op = _load_json(op_path / 'operation.json', {})
+                if not op:
+                    continue
+                summary['libris_operations'] += 1
+                usage = op.get('usage') or {}
+                summary['input_tokens'] += int(usage.get('input_tokens') or 0)
+                summary['output_tokens'] += int(usage.get('output_tokens') or 0)
+                summary['total_tokens'] += int(usage.get('total_tokens') or 0)
+                summary['estimated_cost_usd'] += float(usage.get('estimated_cost_usd') or 0.0)
+    except Exception:
+        pass
+    try:
+        from devop_runtime import list_operations as _unused  # type: ignore
+    except Exception:
+        pass
+    try:
+        from devop_runtime import software_ops_root, get_operation_state
+        for op_path in (software_ops_root(state_dir)).glob('*'):
+            if not op_path.is_dir():
+                continue
+            op = get_operation_state(state_dir, op_path.name)
+            if not op or str(op.get('project_root') or '').strip() != str(Path(project_path).resolve()):
+                continue
+            summary['devop_operations'] += 1
+            usage = op.get('usage') or {}
+            summary['input_tokens'] += int(usage.get('input_tokens') or 0)
+            summary['output_tokens'] += int(usage.get('output_tokens') or 0)
+            summary['total_tokens'] += int(usage.get('total_tokens') or 0)
+            summary['estimated_cost_usd'] += float(usage.get('estimated_cost_usd') or 0.0)
+    except Exception:
+        pass
+    summary['estimated_cost_usd'] = round(float(summary['estimated_cost_usd']), 6)
+    summary['hours_spent_estimate'] = round((summary['total_tokens'] / 12000.0), 2) if summary['total_tokens'] else 0.0
+    return summary
+
+
+def _project_activity_points(state_dir: Path, project_path: str) -> list[int]:
+    counts = [0] * 12
+    try:
+        run_log = state_dir / 'run.log'
+        if run_log.exists():
+            lines = run_log.read_text(encoding='utf-8', errors='replace').splitlines()[-240:]
+            for i, _line in enumerate(lines[-12:]):
+                counts[min(11, i)] += 1
+    except Exception:
+        pass
+    return _dashboard_spark_points(counts)
+
+
+def _parse_interval_phrase(text: str) -> int:
+    s = str(text or '').strip().lower()
+    if not s:
+        return 0
+    if re.search(r'\bevery\s+hour\b|\bhourly\b', s):
+        return 3600
+    if re.search(r'\bevery\s+day\b|\bdaily\b', s):
+        return 86400
+    if re.search(r'\bevery\s+minute\b', s):
+        return 60
+    m = re.search(r'\bevery\s+(\d+)\s*(minute|minutes|hour|hours|day|days)\b', s)
+    if not m:
+        return 0
+    n = int(m.group(1))
+    unit = m.group(2)
+    if 'minute' in unit:
+        return n * 60
+    if 'hour' in unit:
+        return n * 3600
+    if 'day' in unit:
+        return n * 86400
+    return 0
+
+
+def _natural_language_to_cron(text: str) -> str:
+    s = str(text or '').strip().lower()
+    if not s:
+        return ''
+    if 'every day at ' in s or 'daily at ' in s:
+        m = re.search(r'(?:every day at|daily at)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?', s)
+        if m:
+            hour = int(m.group(1))
+            minute = int(m.group(2) or 0)
+            meridiem = (m.group(3) or '').lower()
+            if meridiem == 'pm' and hour < 12:
+                hour += 12
+            if meridiem == 'am' and hour == 12:
+                hour = 0
+            return f'{minute} {hour} * * *'
+    if 'every weekday at ' in s:
+        m = re.search(r'every weekday at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?', s)
+        if m:
+            hour = int(m.group(1))
+            minute = int(m.group(2) or 0)
+            meridiem = (m.group(3) or '').lower()
+            if meridiem == 'pm' and hour < 12:
+                hour += 12
+            if meridiem == 'am' and hour == 12:
+                hour = 0
+            return f'{minute} {hour} * * 1-5'
+    return ''
+
+
 class ChatBackend:
     def __init__(self):
+        try:
+            from automation_scheduler import start_scheduler
+            start_scheduler(STATE_DIR, poll_seconds=2.0)
+        except Exception:
+            pass
         self.engine: ConversationEngine | None = None
         self.chat_history: list[dict] = []
         self._engine_lock = threading.Lock()
@@ -987,7 +1200,7 @@ class ChatBackend:
                         'session': speaker_session,
                         'summary': prompt.splitlines()[0][:200],
                     })
-                    update_room(STATE_DIR, rid, summary=f'{speaker_name} turn {turn}: {topic_local}', active_speaker=speaker_role)
+                    update_room(STATE_DIR, rid, summary=f'{speaker_name} turn {turn}: {topic_local}', active_speaker=speaker_role, active_state='thinking')
                     emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': None})
 
                     participant_count = len(room_participants)
@@ -996,25 +1209,63 @@ class ChatBackend:
                     completion_timeout = 8.0 if participant_count >= 3 else 12.0
                     speaker_participant = next((p for p in room_participants if str(p.get('session') or '') == speaker_session), None)
                     runtime = runtime_for_participant(speaker_participant or {'session': speaker_session})
+                    turn_runtime = {
+                        'phase': 'thinking',
+                        'research_started_at': None,
+                        'reply_started': False,
+                        'nudge_sent': False,
+                    }
+                    research_nudge_after = 8.0 if participant_count <= 2 else 6.0
 
                     def _runtime_event(evt: dict) -> None:
                         et = str((evt or {}).get('type') or '')
+                        now = time.time()
                         if et == 'tool_progress':
+                            if turn_runtime['research_started_at'] is None:
+                                turn_runtime['research_started_at'] = now
+                            turn_runtime['phase'] = 'researching'
+                            summary = str((evt or {}).get("summary") or "tool activity")[:160]
+                            tool_name = str((evt or {}).get('tool_name') or '').strip()
+                            tool_phase = str((evt or {}).get('tool_phase') or '').strip()
+                            if tool_name or tool_phase:
+                                append_event(STATE_DIR, rid, {
+                                    'type': 'participant_tool_progress',
+                                    'turn': turn,
+                                    'speaker_role': speaker_role,
+                                    'session': speaker_session,
+                                    'tool_name': tool_name,
+                                    'tool_phase': tool_phase,
+                                    'summary': summary,
+                                })
                             update_room(
                                 STATE_DIR,
                                 rid,
-                                summary=f'{speaker_name} researching: {str((evt or {}).get("summary") or "tool activity")[:160]}',
+                                summary=f'{speaker_name} researching: {summary}',
                                 active_speaker=speaker_role,
+                                active_state='researching',
                             )
+                            if (not turn_runtime['reply_started'] and not turn_runtime['nudge_sent'] and turn_runtime['research_started_at'] is not None and (now - float(turn_runtime['research_started_at'] or now)) >= research_nudge_after):
+                                if runtime.send_input('Please reply to the conversation now with what you have so far. If research is incomplete, briefly note the uncertainty and continue.'):
+                                    turn_runtime['nudge_sent'] = True
+                                    append_event(STATE_DIR, rid, {
+                                        'type': 'turn_nudged',
+                                        'turn': turn,
+                                        'speaker_role': speaker_role,
+                                        'session': speaker_session,
+                                        'summary': f'{speaker_name} was nudged to answer after extended research',
+                                    })
                             emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': None})
                         elif et in ('reply_started', 'reply_progress'):
                             text = str((evt or {}).get('text') or '').strip()
                             if text:
+                                turn_runtime['reply_started'] = True
+                                turn_runtime['phase'] = 'replying'
                                 update_room(
                                     STATE_DIR,
                                     rid,
                                     summary=f'{speaker_name} drafting reply: {text[:160]}',
                                     active_speaker=speaker_role,
+                                    active_state='replying',
                                 )
                                 emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': None})
 
@@ -1039,6 +1290,7 @@ class ChatBackend:
                             'text': utterance,
                             'last_line': str(result.get('last_line') or '')[:240],
                         })
+                        update_room(STATE_DIR, rid, summary=f'{speaker_name} replied on turn {turn}', active_speaker=speaker_role, active_state='handoff')
                         emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': None})
                         time.sleep(0.15)
                         continue
@@ -1052,6 +1304,7 @@ class ChatBackend:
                             'session': speaker_session,
                             'summary': f"still waiting for response{'' if wait_idx == 0 else ' (retry listen)'}",
                         })
+                        update_room(STATE_DIR, rid, summary=f'{speaker_name} waiting for visible reply', active_speaker=speaker_role, active_state='waiting')
                         emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': None})
                         result = runtime.capture_output(
                             timeout=(6.0 if participant_count >= 3 else 10.0),
@@ -1075,6 +1328,7 @@ class ChatBackend:
                             'text': utterance,
                             'last_line': str(result.get('last_line') or '')[:240],
                         })
+                        update_room(STATE_DIR, rid, summary=f'{speaker_name} replied on turn {turn}', active_speaker=speaker_role, active_state='handoff')
                         emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': None})
                         time.sleep(0.15)
                         captured = True
@@ -1092,10 +1346,11 @@ class ChatBackend:
                         'session': speaker_session,
                         'summary': str(result.get('error') or 'no visible output')[:240],
                     })
+                    update_room(STATE_DIR, rid, summary=f'{speaker_name} stalled on turn {turn}', active_speaker=speaker_role, active_state='stalled')
                     emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': None})
                     if silent_turns >= 3:
                         append_event(STATE_DIR, rid, {'type': 'conversation_stalled', 'turn': turn, 'speaker_role': speaker_role, 'topic': topic_local})
-                        update_room(STATE_DIR, rid, status='paused', summary=f'Paused after repeated timeouts on turn {turn}', active_speaker=speaker_role)
+                        update_room(STATE_DIR, rid, status='paused', summary=f'Paused after repeated timeouts on turn {turn}', active_speaker=speaker_role, active_state='paused')
                         break
                     time.sleep(0.5 if participant_count >= 3 else 1.0)
 
@@ -1954,10 +2209,16 @@ class ChatBackend:
 
     def _get_refresh_payload(self) -> dict:
         onboarding = _load_json(STATE_DIR / 'onboarding.json', {})
+        session_id = self._active_agent_id or None
+        session_override = load_session_provider_config(STATE_DIR, session_id) if session_id else {}
+        effective_onboarding = dict(onboarding)
+        if session_override:
+            effective_onboarding.update(session_override)
+
         session_cfg = self._session_provider_state()
-        provider = str(session_cfg.get('provider_raw') or onboarding.get('provider') or '').strip()
-        model = str(session_cfg.get('model_id') or onboarding.get('model') or onboarding.get('provider_model') or '').strip()
-        complete = bool(session_cfg.get('ready') or onboarding.get('complete'))
+        provider = str(session_cfg.get('provider_raw') or effective_onboarding.get('provider') or '').strip()
+        model = str(session_cfg.get('model_id') or effective_onboarding.get('model') or effective_onboarding.get('provider_model') or '').strip()
+        complete = bool(session_cfg.get('ready') or effective_onboarding.get('complete'))
         if self.engine is not None:
             provider = str(getattr(self.engine, 'provider_name', '') or provider).strip()
             model = str(getattr(getattr(self.engine, 'model', None), 'model_id', '') or model).strip()
@@ -2101,6 +2362,27 @@ class ChatBackend:
         except Exception:
             for p in projects:
                 p['active'] = any(ad.get('status') == 'running' for ad in p.get('agent_details', []))
+
+        for p in projects:
+            path = str(p.get('path') or '').strip()
+            usage = _project_usage_summary(STATE_DIR, path or str(ROOT))
+            goal_tree = _project_goal_tree(STATE_DIR, path or str(ROOT))
+            flat_goals = []
+            try:
+                from goal_runtime import list_goals
+                flat_goals = list_goals(STATE_DIR, project=path or str(ROOT))
+            except Exception:
+                flat_goals = []
+            p['usage'] = usage
+            p['goal_tree'] = goal_tree
+            p['goal_counts'] = {
+                'total': len(flat_goals),
+                'completed': sum(1 for g in flat_goals if str(g.get('status') or '') == 'completed'),
+                'active': sum(1 for g in flat_goals if str(g.get('status') or '') in {'active', 'executing', 'planning', 'verifying'}),
+                'pending': sum(1 for g in flat_goals if str(g.get('status') or '') in {'backlog', 'proposed', 'confirmed'}),
+                'blocked': sum(1 for g in flat_goals if str(g.get('status') or '') == 'blocked'),
+            }
+            p['activity_points'] = _project_activity_points(STATE_DIR, path or str(ROOT))
 
         # Derive sessions — discover ALL tmux sessions, match to agents where possible
         sessions = []
@@ -2371,11 +2653,11 @@ class ChatBackend:
         except Exception:
             inter_agent_rooms = []
 
-        # Map Libris operations into the shared F4 room list so F4 can render
-        # them with a graph-first layout later.
+        # Map Libris and software-dev operations into the shared F4 room list so
+        # F4 can render them with a graph-first layout later.
+        project_root = Path(str(onboarding.get('project') or str(ROOT)).strip() or str(ROOT))
         try:
             from libris_runtime import rebuild_project_index, get_libris_swarm_state
-            project_root = Path(str(onboarding.get('project') or str(ROOT)).strip() or str(ROOT))
             idx = rebuild_project_index(STATE_DIR, project_root)
             for op in idx.get('operations') or []:
                 op_id = str(op.get('operation_id') or '').strip()
@@ -2407,11 +2689,22 @@ class ChatBackend:
                     'nodes': swarm.get('nodes') or [],
                     'edges': swarm.get('edges') or [],
                     'topics': swarm.get('topics') or [],
+                    'team_grid_nodes': swarm.get('team_grid_nodes') or [],
+                    'non_shade_members': swarm.get('non_shade_members') or [],
+                    'views': swarm.get('views') or {},
+                    'counts': swarm.get('counts') or {},
                     'budget_status': swarm.get('budget_status') or {},
                     'promising_sources': swarm.get('promising_sources') or [],
+                    'executive_summary_markdown': swarm.get('executive_summary_markdown') or '',
+                    'delivery_bundle': swarm.get('delivery_bundle') or {},
                     'final_selection_markdown': swarm.get('final_selection_markdown') or '',
                     'events': swarm.get('events_tail') or [],
                 })
+        except Exception:
+            pass
+
+        try:
+            inter_agent_rooms.extend(_collect_devop_rooms(STATE_DIR, project_root))
         except Exception:
             pass
 
@@ -2431,13 +2724,20 @@ class ChatBackend:
                 room['participant_sessions'] = participant_sessions
             room['session_details'] = [session_lookup[s] for s in participant_sessions if s in session_lookup]
 
+        automations = []
+        try:
+            from automation_runtime import list_automations, get_automation_state
+            automations = [get_automation_state(STATE_DIR, str(a.get('automation_id') or '')) for a in list_automations(STATE_DIR)]
+        except Exception:
+            automations = []
+
         payload = {
             'onboarding': {
                 'complete': complete,
                 'provider': provider,
                 'model': model,
-                'step': onboarding.get('step', 'provider-mode'),
-                'project': str(onboarding.get('project') or '').strip(),
+                'step': effective_onboarding.get('step', 'provider-mode'),
+                'project': str(effective_onboarding.get('project') or '').strip(),
             },
             'agents': agents,
             'projects': projects,
@@ -2445,6 +2745,12 @@ class ChatBackend:
             'activity': activity,
             'transfer_events': transfer_events,
             'inter_agent_rooms': inter_agent_rooms,
+            'automations': automations,
+            'dashboard': {
+                'agents_row': {'items': agents},
+                'projects_row': {'items': projects},
+                'automations_row': {'items': automations},
+            },
             'chat_history': self.chat_history[-200:],
             'engine_ready': self.engine is not None,
             'message_count': len(self.engine.messages) if self.engine else 0,
@@ -2462,6 +2768,138 @@ class ChatBackend:
             payload['consolidation_traces'] = []
 
         return payload
+
+    def _project_root_for_rooms(self) -> Path:
+        onboarding = _load_json(STATE_DIR / 'onboarding.json', {})
+        return Path(str(onboarding.get('project') or str(ROOT)).strip() or str(ROOT))
+
+    def _load_libris_room(self, room_id: str) -> dict | None:
+        rid = str(room_id or '').strip()
+        if not rid.startswith('libris-'):
+            return None
+        op_id = rid[len('libris-'):].strip()
+        if not op_id:
+            return None
+        try:
+            from libris_runtime import get_libris_swarm_state
+            project_root = self._project_root_for_rooms()
+            swarm = get_libris_swarm_state(STATE_DIR, project_root, op_id)
+            if not swarm:
+                return None
+            return {
+                'id': rid,
+                'kind': 'libris',
+                'operation_id': op_id,
+                'title': str(swarm.get('prompt') or op_id)[:120],
+                'status': str(swarm.get('status') or 'active'),
+                'participants': [
+                    {
+                        'id': str(n.get('agent_id') or ''),
+                        'name': str(n.get('name') or ''),
+                        'role': str(n.get('role') or ''),
+                        'topic_slug': str(n.get('topic_slug') or ''),
+                    }
+                    for n in (swarm.get('nodes') or [])
+                    if str(n.get('agent_id') or '').strip()
+                ],
+                'nodes': swarm.get('nodes') or [],
+                'topics': swarm.get('topics') or [],
+            }
+        except Exception:
+            return None
+
+    def _resolve_libris_targets(self, room: dict, target: str) -> tuple[list[dict], str]:
+        nodes = [n for n in (room.get('nodes') or []) if isinstance(n, dict)]
+        topics = [t for t in (room.get('topics') or []) if isinstance(t, dict)]
+        token = str(target or 'whole').strip()
+        tl = token.lower()
+        if tl in ('', 'whole', 'room', 'all', '*'):
+            return [n for n in nodes if str(n.get('agent_id') or '').strip()], 'whole room'
+        if tl == 'coordinator':
+            out = [n for n in nodes if str(n.get('role') or '').lower() == 'coordinator']
+            return out, 'coordinator'
+        if tl.startswith('node:'):
+            node_id = token.split(':', 1)[1].strip()
+            out = [n for n in nodes if str(n.get('agent_id') or '') == node_id]
+            return out, f'node:{node_id}'
+        if tl.startswith('agent:'):
+            node_id = token.split(':', 1)[1].strip()
+            out = [n for n in nodes if str(n.get('agent_id') or '') == node_id]
+            return out, f'agent:{node_id}'
+        if tl.startswith('topic:'):
+            slug = token.split(':', 1)[1].strip()
+            out: list[dict] = []
+            for topic in topics:
+                if str(topic.get('topic_slug') or '') != slug:
+                    continue
+                for key in ('researcher', 'judge'):
+                    node = topic.get(key) or {}
+                    if str(node.get('agent_id') or '').strip():
+                        out.append(node)
+                break
+            return out, f'topic:{slug}'
+        if tl.startswith('researcher:') or tl.startswith('judge:'):
+            role, slug = tl.split(':', 1)
+            out = [n for n in nodes if str(n.get('role') or '').lower() == role and str(n.get('topic_slug') or '') == slug]
+            return out, f'{role}:{slug}'
+        if tl.startswith('shade:'):
+            shade_id = token.split(':', 1)[1].strip()
+            out = [n for n in nodes if str(n.get('role') or '').lower() == 'shade' and str(n.get('agent_id') or '') == shade_id]
+            return out, f'shade:{shade_id}'
+        out = [
+            n for n in nodes
+            if tl in str(n.get('agent_id') or '').lower()
+            or tl in str(n.get('name') or '').lower()
+            or tl == str(n.get('role') or '').lower()
+        ]
+        return out, token
+
+    def _dispatch_libris_room_intervention(self, room_id: str, *, target: str, when: str, message: str, request_id: str | None, mode: str = 'inject') -> bool:
+        room = self._load_libris_room(room_id)
+        if not room:
+            emit({'type': 'error', 'error': f'Unknown room: {room_id}', 'request_id': request_id})
+            return True
+        targets, target_label = self._resolve_libris_targets(room, target)
+        if not targets:
+            emit({'type': 'error', 'error': f'No Libris targets matched: {target}', 'request_id': request_id})
+            return True
+        try:
+            from session_registry import send_steer
+            from libris_runtime import append_operation_event
+            project_root = self._project_root_for_rooms()
+            sent: list[str] = []
+            for node in targets:
+                agent_id = str(node.get('agent_id') or '').strip()
+                if not agent_id:
+                    continue
+                if send_steer(STATE_DIR, agent_id, message):
+                    sent.append(agent_id)
+            append_operation_event(
+                STATE_DIR,
+                project_root,
+                str(room.get('operation_id') or ''),
+                'operator_intervention',
+                {
+                    'mode': mode,
+                    'room_id': room_id,
+                    'target': target_label,
+                    'requested_target': str(target or ''),
+                    'when': str(when or 'next'),
+                    'summary': str(message or '')[:240],
+                    'message': str(message or ''),
+                    'target_agent_ids': sent,
+                },
+            )
+            emit({
+                'type': 'status',
+                'message': f'{"Sent" if mode == "say" else "Queued"} Libris intervention for {room_id} target={target_label} agents={len(sent)}: {message[:120]}',
+                'request_id': request_id,
+            })
+            self.handle_refresh(request_id)
+            return True
+        except Exception as e:
+            emit({'type': 'error', 'error': f'Libris intervention failed: {e}', 'request_id': request_id})
+            return True
 
     def handle_refresh(self, request_id: str | None):
         payload = self._get_refresh_payload()
@@ -2547,6 +2985,11 @@ class ChatBackend:
         return name in {'anthropic', 'openai', 'local'}
 
     def _libris_project_root(self) -> str:
+        onboarding = _load_json(STATE_DIR / 'onboarding.json', {})
+        configured_project = str(onboarding.get('project') or '').strip()
+        return configured_project or str(ROOT)
+
+    def _devop_project_root(self) -> str:
         onboarding = _load_json(STATE_DIR / 'onboarding.json', {})
         configured_project = str(onboarding.get('project') or '').strip()
         return configured_project or str(ROOT)
@@ -2714,9 +3157,26 @@ class ChatBackend:
             {'cmd': '/pause-room <room-id>', 'desc': 'Pause a conversation room runner'},
             {'cmd': '/resume-room <room-id>', 'desc': 'Resume a paused conversation room runner'},
             {'cmd': '/say-room <room-id> <message>', 'desc': 'Say something to the whole room so both sides can react'},
-            {'cmd': '/inject-room <room-id> [--target whole|teacher|student|<participant>] [--when now|next] <message>', 'desc': 'Inject steering or a message into a room'},
+            {'cmd': '/inject-room <room-id> [--target whole|teacher|student|<participant>|coordinator|topic:<slug>|node:<agent-id>|researcher:<slug>|judge:<slug>|shade:<agent-id>] [--when now|next] <message>', 'desc': 'Inject steering or a message into a room'},
             {'cmd': '/libris <prompt>', 'desc': 'Start a Libris research intake for a broad research prompt'},
             {'cmd': '/libris status <operation_id>', 'desc': 'Inspect Libris swarm state for an operation'},
+            {'cmd': '/devop <prompt>', 'desc': 'Start an autonomous software-development operation for a broad build prompt'},
+            {'cmd': '/devop status <operation_id>', 'desc': 'Inspect software-dev operation status and workstreams'},
+            {'cmd': '/devop stop <operation_id>', 'desc': 'Request stop for a software-dev operation'},
+            {'cmd': '/monitor every hour <url>', 'desc': 'Create a recurring website health monitor'},
+            {'cmd': '/automate every <n> <unit> check <url>', 'desc': 'Create a recurring automation for HTTP checking'},
+            {'cmd': '/automate list', 'desc': 'List all automations'},
+            {'cmd': '/automate list cron', 'desc': 'List cron-scheduled automations'},
+            {'cmd': '/automate list continuous', 'desc': 'List always-on continuous automations'},
+            {'cmd': '/automate list scheduled', 'desc': 'List interval/cron scheduled automations'},
+            {'cmd': '/automate status <automation_id>', 'desc': 'Inspect an automation and recent runs'},
+            {'cmd': '/automate pause <automation_id>', 'desc': 'Pause a recurring automation'},
+            {'cmd': '/automate resume <automation_id>', 'desc': 'Resume a paused recurring automation'},
+            {'cmd': '/automate stop <automation_id>', 'desc': 'Stop a recurring automation'},
+            {'cmd': '/automate cron "0 9 * * 1-5" check <url>', 'desc': 'Create a cron-scheduled automation'},
+            {'cmd': '/automate continuous every <n> seconds check <url>', 'desc': 'Create an always-on loop automation'},
+            {'cmd': '/monitor browser every hour <url> expect "text"', 'desc': 'Create a browser-rendered functional monitor'},
+            {'cmd': '/automate browser every <n> <unit> check <url> expect "text"', 'desc': 'Create a browser-based rendered-page monitor'},
         ]
 
     def _get_suggestions(self, prefix: str) -> list[dict]:
@@ -2724,11 +3184,11 @@ class ChatBackend:
         prefix = prefix.strip().lower()
         catalog = self._command_catalog()
         if not prefix or prefix == '/':
-            return catalog[:10]
+            return catalog[:40]
 
         starts = [c for c in catalog if c['cmd'].lower().startswith(prefix)]
         if starts:
-            return starts[:10]
+            return starts[:30]
 
         token_matches: list[dict] = []
         needle = prefix.lstrip('/')
@@ -2975,6 +3435,227 @@ class ChatBackend:
                 if self._libris_has_clear_goal(rest):
                     pending['selected_goal'] = rest
                 self._emit_libris_intake(request_id)
+                return
+            if command == '/devop' or command.startswith('/devop '):
+                rest = command[7:].strip() if command.startswith('/devop ') else ''
+                if not rest:
+                    emit({'type': 'status', 'message': 'Usage: /devop <broad software build prompt>', 'request_id': request_id})
+                    return
+                if rest.startswith('status '):
+                    op_id = rest[7:].strip()
+                    try:
+                        from devop_projection import summarize_operation
+                        from devop_runtime import get_operation_state
+                        op = get_operation_state(STATE_DIR, op_id)
+                        if not op:
+                            emit({'type': 'error', 'error': f'No software-dev operation found: {op_id}', 'request_id': request_id})
+                            return
+                        summary = summarize_operation(STATE_DIR, op_id)
+                        lines = [
+                            f'Operation: {op.get("operation_id")}',
+                            f'Status: {op.get("status")}',
+                            f'Workstreams: {summary.get("workstream_count", 0)}',
+                            f'Checkpoints: {summary.get("checkpoint_count", 0)}',
+                            f'Reviews: {summary.get("review_count", 0)}',
+                        ]
+                        for ws in op.get('workstreams') or []:
+                            latest_review = ws.get('latest_review') or {}
+                            latest_checkpoint = ws.get('latest_checkpoint') or {}
+                            lines.append(
+                                f'- {ws.get("title") or ws.get("slug")} '
+                                f'[{ws.get("status")}] '
+                                f'cp={latest_checkpoint.get("checkpoint_id") or "-"} '
+                                f'review={latest_review.get("decision") or "-"}'
+                            )
+                        emit({'type': 'status', 'message': '\n'.join(lines), 'request_id': request_id})
+                    except Exception as e:
+                        emit({'type': 'error', 'error': f'Software-dev status failed: {e}', 'request_id': request_id})
+                    return
+                if rest.startswith('stop '):
+                    op_id = rest[5:].strip()
+                    try:
+                        from devop_runtime import operation_dir, append_operation_event, set_operation_status
+                        op_path = operation_dir(STATE_DIR, op_id) / 'operation.json'
+                        if not op_path.exists():
+                            emit({'type': 'error', 'error': f'No software-dev operation found: {op_id}', 'request_id': request_id})
+                            return
+                        op_doc = _load_json(op_path, {})
+                        op_doc['stop_requested'] = True
+                        op_doc['updated_at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+                        op_path.write_text(json.dumps(op_doc, indent=2, ensure_ascii=False))
+                        append_operation_event(STATE_DIR, op_id, 'stop_requested', summary='User requested stop.')
+                        set_operation_status(STATE_DIR, op_id, 'stopping', 'User requested stop.')
+                        emit({'type': 'status', 'message': f'Requested stop for software-dev operation {op_id}', 'request_id': request_id})
+                        emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': request_id})
+                    except Exception as e:
+                        emit({'type': 'error', 'error': f'Software-dev stop failed: {e}', 'request_id': request_id})
+                    return
+                try:
+                    from devop_agents import start_autonomous_software_operation
+                    res = start_autonomous_software_operation(
+                        STATE_DIR,
+                        Path(self._devop_project_root()),
+                        prompt=rest,
+                        parent_agent_id=self._active_agent_id or '',
+                    )
+                    op = res.get('operation') or {}
+                    coord = res.get('coordinator') or {}
+                    emit({
+                        'type': 'status',
+                        'message': (
+                            f'Started software-dev operation.\n'
+                            f'Operation: {op.get("operation_id")}\n'
+                            f'Coordinator: {coord.get("name") or coord.get("id") or "(starting)"}\n'
+                            f'Use /devop status {op.get("operation_id")} to inspect progress.'
+                        ),
+                        'request_id': request_id,
+                    })
+                    emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': request_id})
+                except Exception as e:
+                    emit({'type': 'error', 'error': f'Failed to start software-dev operation: {e}', 'request_id': request_id})
+                return
+            if command == '/monitor' or command.startswith('/monitor '):
+                rest = command[8:].strip() if command.startswith('/monitor ') else ''
+                if not rest:
+                    emit({'type': 'status', 'message': 'Usage: /monitor every hour <url>', 'request_id': request_id})
+                    return
+                browser_mode = rest.lower().startswith('browser ')
+                if browser_mode:
+                    rest = rest[8:].strip()
+                interval = _parse_interval_phrase(rest)
+                url_match = re.search(r'(https?://\S+)', rest)
+                if interval <= 0 or not url_match:
+                    emit({'type': 'error', 'error': 'Usage: /monitor every hour <url>', 'request_id': request_id})
+                    return
+                url = url_match.group(1).rstrip('.,)')
+                expect_match = re.search(r'\b(?:expect|contains?)\s+"([^"]+)"', rest, re.I)
+                expected_text = expect_match.group(1).strip() if expect_match else ''
+                prefix = '/automate browser' if browser_mode else '/automate'
+                self.handle_command(f'{prefix} every {interval} seconds check {url}' + (f' expect "{expected_text}"' if expected_text else ''), request_id)
+                return
+            if command == '/automate' or command.startswith('/automate '):
+                rest = command[10:].strip() if command.startswith('/automate ') else ''
+                if not rest:
+                    emit({'type': 'status', 'message': 'Usage: /automate every <n> <unit> check <url>', 'request_id': request_id})
+                    return
+                browser_mode = False
+                if rest.lower().startswith('browser '):
+                    browser_mode = True
+                    rest = rest[8:].strip()
+                if rest == 'list' or rest.startswith('list '):
+                    filter_mode = rest[5:].strip().lower() if rest.startswith('list ') else ''
+                    try:
+                        from automation_runtime import list_automations
+                        items = list_automations(STATE_DIR)
+                        if filter_mode == 'cron':
+                            items = [a for a in items if str((a.get('schedule') or {}).get('type') or '').lower() == 'cron']
+                        elif filter_mode == 'continuous':
+                            items = [a for a in items if str(a.get('mode') or '').lower() == 'continuous']
+                        elif filter_mode == 'scheduled':
+                            items = [a for a in items if str(a.get('mode') or '').lower() == 'scheduled']
+                        if not items:
+                            emit({'type': 'status', 'message': 'No automations found.' if not filter_mode else f'No {filter_mode} automations found.', 'request_id': request_id})
+                            return
+                        lines = ['Automations:']
+                        for a in items[:40]:
+                            sched = a.get('schedule') or {}
+                            sched_desc = ''
+                            if str(a.get('mode') or '') == 'continuous':
+                                sched_desc = f'continuous/{sched.get("poll_seconds") or (a.get("execution_policy") or {}).get("poll_seconds") or 60}s'
+                            elif str(sched.get('type') or '') == 'cron':
+                                sched_desc = f'cron {sched.get("cron")}'
+                            else:
+                                sched_desc = f'every {sched.get("interval_seconds") or 0}s'
+                            lines.append(
+                                f'- {a.get("automation_id")} | {a.get("title")} | '
+                                f'{a.get("status")}/{a.get("health")} | {sched_desc} | '
+                                f'next={a.get("next_run_at") or "continuous"}'
+                            )
+                        emit({'type': 'status', 'message': '\n'.join(lines), 'request_id': request_id})
+                    except Exception as e:
+                        emit({'type': 'error', 'error': f'Automation list failed: {e}', 'request_id': request_id})
+                    return
+                if rest.startswith('status '):
+                    automation_id = rest[7:].strip()
+                    try:
+                        from automation_runtime import get_automation_state
+                        doc = get_automation_state(STATE_DIR, automation_id)
+                        if not doc:
+                            emit({'type': 'error', 'error': f'No automation found: {automation_id}', 'request_id': request_id})
+                            return
+                        lines = [
+                            f'Automation: {doc.get("automation_id")}',
+                            f'Title: {doc.get("title")}',
+                            f'Status: {doc.get("status")}',
+                            f'Health: {doc.get("health")}',
+                            f'Next run: {doc.get("next_run_at") or "-"}',
+                            f'Last result: {doc.get("last_result_summary") or "-"}',
+                        ]
+                        for run in doc.get('runs_tail') or []:
+                            lines.append(f'- {run.get("ts")} [{"ok" if run.get("ok") else "fail"}] {run.get("summary")}')
+                        emit({'type': 'status', 'message': '\n'.join(lines[:16]), 'request_id': request_id})
+                    except Exception as e:
+                        emit({'type': 'error', 'error': f'Automation status failed: {e}', 'request_id': request_id})
+                    return
+                for action_name, fn_name in [('pause', 'pause_automation'), ('resume', 'resume_automation'), ('stop', 'request_stop_automation')]:
+                    if rest.startswith(action_name + ' '):
+                        automation_id = rest[len(action_name) + 1:].strip()
+                        try:
+                            from automation_runtime import pause_automation, resume_automation, request_stop_automation
+                            fn = {'pause': pause_automation, 'resume': resume_automation, 'stop': request_stop_automation}[action_name]
+                            doc = fn(STATE_DIR, automation_id)
+                            if not doc:
+                                emit({'type': 'error', 'error': f'No automation found: {automation_id}', 'request_id': request_id})
+                                return
+                            emit({'type': 'status', 'message': f'{action_name.capitalize()}d automation {automation_id}', 'request_id': request_id})
+                            emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': request_id})
+                        except Exception as e:
+                            emit({'type': 'error', 'error': f'Automation {action_name} failed: {e}', 'request_id': request_id})
+                        return
+                interval = _parse_interval_phrase(rest)
+                sec_match = re.search(r'\bevery\s+(\d+)\s+seconds?\b', rest, re.I)
+                if sec_match:
+                    interval = int(sec_match.group(1))
+                cron_match = re.search(r'^cron\s+"([^"]+)"\s+check\s+', rest, re.I)
+                continuous_match = re.search(r'^continuous(?:\s+every\s+(\d+)\s+seconds?)?\s+check\s+', rest, re.I)
+                url_match = re.search(r'(https?://\S+)', rest)
+                if not url_match or 'check' not in rest.lower():
+                    emit({'type': 'error', 'error': 'Usage: /automate every <n> <unit> check <url>', 'request_id': request_id})
+                    return
+                url = url_match.group(1).rstrip('.,)')
+                expect_match = re.search(r'\bexpect\s+"([^"]+)"', rest, re.I)
+                expected_text = expect_match.group(1).strip() if expect_match else ''
+                mode = 'scheduled'
+                schedule = {}
+                if cron_match:
+                    schedule = {'type': 'cron', 'cron': cron_match.group(1).strip()}
+                elif continuous_match:
+                    mode = 'continuous'
+                    poll_seconds = int(continuous_match.group(1) or 60)
+                    schedule = {'type': 'continuous', 'poll_seconds': poll_seconds}
+                else:
+                    if interval <= 0:
+                        emit({'type': 'error', 'error': 'Usage: /automate every <n> <unit> check <url>', 'request_id': request_id})
+                        return
+                    schedule = {'type': 'interval', 'interval_seconds': interval}
+                try:
+                    from automation_runtime import create_automation
+                    doc = create_automation(
+                        STATE_DIR,
+                        Path(self._devop_project_root()),
+                        title=(f'Browser monitor: {url}' if browser_mode else f'Website monitor: {url}'),
+                        goal=rest,
+                        kind=('browser_check' if browser_mode else 'http_check'),
+                        mode=mode,
+                        schedule=schedule,
+                        action={'url': url, 'method': 'GET', 'timeout_seconds': 20, 'expected_text': expected_text, 'screenshot_on_failure': True},
+                        created_by_agent_id=self._active_agent_id or '',
+                        operation_role='monitor',
+                    )
+                    emit({'type': 'status', 'message': f'Started automation {doc.get("automation_id")} for {url}\nMode: {mode}\nNext run: {doc.get("next_run_at") or "continuous"}', 'request_id': request_id})
+                    emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': request_id})
+                except Exception as e:
+                    emit({'type': 'error', 'error': f'Failed to create automation: {e}', 'request_id': request_id})
                 return
             if command == '/project' or command.startswith('/project '):
                 rest = command[8:].strip() if command.startswith('/project ') else ''
@@ -3319,6 +4000,8 @@ class ChatBackend:
                         return
                     room_id = parts[0]
                     message = ' '.join(parts[1:]).strip()
+                    if self._dispatch_libris_room_intervention(room_id, target='whole', when='now', message=message, request_id=request_id, mode='say'):
+                        return
                     from inter_agent_rooms import append_event, load_room, queue_injection
                     room = load_room(STATE_DIR, room_id)
                     if not room:
@@ -3352,11 +4035,11 @@ class ChatBackend:
                 rest = command[13:].strip() if command.startswith('/inject-room ') else ''
                 try:
                     if not rest:
-                        emit({'type': 'status', 'message': 'Usage: /inject-room <room-id> [--target whole|teacher|student|<participant>] [--when now|next] <message>', 'request_id': request_id})
+                        emit({'type': 'status', 'message': 'Usage: /inject-room <room-id> [--target whole|teacher|student|<participant>|coordinator|topic:<slug>|node:<agent-id>|researcher:<slug>|judge:<slug>|shade:<agent-id>] [--when now|next] <message>', 'request_id': request_id})
                         return
                     parts = shlex.split(rest)
                     if not parts:
-                        emit({'type': 'status', 'message': 'Usage: /inject-room <room-id> [--target whole|teacher|student|<participant>] [--when now|next] <message>', 'request_id': request_id})
+                        emit({'type': 'status', 'message': 'Usage: /inject-room <room-id> [--target whole|teacher|student|<participant>|coordinator|topic:<slug>|node:<agent-id>|researcher:<slug>|judge:<slug>|shade:<agent-id>] [--when now|next] <message>', 'request_id': request_id})
                         return
                     room_id = parts[0]
                     target = 'whole'
@@ -3376,6 +4059,8 @@ class ChatBackend:
                     message = ' '.join(parts[idx:]).strip()
                     if not message:
                         emit({'type': 'error', 'error': 'Injection message cannot be empty.', 'request_id': request_id})
+                        return
+                    if self._dispatch_libris_room_intervention(room_id, target=target, when=when, message=message, request_id=request_id, mode='inject'):
                         return
                     from inter_agent_rooms import append_event, load_room, queue_injection
                     room = load_room(STATE_DIR, room_id)
@@ -4156,11 +4841,19 @@ class ChatBackend:
             target_state['complete'] = False
 
             def _persist_target_state() -> None:
+                onboarding.update({
+                    'provider_mode': target_state.get('provider_mode', onboarding.get('provider_mode', '')),
+                    'provider': target_state.get('provider', onboarding.get('provider', '')),
+                    'provider_auth': target_state.get('provider_auth', onboarding.get('provider_auth', '')),
+                    'model': target_state.get('model', onboarding.get('model', '')),
+                    'provider_model': target_state.get('provider_model', onboarding.get('provider_model', '')),
+                    'project': target_state.get('project', onboarding.get('project', '')),
+                    'complete': target_state.get('complete', onboarding.get('complete', False)),
+                    'step': target_state.get('step', onboarding.get('step', 'provider-mode')),
+                })
+                self._save_onboarding(onboarding)
                 if use_session_override and self._active_agent_id:
                     save_session_provider_config(STATE_DIR, self._active_agent_id, target_state)
-                else:
-                    onboarding.update(target_state)
-                    self._save_onboarding(onboarding)
 
             def _revert_target_state() -> None:
                 if use_session_override and self._active_agent_id:
@@ -4368,11 +5061,10 @@ class ChatBackend:
 
             target_state['complete'] = True
             target_state['step'] = 'done'
+            onboarding.update(target_state)
+            self._save_onboarding(onboarding)
             if session_override and self._active_agent_id:
                 save_session_provider_config(STATE_DIR, self._active_agent_id, target_state)
-            else:
-                onboarding.update(target_state)
-                self._save_onboarding(onboarding)
             self.engine = None
             emit({'type': 'status', 'message': f'✓ Model set to {arg}. Setup complete.', 'request_id': request_id})
             effective_onboarding = dict(onboarding)
@@ -4758,6 +5450,37 @@ class ChatBackend:
             self.handle_command(f'/libris {topic_prompt}', request_id)
             return
 
+        # Natural-language software-dev trigger
+        devop_match = re.match(
+            r'^(?:start|run|launch|begin|kick\s+off|create)\s+(?:an?\s+)?(?:autonomous\s+)?(?:software\s+(?:development|dev)|software|dev|coding)\s+(?:project|operation|build)?\s*(?:that|to|for)?\s+(.+)$',
+            stripped,
+            re.I,
+        )
+        if devop_match:
+            build_prompt = devop_match.group(1).strip()
+            self.handle_command(f'/devop {build_prompt}', request_id)
+            return
+
+        cron_nl = _natural_language_to_cron(stripped)
+        cron_url_match = re.search(r'check\s+(https?://\S+)', stripped, re.I)
+        if cron_nl and cron_url_match:
+            url = cron_url_match.group(1).rstrip('.,)')
+            self.handle_command(f'/automate cron "{cron_nl}" check {url}', request_id)
+            return
+
+        monitor_match = re.match(r'^(?:every\s+.+?|hourly|daily)\s+check\s+(https?://\S+)(?:\s+and\s+report\s+if\s+it\s+(?:isn\'t|is\s+not|fails?|breaks?))?$', stripped, re.I)
+        if monitor_match:
+            interval_phrase = stripped[:monitor_match.start(1)].strip()
+            url = monitor_match.group(1).rstrip('.,)')
+            self.handle_command(f'/monitor {interval_phrase} {url}', request_id)
+            return
+
+        continuous_match = re.match(r'^(?:continuously|nonstop|always on|all day)\s+check\s+(https?://\S+)(?:.*)?$', stripped, re.I)
+        if continuous_match:
+            url = continuous_match.group(1).rstrip('.,)')
+            self.handle_command(f'/automate continuous check {url}', request_id)
+            return
+
         route = self._match_nl_orchestration_command(stripped)
         if route:
             command, status = route
@@ -5000,11 +5723,22 @@ class ChatBackend:
                     except Exception:
                         files_touched = []
 
+                    # Determine if the agent concluded the task or is mid-flight
+                    # (e.g. asking a clarifying question). We consider a task done
+                    # if it made at least one tool call (did real work) OR if the
+                    # response text doesn't look like a question/clarification.
+                    agent_concluded = (
+                        len(_tool_calls_record) > 0
+                        or not self._is_question_message(full_text.strip())
+                    )
+                    new_status = 'completed' if agent_concluded else 'active'
+
                     updated = False
                     for item in reversed(self._session_tasks):
                         if item.get('status') == 'active':
-                            item['status'] = 'completed'
-                            item['resolved_at'] = time.time()
+                            item['status'] = new_status
+                            if new_status == 'completed':
+                                item['resolved_at'] = time.time()
                             item['summary'] = summary
                             item['detail'] = (
                                 f'Task: {user_msg[:100]}\n'
@@ -5024,8 +5758,9 @@ class ChatBackend:
                     if not updated and self._parse_intent(user_msg):
                         self._start_outcome_for_message(user_msg)
                         if self._session_tasks:
-                            self._session_tasks[-1]['status'] = 'completed'
-                            self._session_tasks[-1]['resolved_at'] = time.time()
+                            self._session_tasks[-1]['status'] = new_status
+                            if new_status == 'completed':
+                                self._session_tasks[-1]['resolved_at'] = time.time()
                             self._session_tasks[-1]['summary'] = summary
                             self._session_tasks[-1]['detail'] = f'Task: {user_msg[:100]}\nResult: {summary}'
                             self._session_tasks[-1]['tokens_in'] = _total_input_tokens

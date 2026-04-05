@@ -10,6 +10,57 @@
 
 ---
 
+## Install
+
+Development install from source:
+
+```bash
+git clone https://github.com/DanielSuncost/charon.git
+cd charon
+./scripts/install.sh
+charon
+```
+
+`install.sh` handles first-time machine setup on macOS and Ubuntu, then runs the project installer. It installs system prerequisites, Python dependencies, Playwright + Chromium, builds the Rust TUI, and symlinks `charon` into `~/.local/bin`.
+
+If `~/.local/bin` is not on your `PATH`, run:
+
+```bash
+./charon
+```
+
+`./charon` launches the current Rust TUI release binary at:
+
+```bash
+./crates/charon-tui/target/release/charon
+```
+
+Important for development: `./charon` does **not** rebuild automatically after Rust source edits. After changing code under `crates/charon-tui/`, rebuild manually:
+
+```bash
+cargo build --release --manifest-path crates/charon-tui/Cargo.toml
+./charon
+```
+
+Or run the built binary directly:
+
+```bash
+./crates/charon-tui/target/release/charon
+```
+
+Useful variants:
+
+```bash
+./scripts/install.sh --no-playwright       # first-time setup, skip browser support
+./scripts/install.sh --force               # reinstall deps + rebuild after install
+./scripts/install-dev.sh --force           # rerun only the project-local installer
+CHARON_BROWSER_HEADLESS=0 charon           # useful for first-time x.com login
+```
+
+More detail: [docs/install.md](docs/install.md)
+
+---
+
 ## Why Charon
 
 Other agent frameworks give you one agent, one session, no memory.
@@ -52,6 +103,44 @@ charons-boat wrap --name review -- pi # wrap pi-agent, appears in grid
 Every wrapped agent appears in the Session Grid. Select it with arrow keys, press Enter to focus, and type to interact — all without switching windows or tmux panes.
 
 **What this means in practice:** unlike tools that only let you *observe* agent sessions (status, branch, last output), Charon's Session Grid lets you fully *participate* — send input, see real-time output, resize — from one unified view across all your sessions, local or remote.
+
+---
+
+## Live Conversation Rooms
+
+<!-- TODO: screenshot of F4 live conversation rooms -->
+
+Charon also supports live multi-agent conversation rooms in the TUI (F4). A room combines:
+- a live event stream
+- a transcript view
+- per-participant session panes
+- turn-taking/orchestration managed by Charon
+
+Rooms can be created with slash commands or plain language:
+
+```text
+/conversation hermes strategist critic training agent models from agent harness traces
+start a strategist/critic conversation between two hermes agents about training agent models from agent harness traces
+```
+
+Current conversation archetypes include:
+- **peer**
+- **teacher/student**
+- **debate**
+- **researcher/reviewer**
+- **pair-programmers**
+- **strategist/critic**
+- **planner/critic**
+- **architect/reviewer**
+- **optimist/skeptic**
+
+Agents in a room can use tools and do lightweight research, while Charon keeps turn state visible (`thinking`, `researching`, `replying`, `handoff`, etc.) and nudges long research turns back toward an actual conversational reply.
+
+Natural-language room creation uses a hybrid parser:
+- fast deterministic routing for obvious requests
+- a fallback lightweight parser powered by the configured **shade model** for more ambiguous phrasing
+
+Today this path is strongest with Hermes and Boat-wrapped external agents; the broader fully agent-agnostic runtime is still being expanded.
 
 ---
 
@@ -288,7 +377,14 @@ the tool itself.
 ```bash
 git clone <repo> && cd charon
 uv pip install -r requirements.txt
-cd apps/tui/opentui && bun install && cd ../../..
+cargo build --release --manifest-path crates/charon-tui/Cargo.toml
+./charon
+```
+
+If you edit the Rust TUI, rebuild before launching again:
+
+```bash
+cargo build --release --manifest-path crates/charon-tui/Cargo.toml
 ./charon
 ```
 

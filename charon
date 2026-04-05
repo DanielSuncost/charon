@@ -20,7 +20,7 @@ while [ -L "$SOURCE" ]; do
 done
 CHARON_ROOT="$(cd "$(dirname "$SOURCE")" && pwd)"
 RUST_TUI_MANIFEST="${CHARON_ROOT}/crates/charon-tui/Cargo.toml"
-RUST_TUI_BIN="${CHARON_ROOT}/crates/charon-tui/target/release/charon-tui"
+RUST_TUI_BIN="${CHARON_ROOT}/crates/charon-tui/target/release/charon"
 
 case "${1:-}" in
   chat)
