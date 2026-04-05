@@ -99,17 +99,35 @@ charon status
 charon agents
 ```
 
+## Release / curlable install
+
+Once GitHub release assets exist, you can also install without cloning the repo:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DanielSuncost/charon/master/scripts/install-remote.sh | bash
+```
+
+That bootstrap script downloads and runs the release installer, which then:
+- fetches the latest tagged release bundle from GitHub Releases
+- installs it into `~/.charon/versions/<tag>`
+- updates `~/.charon/current`
+- symlinks `~/.local/bin/charon`
+- installs Python dependencies and Playwright by default
+
+You can also run the release installer directly from a checkout:
+
+```bash
+./scripts/install-release.sh
+./scripts/install-release.sh --version v0.1.0
+```
+
 ## Current status
 
-This is currently a **source-based development install**, not a final release installer.
+Right now, the most reliable path is still the **source-based install** documented above.
 
 That means:
 - you install from a git checkout
 - the Rust TUI is built locally
 - dependencies are installed locally
 
-Planned later:
-- release bundles
-- Hermes-style installer
-- managed runtime layout
-- self-update flow
+The release installer path is now scaffolded, but depends on published GitHub Release assets for tagged versions.
