@@ -20,6 +20,9 @@ Installs a published Charon release bundle from GitHub Releases into:
 Usage:
   ./scripts/install-release.sh [options]
 
+Or via the remote bootstrap:
+  curl -fsSL https://raw.githubusercontent.com/DanielSuncost/charon/master/scripts/install-remote.sh | bash
+
 Options:
   --version <tag>     Install a specific tag (example: v0.1.0)
   --latest            Install the latest release (default)
@@ -76,7 +79,6 @@ while [[ $# -gt 0 ]]; do
 done
 
 need_cmd python3
-need_cmd cargo
 
 HTTP_GET() {
   if command -v curl >/dev/null 2>&1; then

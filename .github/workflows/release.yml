@@ -51,7 +51,8 @@ jobs:
           chmod +x "$OUT/bin/charon" "$OUT/charon" "$OUT/scripts/install-dev.sh"
           cp "$ROOT/scripts/install.sh" "$OUT/scripts/install.sh"
           cp "$ROOT/scripts/install-release.sh" "$OUT/scripts/install-release.sh"
-          chmod +x "$OUT/scripts/install.sh" "$OUT/scripts/install-release.sh"
+          cp "$ROOT/scripts/install-remote.sh" "$OUT/scripts/install-remote.sh"
+          chmod +x "$OUT/scripts/install.sh" "$OUT/scripts/install-release.sh" "$OUT/scripts/install-remote.sh"
 
           cat > "$OUT/README-release.txt" <<'EOF'
           Charon release bundle

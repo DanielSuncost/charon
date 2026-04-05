@@ -57,6 +57,12 @@ Useful variants:
 CHARON_BROWSER_HEADLESS=0 charon           # useful for first-time x.com login
 ```
 
+Once tagged releases exist, a curlable install path is also available:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/DanielSuncost/charon/master/scripts/install-remote.sh | bash
+```
+
 More detail: [docs/install.md](docs/install.md)
 
 ---
