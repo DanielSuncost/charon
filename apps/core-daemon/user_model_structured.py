@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 
-CATEGORIES = ('style', 'coding', 'tooling', 'workflow', 'corrections', 'intentions', 'patterns', 'interests', 'mental_model')
+CATEGORIES = ('style', 'coding', 'tooling', 'workflow', 'corrections', 'intentions', 'patterns', 'interests', 'mental_model', 'ideas')
 CHAR_LIMIT = 5000
 
 _CATEGORY_LABELS = {
@@ -33,6 +33,7 @@ _CATEGORY_LABELS = {
     'patterns': 'Patterns',
     'interests': 'Interests',
     'mental_model': 'Mental Model',
+    'ideas': 'Ideas',
 }
 
 
@@ -43,7 +44,7 @@ def _now() -> str:
 # ── Load / Save ─────────────────────────────────────────────────────
 
 def _default_model() -> dict:
-    return {cat: {} if cat not in ('corrections', 'intentions') else [] for cat in CATEGORIES}
+    return {cat: {} if cat not in ('corrections', 'intentions', 'ideas') else [] for cat in CATEGORIES}
 
 
 def load_structured(state_dir: Path) -> dict:
@@ -171,6 +172,79 @@ def save_structured(state_dir: Path, model: dict) -> None:
         pass
 
 
+# ── Ideas ──────────────────────────────────────────────────────────
+
+def record_idea(
+    state_dir: Path,
+    *,
+    summary: str,
+    session_id: str = '',
+    message_seq: int = -1,
+    message_text: str = '',
+    category: str = 'general',
+    source: str = 'explicit',
+) -> dict:
+    """Record an idea in the user model. Returns the new idea entry."""
+    import uuid
+    idea = {
+        'id': f'idea-{uuid.uuid4().hex[:8]}',
+        'summary': summary.strip()[:240],
+        'session_id': session_id,
+        'message_seq': message_seq,
+        'message_text': message_text[:500],
+        'category': category,
+        'created_at': _now(),
+        'source': source,
+    }
+    model = load_structured(state_dir)
+    ideas = model.get('ideas', [])
+    if not isinstance(ideas, list):
+        ideas = []
+    ideas.append(idea)
+    model['ideas'] = ideas
+    save_structured(state_dir, model)
+    return idea
+
+
+def list_ideas(state_dir: Path) -> list[dict]:
+    """Return all recorded ideas, newest first."""
+    model = load_structured(state_dir)
+    ideas = model.get('ideas', [])
+    if not isinstance(ideas, list):
+        return []
+    return list(reversed(ideas))
+
+
+def lookup_idea_context(state_dir: Path, idea_id: str) -> dict | None:
+    """Look up an idea and its originating conversation context."""
+    model = load_structured(state_dir)
+    ideas = model.get('ideas', [])
+    if not isinstance(ideas, list):
+        return None
+    idea = next((i for i in ideas if i.get('id') == idea_id), None)
+    if not idea:
+        return None
+    result = dict(idea)
+    # Try to fetch surrounding messages from the conversation store
+    session_id = idea.get('session_id', '')
+    msg_seq = idea.get('message_seq', -1)
+    if session_id and msg_seq >= 0:
+        try:
+            from context_store import ContextStore
+            from store_adapter import get_db
+            db = get_db(state_dir)
+            messages = ContextStore.get_messages_for_agent(db, session_id)
+            start = max(0, msg_seq - 2)
+            end = min(len(messages), msg_seq + 3)
+            result['context_messages'] = [
+                {'role': m.role, 'content': m.content[:500], 'seq': i}
+                for i, m in enumerate(messages[start:end], start=start)
+            ]
+        except Exception:
+            result['context_messages'] = []
+    return result
+
+
 # ── Rendering ───────────────────────────────────────────────────────
 
 def _render_dict_inline(d: dict) -> str:
@@ -253,6 +327,16 @@ def render_for_prompt(model: dict) -> str:
         if line:
             sections.append(line)
 
+    ideas = model.get('ideas')
+    if isinstance(ideas, list) and ideas:
+        lines = ['Ideas:']
+        for i, idea in enumerate(ideas[-10:], 1):  # show last 10
+            summary = idea.get('summary', '?') if isinstance(idea, dict) else str(idea)
+            cat = idea.get('category', '') if isinstance(idea, dict) else ''
+            tag = f' [{cat}]' if cat and cat != 'general' else ''
+            lines.append(f'- #{i}{tag}: {summary}')
+        sections.append('\n'.join(lines))
+
     if not sections:
         content = '(No profile yet. Save preferences with the UserModel tool.)'
     else:
@@ -323,6 +407,22 @@ def render_markdown(model: dict) -> str:
         lines.append('## Mental Model')
         for k, v in mental_model.items():
             lines.append(f'- **{k}**: {v}')
+        lines.append('')
+
+    ideas = model.get('ideas')
+    if isinstance(ideas, list) and ideas:
+        lines.append('## Ideas')
+        for idea in ideas:
+            if isinstance(idea, dict):
+                summary = idea.get('summary', '?')
+                cat = idea.get('category', '')
+                src = idea.get('source', '')
+                sid = idea.get('session_id', '')
+                tag = f' [{cat}]' if cat and cat != 'general' else ''
+                ref = f' (session:{sid})' if sid else ''
+                lines.append(f'- {idea.get("id", "?")}{tag}: {summary} *{src}*{ref}')
+            else:
+                lines.append(f'- {idea}')
         lines.append('')
 
     if len(lines) <= 2:

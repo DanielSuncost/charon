@@ -261,11 +261,11 @@ def _run_operation_controller(
 
         if not topics:
             from tools import ToolContext
-            from clarify_tool import execute_clarify
+            from tools.clarify_tool import execute_clarify
 
             question = (
                 'Libris could not confidently derive candidate research topics from your request: '
-                f'"{prompt[:220]}". What should it research?' 
+                f'"{prompt[:220]}". What should it research?'
             )
             choices = [
                 f'Focus strictly on the named topic: {prompt[:120]}',
@@ -273,10 +273,24 @@ def _run_operation_controller(
                 'Narrow to one domain/application area before researching',
                 'Rewrite the topic in my own words / give a custom direction',
             ]
-            clar_ctx = ToolContext(project_root=project_root, agent_id=coordinator.get('id', ''), state_dir=state_dir)
-            clar = execute_clarify({'action': 'ask', 'question': question, 'choices': choices}, clar_ctx)
-            clar_details = clar.details or {}
-            clar_id = str(clar_details.get('clarification_id') or '')
+            clar_id = ''
+            try:
+                clar_ctx = ToolContext(project_root=project_root, agent_id=coordinator.get('id', ''), state_dir=state_dir)
+                clar = execute_clarify({'action': 'ask', 'question': question, 'choices': choices}, clar_ctx)
+                clar_details = clar.details or {}
+                clar_id = str(clar_details.get('clarification_id') or '')
+            except Exception as e:
+                append_operation_event(
+                    state_dir,
+                    project_root,
+                    operation_id,
+                    'clarification_request_failed',
+                    {
+                        'reason': 'missing_candidate_topics',
+                        'error': str(e),
+                        'question': question,
+                    },
+                )
             set_operation_status(
                 state_dir,
                 project_root,

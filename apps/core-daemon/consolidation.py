@@ -189,22 +189,23 @@ def should_run(state_dir: Path, config: dict) -> bool:
 
 # ── Signal extraction ───────────────────────────────────────────────
 
-def _collect_recent_signals(state_dir: Path, since_ts: str, max_events: int = 120) -> str:
+def _collect_recent_signals(state_dir: Path, since_ts: str, max_events: int = 120) -> tuple[str, list[dict]]:
     """Collect recent conversation signals for the LLM to analyze.
 
     Reads user messages and short assistant replies from conversation_messages,
-    grouped into exchanges. This is the real interaction history.
+    grouped into exchanges. Returns (formatted_text, user_message_refs) where
+    user_message_refs maps signal indices to (agent_id, seq, content) for idea linking.
     """
     signals = []
+    user_refs: list[dict] = []  # one entry per [user] signal line
 
     try:
         from store_adapter import get_db
         db = get_db(state_dir)
         _ensure_conversation_messages(db)
 
-        # Fetch recent messages (user + assistant) since last consolidation
         rows = db.fetchall(
-            """SELECT id, agent_id, role, content, created_at
+            """SELECT id, agent_id, seq, role, content, created_at
                FROM conversation_messages
                WHERE role IN ('user', 'assistant')
                  AND created_at > ?
@@ -222,11 +223,14 @@ def _collect_recent_signals(state_dir: Path, since_ts: str, max_events: int = 12
                 continue
 
             if role == 'user':
-                # Include full user message (up to 300 chars)
                 signals.append(f'[user] {content[:300]}')
+                user_refs.append({
+                    'signal_index': len(signals) - 1,
+                    'agent_id': r['agent_id'] or '',
+                    'message_seq': r.get('seq', -1),
+                    'content': content,
+                })
             elif role == 'assistant':
-                # Include first 150 chars of assistant reply for context
-                # (enough to see topic/response type, not full output)
                 first_line = content.split('\n')[0].strip()
                 snippet = first_line[:150] if first_line else content[:150]
                 if snippet:
@@ -235,7 +239,7 @@ def _collect_recent_signals(state_dir: Path, since_ts: str, max_events: int = 12
     except Exception:
         pass
 
-    return '\n'.join(signals) if signals else ''
+    return ('\n'.join(signals) if signals else '', user_refs)
 
 
 # ── LLM-based analysis ─────────────────────────────────────────────
@@ -262,6 +266,9 @@ Output a JSON object with ONLY the changes to make. Categories and what to put i
   "intentions": [
     {{"project": "project_name", "intent": "what they want to achieve", "priority": "high|normal|low"}}
   ],
+  "ideas": [
+    {{"summary": "concise idea description", "category": "feature|project|improvement|general", "signal_index": 0}}
+  ],
   "reasoning": "1-2 sentences on what you observed"
 }}
 
@@ -284,9 +291,10 @@ Rules:
 - interests and mental_model are the most valuable — fill them from topic frequency and reasoning patterns.
 - Only set fields with CLEAR evidence. Don't guess.
 - Corrections = things user explicitly pushed back on or corrected.
+- ideas = feature suggestions, project ideas, or improvements the user proposed. signal_index = the 0-based index of the user message in the signals that triggered the idea. Only capture genuine proposals, not passing references.
 - Keep all values under 100 chars.
 - Update existing keys rather than adding duplicates — if a key already exists in the profile, improve it.
-- If nothing meaningful: {{"set": [], "corrections": [], "intentions": [], "reasoning": "No actionable signals."}}
+- If nothing meaningful: {{"set": [], "corrections": [], "intentions": [], "ideas": [], "reasoning": "No actionable signals."}}
 
 Output ONLY valid JSON, nothing else."""
 
@@ -347,7 +355,7 @@ async def _run_analysis(state_dir: Path, signals_text: str, current_profile: str
 
 # ── Apply changes ───────────────────────────────────────────────────
 
-def _apply_changes(model: dict, analysis: dict) -> list[dict]:
+def _apply_changes(model: dict, analysis: dict, state_dir: Path | None = None, user_refs: list[dict] | None = None) -> list[dict]:
     """Apply extracted changes to the user model. Returns list of change records."""
     from user_model_structured import set_field, add_correction, set_intention
     from tools.memory_tools import _scan_content
@@ -401,6 +409,50 @@ def _apply_changes(model: dict, analysis: dict) -> list[dict]:
                     'priority': priority,
                 })
 
+    for idea_entry in (analysis.get('ideas') or []):
+        if isinstance(idea_entry, dict):
+            summary = idea_entry.get('summary', '')
+            category = idea_entry.get('category', 'general')
+            sig_idx = idea_entry.get('signal_index', -1)
+            if not summary:
+                continue
+            scan = _scan_content(summary)
+            if scan:
+                continue
+            # Check for near-duplicates in existing ideas
+            existing_ideas = model.get('ideas', [])
+            if isinstance(existing_ideas, list) and any(
+                isinstance(e, dict) and e.get('summary', '').lower() == summary.lower()
+                for e in existing_ideas
+            ):
+                continue
+            # Resolve signal_index to session_id + message_seq
+            session_id = ''
+            message_seq = -1
+            message_text = ''
+            if user_refs and isinstance(sig_idx, int) and 0 <= sig_idx < len(user_refs):
+                ref = user_refs[sig_idx]
+                session_id = ref.get('agent_id', '')
+                message_seq = ref.get('message_seq', -1)
+                message_text = ref.get('content', '')[:500]
+            if state_dir:
+                from user_model_structured import record_idea
+                record_idea(
+                    state_dir,
+                    summary=summary,
+                    session_id=session_id,
+                    message_seq=message_seq,
+                    message_text=message_text,
+                    category=category,
+                    source='auto',
+                )
+            changes.append({
+                'type': 'idea',
+                'summary': summary,
+                'category': category,
+                'session_id': session_id,
+            })
+
     return changes
 
 
@@ -437,7 +489,7 @@ def run_consolidation(state_dir: Path, config: dict | None = None) -> dict:
 
         # Collect signals
         max_events = config.get('max_events_per_scan', 100)
-        signals_text = _collect_recent_signals(state_dir, last_ts, max_events)
+        signals_text, user_refs = _collect_recent_signals(state_dir, last_ts, max_events)
         if not signals_text:
             trace['error'] = 'No signals to process'
             trace['duration_ms'] = int((time.time() - start_time) * 1000)
@@ -465,7 +517,7 @@ def run_consolidation(state_dir: Path, config: dict | None = None) -> dict:
             return trace
 
         # Apply changes
-        changes = _apply_changes(model, analysis)
+        changes = _apply_changes(model, analysis, state_dir=state_dir, user_refs=user_refs)
         trace['changes'] = changes
         trace['reasoning'] = analysis.get('reasoning', '')
 

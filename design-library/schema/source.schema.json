@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "design-library/schema/source.schema.json",
+  "title": "Source",
+  "type": "object",
+  "required": ["source_id", "source_type", "name", "url"],
+  "properties": {
+    "source_id": { "type": "string" },
+    "source_type": {
+      "type": "string",
+      "enum": ["x", "website", "dribbble", "behance", "mobbin", "app", "repo", "video", "other"]
+    },
+    "name": { "type": "string" },
+    "url": { "type": "string" },
+    "author_or_brand": { "type": ["string", "null"] },
+    "platform_handle": { "type": ["string", "null"] },
+    "credibility": {
+      "type": ["string", "null"],
+      "enum": ["high", "medium", "low", "unknown", null]
+    },
+    "notes": { "type": ["string", "null"] }
+  },
+  "additionalProperties": true
+}

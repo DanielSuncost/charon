@@ -1,0 +1,19 @@
+[
+  {
+    "design_language_id": "dl_restrained_productivity",
+    "name": "Restrained Productivity",
+    "description": "Low-noise interfaces with tight hierarchy, muted palette, precise spacing, and high utility density.",
+    "traits": [
+      "Muted color system",
+      "Strong spacing rhythm",
+      "Sparse but clear iconography",
+      "High information efficiency"
+    ],
+    "anti_traits": [
+      "Playful illustration-first layouts",
+      "Overt decorative motion"
+    ],
+    "representative_example_ids": [],
+    "related_pattern_ids": []
+  }
+]
