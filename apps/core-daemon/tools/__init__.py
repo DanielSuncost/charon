@@ -501,6 +501,15 @@ def detect_foreground_persistent_command(command: str) -> tuple[bool, str]:
         return False, ''
     if re.search(r'\bdisown\b', cmd):
         return False, ''
+
+    # Search/read commands are always fast — don't block them even if their
+    # arguments contain words like "watch", "server", "monitor", etc.
+    first_word = cmd.strip().split()[0] if cmd.strip() else ''
+    if first_word in ('rg', 'grep', 'egrep', 'fgrep', 'find', 'fd', 'git',
+                       'cat', 'head', 'tail', 'wc', 'ls', 'tree', 'stat',
+                       'file', 'diff', 'jq', 'sed', 'awk', 'sort', 'uniq',
+                       'cut', 'tr', 'xargs', 'ag', 'ack'):
+        return False, ''
     if re.search(r'(^|\s)&\s*$', cmd):
         return False, ''
 
