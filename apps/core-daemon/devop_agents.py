@@ -139,6 +139,16 @@ def create_devop_engine(
     from conversation_engine import ConversationEngine
     from model_registry import get_shade_provider_and_model
     from system_prompt_builder import build_system_prompt
+    from worker_provider import request_worker_provider_for_background_flow
+
+    provider_status = request_worker_provider_for_background_flow(
+        state_dir,
+        purpose='software engineering worker tasks',
+        agent_id=agent.get('id', ''),
+        project_root=project_root,
+    )
+    if not provider_status.get('ok'):
+        raise RuntimeError(f"worker provider unavailable: {provider_status.get('reason') or 'no_provider'}")
 
     complexity = 'complex' if role in ('coordinator', 'judge', 'verifier') else 'normal'
     provider, model, _ = get_shade_provider_and_model(state_dir, phase_name='implementation', task_complexity=complexity)

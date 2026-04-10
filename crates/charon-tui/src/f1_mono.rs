@@ -218,7 +218,12 @@ fn draw_footer(buf: &mut ScreenBuf, app: &App, w: u16, h: u16) {
     let chat_in = app.chat.usage.input_tokens;
     let chat_out = app.chat.usage.output_tokens;
     let ctx = app.chat.usage.context_pct.map(|v| format!("{:.0}%", v)).unwrap_or_else(|| "-".into());
-    let left = format!("  ❈ CHARON  {}  ctx:{}  chat:{}↑ {}↓", provider, ctx, fmt_k(chat_in), fmt_k(chat_out));
+    let queue_str = if app.chat.pending_queue.is_empty() {
+        String::new()
+    } else {
+        format!("  queued:{}", app.chat.pending_queue.len())
+    };
+    let left = format!("  ❈ CHARON  {}  ctx:{}  chat:{}↑ {}↓{}", provider, ctx, fmt_k(chat_in), fmt_k(chat_out), queue_str);
     let right = if app.chat.streaming {
         "PgUp/PgDn scroll  Ctrl+C copy  Esc clear"
     } else {

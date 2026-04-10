@@ -270,6 +270,17 @@ def run_batch_worker(
     if not batch:
         return
 
+    try:
+        from worker_provider import get_worker_provider_status
+        provider_status = get_worker_provider_status(state_dir)
+        if not provider_status.get('ok'):
+            for task in batch.get('tasks', []):
+                if task.get('status') == 'pending':
+                    mark_batch_task_failed(state_dir, batch_id, task['id'], f"Worker provider unavailable: {provider_status.get('reason') or 'no_provider'}")
+            return
+    except Exception:
+        pass
+
     def _run_single_task(batch_task: dict):
         """Execute one batch task in its own thread."""
         try:

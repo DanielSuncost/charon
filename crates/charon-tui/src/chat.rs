@@ -147,6 +147,14 @@ impl BackendProcess {
         self.send(json!({"type": "command", "command": command}))
     }
 
+    pub fn send_follow_up(&mut self, text: &str) -> io::Result<()> {
+        self.send(json!({"type": "follow_up", "message": text}))
+    }
+
+    pub fn send_steer(&mut self, text: &str) -> io::Result<()> {
+        self.send(json!({"type": "steer", "message": text}))
+    }
+
     fn send(&mut self, mut v: Value) -> io::Result<()> {
         self.request_id += 1;
         if let Value::Object(ref mut map) = v {
@@ -282,6 +290,7 @@ pub struct ChatState {
     pub clipboard_notice: Option<(String, bool, Instant)>,
     pub provisional_outcomes: Vec<ProvisionalOutcome>,
     pub context_menu: Option<ContextMenu>,
+    pub pending_queue: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -329,6 +338,7 @@ impl ChatState {
             clipboard_notice: None,
             provisional_outcomes: Vec::new(),
             context_menu: None,
+            pending_queue: Vec::new(),
         })
     }
 
@@ -376,14 +386,31 @@ impl ChatState {
             return;
         }
         let text = self.input.trim().to_string();
-        self.transcript.push(format!("> {}", text));
-        self.messages.push(ChatMessage::User { text: text.clone() });
-        self.scroll = 0;
         self.input_history.push(text.clone());
         self.history_index = None;
+        self.scroll = 0;
+
         if text.starts_with('/') {
-            let _ = self.backend.send_command(&text);
+            // Commands always go through immediately
+            if text.starts_with("/steer ") {
+                let msg = text.trim_start_matches("/steer ").trim();
+                if !msg.is_empty() {
+                    let _ = self.backend.send_steer(msg);
+                    self.messages.push(ChatMessage::Status { text: format!("steer: {}", msg) });
+                }
+            } else {
+                self.transcript.push(format!("> {}", text));
+                let _ = self.backend.send_command(&text);
+            }
+        } else if self.streaming {
+            // During streaming, queue as follow-up
+            let _ = self.backend.send_follow_up(&text);
+            self.pending_queue.push(text.clone());
+            self.messages.push(ChatMessage::Status { text: format!("queued: {}", text) });
         } else {
+            // Normal send
+            self.transcript.push(format!("> {}", text));
+            self.messages.push(ChatMessage::User { text: text.clone() });
             self.start_provisional_outcome(&text);
             let _ = self.backend.send_chat(&text);
         }
@@ -880,6 +907,30 @@ impl ChatState {
                 let msg = v.get("error").and_then(|x| x.as_str()).unwrap_or("unknown error");
                 self.streaming = false;
                 self.push_error(msg);
+            }
+            "follow_up_queued" => {
+                // Backend acknowledged the follow-up; already tracked locally
+            }
+            "follow_up_delivered" => {
+                // Backend delivered a queued follow-up to the engine
+                if let Some(msg) = self.pending_queue.first().cloned() {
+                    self.pending_queue.remove(0);
+                    self.messages.push(ChatMessage::User { text: msg });
+                }
+            }
+            "steer_queued" => {
+                let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or("");
+                self.push_status(&format!("steering: {}", msg));
+            }
+            "steer_delivered" => {
+                let skipped = v.get("skipped_tools").and_then(|x| x.as_u64()).unwrap_or(0);
+                if skipped > 0 {
+                    self.push_status(&format!("steered (skipped {} tool calls)", skipped));
+                }
+            }
+            "done" => {
+                self.streaming = false;
+                self.pending_queue.clear();
             }
             "approval_request" => {
                 let tool = v.get("tool").and_then(|x| x.as_str()).unwrap_or("tool");
