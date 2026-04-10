@@ -69,7 +69,8 @@ need_sudo() {
 }
 cmd_exists() { command -v "$1" >/dev/null 2>&1; }
 
-append_path_hint() {
+ensure_path() {
+  local line='export PATH="$HOME/.local/bin:$PATH"'
   local shell_rc=""
   if [[ -n "${ZSH_VERSION:-}" || "${SHELL:-}" == *"zsh" ]]; then
     shell_rc="$HOME/.zshrc"
@@ -77,12 +78,23 @@ append_path_hint() {
     shell_rc="$HOME/.bashrc"
   fi
 
+  # Already on PATH?
+  if echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"; then
+    return
+  fi
+
   if [[ -n "$shell_rc" ]]; then
-    log "If needed, add ~/.local/bin to PATH in $shell_rc:"
-    echo 'export PATH="$HOME/.local/bin:$PATH"'
+    if ! grep -qF '.local/bin' "$shell_rc" 2>/dev/null; then
+      log "Adding ~/.local/bin to PATH in $shell_rc"
+      echo "" >> "$shell_rc"
+      echo "# Added by Charon installer" >> "$shell_rc"
+      echo "$line" >> "$shell_rc"
+    fi
+    # Also export for the current session
+    export PATH="$HOME/.local/bin:$PATH"
   else
-    log 'If needed, add ~/.local/bin to your shell PATH:'
-    echo 'export PATH="$HOME/.local/bin:$PATH"'
+    log 'Add ~/.local/bin to your shell PATH:'
+    echo "$line"
   fi
 }
 
@@ -200,5 +212,5 @@ esac
 run_install_dev
 
 log "Bootstrap complete."
-append_path_hint
+ensure_path
 log "Run: charon"
