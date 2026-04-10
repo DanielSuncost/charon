@@ -38,6 +38,10 @@ def _events_path(state_dir: Path) -> Path:
     return state_dir / 'shade_phase_events.jsonl'
 
 
+def _triage_path(state_dir: Path) -> Path:
+    return state_dir / 'shade_triage.json'
+
+
 def _contract_id() -> str:
     return f"ctr-{uuid.uuid4().hex[:10]}"
 
@@ -264,10 +268,24 @@ def mark_phase_queued(state_dir: Path, contract_id: str, phase_id: str, queue_ta
     return None
 
 
+def _summary_quality(summary: str) -> dict:
+    text = str(summary or '')
+    stripped = text.strip()
+    non_ws = len(stripped)
+    line_count = len([ln for ln in text.splitlines() if ln.strip()])
+    weak = non_ws < 24 or line_count == 0
+    return {
+        'non_ws_chars': non_ws,
+        'nonempty_lines': line_count,
+        'looks_weak': weak,
+    }
+
+
 def mark_phase_completed(state_dir: Path, contract_id: str, phase_id: str, *, task_id: str, summary: str) -> dict | None:
     contract = get_contract(state_dir, contract_id)
     if not contract:
         return None
+    quality = _summary_quality(summary)
     for phase in (contract.get('phases') or []):
         if phase.get('phase_id') != phase_id:
             continue
@@ -276,7 +294,26 @@ def mark_phase_completed(state_dir: Path, contract_id: str, phase_id: str, *, ta
         phase['result_summary'] = summary
         phase['error'] = None
         phase['updated_at'] = _now_iso()
-        append_phase_event(state_dir, contract_id=contract_id, phase_id=phase_id, event_type='phase_completed', payload={'task_id': task_id, 'summary': summary[:240]})
+        append_phase_event(
+            state_dir,
+            contract_id=contract_id,
+            phase_id=phase_id,
+            event_type='phase_completed',
+            payload={'task_id': task_id, 'summary': summary[:240], 'quality': quality},
+        )
+        if quality.get('looks_weak'):
+            append_phase_event(
+                state_dir,
+                contract_id=contract_id,
+                phase_id=phase_id,
+                event_type='phase_output_suspect',
+                payload={
+                    'task_id': task_id,
+                    'reason': 'weak_summary',
+                    'summary_preview': summary[:240],
+                    'quality': quality,
+                },
+            )
         break
     pending = next_pending_phase(contract)
     if pending:
@@ -410,6 +447,110 @@ def load_phase_events(state_dir: Path, contract_id: str | None = None) -> list[d
     return rows
 
 
+def assess_contract_outcome(contract: dict | None) -> dict:
+    contract = contract or {}
+    phases = list(contract.get('phases') or [])
+    completed = [p for p in phases if p.get('status') == 'completed']
+    failed = [p for p in phases if p.get('status') == 'failed']
+    current = str(contract.get('current_phase_id') or '')
+    quality_flags = []
+    for phase in completed:
+        quality = _summary_quality(str(phase.get('result_summary') or ''))
+        if quality.get('looks_weak'):
+            quality_flags.append({
+                'phase_id': phase.get('phase_id'),
+                'phase_name': phase.get('name'),
+                'reason': 'weak_summary',
+                'quality': quality,
+            })
+
+    if failed:
+        outcome = 'failed_runtime'
+    elif contract.get('status') == 'completed' and not quality_flags:
+        outcome = 'success'
+    elif contract.get('status') == 'completed' and quality_flags:
+        outcome = 'failed_quality'
+    elif contract.get('status') == 'running' and completed and current:
+        outcome = 'partial'
+    elif contract.get('status') == 'running':
+        outcome = 'stalled'
+    else:
+        outcome = 'unknown'
+
+    return {
+        'contract_id': contract.get('id') or '',
+        'status': contract.get('status') or 'unknown',
+        'outcome': outcome,
+        'completed_phases': len(completed),
+        'total_phases': len(phases),
+        'current_phase_id': current,
+        'failed_phase_ids': [p.get('phase_id') for p in failed],
+        'quality_flags': quality_flags,
+        'expected_outputs': list(contract.get('expected_outputs') or []),
+        'resolved_provider': str(contract.get('resolved_provider') or ''),
+        'resolved_model': str(contract.get('resolved_model') or ''),
+        'resolved_provider_meta': contract.get('resolved_provider_meta') or {},
+    }
+
+
+def _load_triage(state_dir: Path) -> dict:
+    data = _read_json(_triage_path(state_dir), {'items': []})
+    if isinstance(data, dict) and isinstance(data.get('items'), list):
+        return data
+    return {'items': []}
+
+
+def _save_triage(state_dir: Path, data: dict) -> None:
+    _write_json(_triage_path(state_dir), data)
+
+
+def save_triage_record(state_dir: Path, contract: dict | None, assessment: dict | None = None, reviewer_task_id: str = '') -> dict:
+    contract = contract or {}
+    assessment = assessment or assess_contract_outcome(contract)
+    outcome = str(assessment.get('outcome') or 'unknown')
+    if outcome == 'failed_runtime':
+        recommendation = 'retry_with_debugging_or_escalate'
+    elif outcome == 'failed_quality':
+        recommendation = 'retry_with_stronger_model_or_judge'
+    elif outcome == 'partial':
+        recommendation = 'inspect_stall_and_resume_or_escalate'
+    elif outcome == 'stalled':
+        recommendation = 'inspect_scheduler_or_retry'
+    else:
+        recommendation = 'none'
+
+    record = {
+        'triage_id': f"tri_{uuid.uuid4().hex[:10]}",
+        'contract_id': str(contract.get('id') or ''),
+        'shade_agent_id': str(contract.get('shade_agent_id') or ''),
+        'parent_agent_id': str(contract.get('parent_agent_id') or ''),
+        'goal': str(contract.get('goal') or ''),
+        'status': str(contract.get('status') or ''),
+        'assessment': assessment,
+        'recommendation': recommendation,
+        'reviewer_task_id': str(reviewer_task_id or ''),
+        'created_at': _now_iso(),
+    }
+    data = _load_triage(state_dir)
+    items = list(data.get('items') or [])
+    items.append(record)
+    data['items'] = items
+    _save_triage(state_dir, data)
+    append_phase_event(
+        state_dir,
+        contract_id=str(contract.get('id') or ''),
+        phase_id='-',
+        event_type='worker_triage_requested',
+        payload={
+            'triage_id': record['triage_id'],
+            'outcome': outcome,
+            'recommendation': recommendation,
+            'reviewer_task_id': record['reviewer_task_id'],
+        },
+    )
+    return record
+
+
 __all__ = [
     'load_contracts',
     'save_contracts',
@@ -424,6 +565,8 @@ __all__ = [
     'summarize_contract',
     'branch_from_phase',
     'load_phase_events',
+    'assess_contract_outcome',
+    'save_triage_record',
 ]
 
 

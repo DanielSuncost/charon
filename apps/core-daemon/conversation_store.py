@@ -57,11 +57,17 @@ def load_conversation(state_dir: Path, agent_id: str) -> list[dict]:
 
 
 def list_conversations(state_dir: Path) -> list[dict]:
-    """List all saved conversations with metadata."""
+    """List all saved conversations with metadata.
+
+    Merges JSONL files with the lossless SQLite store so sessions that
+    only exist in one backend still appear.
+    """
     conv_dir = _conv_dir(state_dir)
+    seen: set[str] = set()
     result = []
     for f in sorted(conv_dir.glob('*.jsonl')):
         agent_id = f.stem
+        seen.add(agent_id)
         try:
             lines = f.read_text().splitlines()
             msg_count = len([l for l in lines if l.strip()])
@@ -75,6 +81,12 @@ def list_conversations(state_dir: Path) -> list[dict]:
                         break
                     except Exception:
                         pass
+            # Fall back to file mtime when messages lack timestamps
+            if not last_ts:
+                try:
+                    last_ts = f.stat().st_mtime
+                except Exception:
+                    pass
             result.append({
                 'agent_id': agent_id,
                 'message_count': msg_count,
@@ -83,6 +95,39 @@ def list_conversations(state_dir: Path) -> list[dict]:
             })
         except Exception:
             continue
+
+    # Merge sessions that exist only in the lossless SQLite store
+    try:
+        from context_store import ContextStore
+        from store_adapter import get_db
+        db = get_db(state_dir)
+        rows = db.fetchall(
+            "SELECT agent_id, COUNT(*) as cnt, MAX(created_at) as last_at "
+            "FROM conversation_messages GROUP BY agent_id"
+        )
+        for row in rows:
+            aid = row['agent_id']
+            if aid in seen:
+                continue
+            last_ts = 0.0
+            if row.get('last_at'):
+                try:
+                    from datetime import datetime, timezone
+                    dt = datetime.fromisoformat(row['last_at'])
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                    last_ts = dt.timestamp()
+                except Exception:
+                    pass
+            result.append({
+                'agent_id': aid,
+                'message_count': row['cnt'],
+                'last_timestamp': last_ts,
+                'path': '',
+            })
+    except Exception:
+        pass
+
     return result
 
 

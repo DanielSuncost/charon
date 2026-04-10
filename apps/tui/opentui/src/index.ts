@@ -1110,8 +1110,11 @@ async function main() {
   function budgetBadge(b: any): string {
     if (!b || typeof b !== 'object') return 'budget: unknown'
     const reasons = Array.isArray(b.reasons) ? b.reasons.length : 0
+    const budget = b?.budget || {}
+    const isUnlimited = !!budget && Object.values(budget).every((v: any) => Number(v || 0) === 0)
     if (b.continue_running === false) return `budget: exhausted${reasons ? ` (${reasons})` : ''}`
     if (reasons) return `budget: caution (${reasons})`
+    if (isUnlimited) return 'budget: unlimited'
     return 'budget: healthy'
   }
 
@@ -1283,6 +1286,9 @@ async function main() {
         lines.push(`╔═ Coordinator ═ ${oneLine(coordinator?.name || coordinator?.agent_id || 'coordinator', Math.max(12, width - 18))}`)
         lines.push(`║ ${oneLine(coordinator?.phase || coordinator?.status || '—', Math.max(8, width - 4))}`)
         lines.push(`║ ${oneLine(coordinator?.live_line || coordinator?.phase_summary || coordinator?.goal || '', Math.max(8, width - 4))}`)
+        if (!topics.length && Number(room?.candidate_topics_count || 0) > 0) {
+          lines.push(`║ ${oneLine(`candidate topics ready: ${room?.candidate_topics_count} (no fanout yet)`, Math.max(8, width - 4))}`)
+        }
         lines.push('')
       }
       if (!topics.length) return ['No Libris topics available for graph view.']

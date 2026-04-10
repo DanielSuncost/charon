@@ -1,8 +1,22 @@
 use crate::chat::{ChatState, LaunchOptions};
 use crate::session::SessionCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::time::{Duration, Instant};
+
+#[derive(Clone, Debug)]
+pub enum FleetConnectionStatus {
+    Connecting,
+    Connected,
+    Offline,
+}
+
+#[derive(Clone, Debug)]
+pub struct FleetServerState {
+    pub status: FleetConnectionStatus,
+    pub sessions: Vec<String>, // session IDs on this server
+    pub last_seen: Instant,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
@@ -43,6 +57,7 @@ pub struct SessionsState {
     pub panes: Vec<SessionCell>,
     pub focused: usize,
     pub terminal_mode: bool,
+    pub app_mouse_mode: bool,
     pub section: SessionsSection,
     pub agent_index: usize,
     pub project_index: usize,
@@ -61,6 +76,7 @@ impl SessionsState {
             panes,
             focused: 0,
             terminal_mode: false,
+            app_mouse_mode: true,
             section: SessionsSection::Grid,
             agent_index: 0,
             project_index: 0,
@@ -147,6 +163,7 @@ pub struct App {
     pub dashboard: DashboardState,
     pub sessions: SessionsState,
     pub inter_agent: InterAgentState,
+    pub remote_fleet: HashMap<String, FleetServerState>,
 }
 
 impl App {
@@ -157,6 +174,7 @@ impl App {
             dashboard: DashboardState::new(),
             sessions: SessionsState::new(panes),
             inter_agent: InterAgentState::new(),
+            remote_fleet: HashMap::new(),
         })
     }
 }

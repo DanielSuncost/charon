@@ -895,6 +895,18 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
     state_dir.mkdir(parents=True, exist_ok=True)
     ensure_bootstrap_queue(queue_file)
 
+    # Start fleet sync and memory threads (optional — graceful if fleet not configured)
+    try:
+        from fleet_sync import start_fleet_sync
+        start_fleet_sync()
+    except Exception:
+        pass
+    try:
+        from fleet_memory import start_fleet_memory
+        start_fleet_memory()
+    except Exception:
+        pass
+
     stale_in_progress_sec = int(os.environ.get('CHARON_STALE_IN_PROGRESS_SEC', '60'))
 
     consec_fail = 0

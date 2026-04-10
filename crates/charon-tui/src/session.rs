@@ -1,6 +1,6 @@
 /// SessionCell — one live terminal: TerminalState + AnsiParser + Backend.
 
-use crate::backend::{BoatPane, ByteStream, CharonPane, PtyCapture, TmuxPane};
+use crate::backend::{BoatPane, ByteStream, CharonPane, FleetServer, PtyCapture, TmuxPane};
 use crate::parser::AnsiParser;
 use crate::terminal::TerminalState;
 
@@ -21,6 +21,7 @@ pub enum BackendType {
     LocalPty,
     TmuxPane { session_name: String },
     BoatPane { session_id: String },
+    RemoteBoat { server_id: String, session_id: String },
     CharonPane { socket_path: String },
 }
 
@@ -76,6 +77,20 @@ impl SessionCell {
             title: title.to_string(),
             id,
             backend_type: BackendType::BoatPane { session_id: session_id.to_string() },
+            viewport_scroll: 0,
+        })
+    }
+
+    /// Attach to a remote agent via SSH + boat protocol.
+    pub fn attach_remote_boat(id: u64, title: &str, server: &FleetServer, session_id: &str, width: u16, height: u16) -> io::Result<Self> {
+        let boat = BoatPane::attach_remote(server, session_id, width, height)?;
+        Ok(SessionCell {
+            terminal: TerminalState::new(width, height),
+            parser: AnsiParser::new(),
+            backend: Box::new(boat),
+            title: title.to_string(),
+            id,
+            backend_type: BackendType::RemoteBoat { server_id: server.id.clone(), session_id: session_id.to_string() },
             viewport_scroll: 0,
         })
     }

@@ -297,11 +297,12 @@ def execute_research(params: dict, ctx: ToolContext) -> ToolResult:
             prompt = str(params.get('prompt') or '').strip()
             if not prompt:
                 return ToolResult(content='Error: prompt is required for init_operation.', is_error=True)
+            mode = str(params.get('mode') or 'autonomous_research_operation')
             op = init_operation(
                 state_dir,
                 ctx.project_root,
                 prompt=prompt,
-                mode=str(params.get('mode') or 'autonomous_research_operation'),
+                mode=mode,
                 coordinator_agent_id=ctx.agent_id,
                 kind=str(params.get('kind') or 'research'),
                 research_mode=str(params.get('research_mode') or 'exploratory'),
@@ -309,12 +310,20 @@ def execute_research(params: dict, ctx: ToolContext) -> ToolResult:
                 budget=dict(params.get('budget') or {}),
                 model_policy=dict(params.get('model_policy') or {}),
             )
+            guidance = ''
+            if mode == 'autonomous_research_operation':
+                guidance = (
+                    '\nNote: init_operation only creates the operation record. '
+                    'To actually launch the autonomous coordinator/controller flow, '
+                    'use action=start_autonomous_project instead of init_operation + spawn_coordinator.'
+                )
             return ToolResult(
                 content=(
                     f'Research operation created: {op.get("operation_id")}\n'
                     f'Mode: {op.get("mode")}\n'
                     f'Status: {op.get("status")}\n'
                     f'Prompt: {str(op.get("prompt") or "")[:200]}'
+                    f'{guidance}'
                 ),
                 details=op,
             )
@@ -477,6 +486,19 @@ def execute_research(params: dict, ctx: ToolContext) -> ToolResult:
             goal = str(params.get('prompt') or params.get('summary') or '').strip()
             if not op_id:
                 return ToolResult(content='Error: operation_id is required.', is_error=True)
+            op = get_operation_state(state_dir, ctx.project_root, op_id)
+            if not op:
+                return ToolResult(content=f'No operation found: {op_id}', is_error=True)
+            if str(op.get('mode') or '') == 'autonomous_research_operation':
+                return ToolResult(
+                    content=(
+                        'Error: spawn_coordinator is a low-level action and does not start the autonomous '
+                        'Libris controller loop for autonomous_research_operation. '
+                        'Use action=start_autonomous_project to launch a real autonomous run.'
+                    ),
+                    is_error=True,
+                    details=op,
+                )
             from libris_agents import spawn_libris_role
             agent = spawn_libris_role(
                 state_dir,

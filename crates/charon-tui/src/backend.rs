@@ -10,7 +10,61 @@ use std::time::Duration;
 
 use base64::Engine;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
+use serde::Deserialize;
 use serde_json::{json, Value};
+
+// ── Fleet config ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FleetAgent {
+    pub name: String,
+    #[serde(rename = "type", default)]
+    pub agent_type: String,
+    #[serde(default)]
+    pub specialization: String,
+    #[serde(default)]
+    pub project: String,
+    #[serde(default)]
+    pub auto_start: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FleetServer {
+    pub id: String,
+    pub host: String,
+    #[serde(default)]
+    pub user: String,
+    #[serde(default)]
+    pub ssh_options: Vec<String>,
+    #[serde(default = "default_boat_command")]
+    pub boat_command: String,
+    #[serde(default)]
+    pub agents: Vec<FleetAgent>,
+}
+
+fn default_boat_command() -> String {
+    "charons-boat stream".to_string()
+}
+
+#[derive(Debug, Deserialize)]
+struct FleetConfig {
+    #[serde(default)]
+    servers: Vec<FleetServer>,
+}
+
+/// Load fleet config from ~/.charon/fleet.json.
+pub fn load_fleet_config() -> Vec<FleetServer> {
+    let path = dirs_home().join(".charon/fleet.json");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    let config: FleetConfig = match serde_json::from_str(&content) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    config.servers
+}
 
 // ── ByteStream trait ────────────────────────────────────────────────────────
 
@@ -423,6 +477,77 @@ impl BoatPane {
         Ok(Self { conn: BoatConn::Socket(stream), rx, eof: false, session_id: session_id.to_string() })
     }
 
+    /// Connect to a remote server via SSH and speak the boat protocol over stdin/stdout.
+    pub fn attach_remote(server: &FleetServer, session_id: &str, width: u16, height: u16) -> io::Result<Self> {
+        let mut cmd = Command::new("ssh");
+
+        // SSH options from fleet config
+        for opt in &server.ssh_options {
+            cmd.arg(opt);
+        }
+
+        // Ensure non-interactive and fast timeout
+        cmd.args(["-o", "ConnectTimeout=10", "-o", "BatchMode=yes"]);
+
+        // Target: user@host
+        let target = if server.user.is_empty() {
+            server.host.clone()
+        } else {
+            format!("{}@{}", server.user, server.host)
+        };
+        cmd.arg(&target);
+
+        // Remote command: charons-boat stream
+        for part in server.boat_command.split_whitespace() {
+            cmd.arg(part);
+        }
+
+        let mut child = cmd
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| io::Error::new(io::ErrorKind::ConnectionRefused,
+                format!("SSH to {} failed: {}", server.host, e)))?;
+
+        let stdin = child.stdin.take().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "missing ssh stdin"))?;
+        let stdout = child.stdout.take().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "missing ssh stdout"))?;
+        let (tx, rx) = mpsc::channel();
+        let session = session_id.to_string();
+        thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                match line {
+                    Ok(line) => {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() { continue; }
+                        let Ok(v) = serde_json::from_str::<Value>(trimmed) else { continue; };
+                        let typ = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
+                        match typ {
+                            "output" => {
+                                let sid = v.get("session").and_then(|x| x.as_str()).unwrap_or("");
+                                if sid == session {
+                                    let data = v.get("data").and_then(|x| x.as_str()).unwrap_or("");
+                                    if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(data) {
+                                        if tx.send(ReaderMsg::Data(decoded)).is_err() { return; }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+            let _ = tx.send(ReaderMsg::Eof);
+        });
+
+        let mut pane = Self { conn: BoatConn::StreamProc { _child: child, stdin }, rx, eof: false, session_id: session_id.to_string() };
+        pane.send(json!({"type": "resize", "session": session_id, "cols": width, "rows": height}))?;
+        pane.send(json!({"type": "focus", "session": session_id}))?;
+        Ok(pane)
+    }
+
     fn send(&mut self, value: Value) -> io::Result<()> {
         let line = serde_json::to_string(&value)?;
         match &mut self.conn {
@@ -595,6 +720,8 @@ pub struct DiscoveredSession {
     pub display_name: String,
     pub agent_type: String,
     pub transport: String,
+    /// Set for remote-boat sessions: the fleet server ID.
+    pub server_id: Option<String>,
 }
 
 /// Discover tmux sessions that can be attached to.
@@ -637,20 +764,38 @@ pub fn discover_sessions() -> Vec<DiscoveredSession> {
                         display_name: name.to_string(),
                         agent_type: "tmux".to_string(),
                         transport: "tmux".to_string(),
+                        server_id: None,
                     });
                 }
             }
         }
     }
 
-    // Verify each session still exists
+    // Verify each local session still exists
     sessions.retain(|s| {
+        if s.server_id.is_some() { return true; } // remote sessions skip tmux check
         Command::new("tmux")
             .args(["has-session", "-t", &s.session_name])
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
     });
+
+    // 3. Fleet remote sessions
+    for server in load_fleet_config() {
+        for agent in &server.agents {
+            let session_name = format!("{}:{}", server.id, agent.name);
+            if !sessions.iter().any(|s| s.session_name == session_name) {
+                sessions.push(DiscoveredSession {
+                    session_name,
+                    display_name: format!("{} @ {}", agent.name, server.id),
+                    agent_type: agent.agent_type.clone(),
+                    transport: "remote-boat".to_string(),
+                    server_id: Some(server.id.clone()),
+                });
+            }
+        }
+    }
 
     sessions
 }
@@ -679,6 +824,7 @@ fn parse_boat_registration(content: &str) -> Option<DiscoveredSession> {
         display_name: name,
         agent_type: agent.to_string(),
         transport: "boat".to_string(),
+        server_id: None,
     })
 }
 

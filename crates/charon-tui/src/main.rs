@@ -10,10 +10,13 @@
 mod app;
 mod backend;
 mod chat;
+mod chat_view;
+mod f1_mono;
 mod grid;
 mod native_session;
 mod parser;
 mod render;
+mod screen;
 mod session;
 mod terminal;
 
@@ -32,12 +35,13 @@ use crossterm::{
         Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind,
     },
     style::{self},
-    terminal as ct,
+    terminal::{self as ct},
     QueueableCommand,
 };
 
 use backend::discover_sessions;
 use chat::{ChatMessage, ChatTextPoint, ChatViewMode, LaunchOptions};
+use f1_mono::F1MonoCache;
 use grid::compute_grid;
 use native_session::{NativeCommand, NativeSessionServer};
 use parser::AnsiParser;
@@ -113,6 +117,29 @@ fn copy_to_clipboard(text: &str) -> Result<&'static str, String> {
         .and_then(|_| tty.flush())
         .map_err(|e| format!("clipboard write failed: {}", e))?;
     Ok(if std::env::var_os("TMUX").is_some() { "OSC52 via tmux" } else { "OSC52" })
+}
+
+fn read_from_clipboard() -> Option<String> {
+    let attempts: &[(&str, &[&str])] = &[
+        ("wl-paste", &["--no-newline"]),
+        ("xclip", &["-selection", "clipboard", "-o"]),
+        ("xsel", &["--clipboard", "--output"]),
+        ("pbpaste", &[]),
+    ];
+    for (cmd, args) in attempts {
+        if let Ok(output) = Command::new(cmd)
+            .args(*args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+        {
+            if output.status.success() {
+                return String::from_utf8(output.stdout).ok();
+            }
+        }
+    }
+    None
 }
 
 fn parse_args() -> CliOptions {
@@ -432,7 +459,13 @@ fn draw_header<W: Write>(stdout: &mut W, app: &App, w: u16) -> io::Result<()> {
 
     let extra = match app.active_view {
         View::Chat => match app.chat.view_mode {
-            ChatViewMode::Transcript => " │ F5:workspace",
+            ChatViewMode::Transcript => {
+                if app.chat.app_mouse_mode {
+                    " │ F5:workspace │ F6:mouse terminal"
+                } else {
+                    " │ F5:workspace │ F6:mouse app"
+                }
+            }
             ChatViewMode::Workspace => {
                 if app.chat.app_mouse_mode {
                     " │ F5:transcript │ F6:mouse terminal"
@@ -444,8 +477,10 @@ fn draw_header<W: Write>(stdout: &mut W, app: &App, w: u16) -> io::Result<()> {
         View::Sessions => {
             if app.sessions.terminal_mode {
                 " │ terminal mode (Ctrl+] / Ctrl+G / F4)"
+            } else if app.sessions.app_mouse_mode {
+                " │ grid mode (Enter to interact) │ F6:mouse terminal"
             } else {
-                " │ grid mode (Enter to interact)"
+                " │ grid mode (native select/copy) │ F6:mouse app"
             }
         }
         View::InterAgent => {
@@ -515,6 +550,31 @@ fn draw_footer<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Resul
     Ok(())
 }
 
+fn draw_header_buf(buf: &mut screen::ScreenBuf, app: &App, w: u16) {
+    let fg = style::Color::Rgb { r: 167, g: 139, b: 250 };
+    let view = match app.active_view {
+        View::Chat => match app.chat.view_mode {
+            ChatViewMode::Transcript => "Chat/Transcript",
+            ChatViewMode::Workspace => "Chat/Workspace",
+        },
+        View::Dashboard => "Dashboard",
+        View::Sessions => "Sessions",
+        View::InterAgent => "Groups",
+    };
+    let header = format!(
+        " CHARON │ {} │ F1:chat │ F2:dash │ F3:sessions │ F4:groups │ Ctrl+Q:quit ",
+        view
+    );
+    buf.put_str(0, 0, &header, fg, style::Color::Reset, false);
+    let used = header.chars().count() as u16;
+    buf.fill(0, used, w, ' ', fg, style::Color::Reset);
+}
+
+fn draw_footer_buf(buf: &mut screen::ScreenBuf, _app: &App, w: u16, h: u16) {
+    let y = h.saturating_sub(1);
+    buf.fill(y, 0, w, ' ', style::Color::Reset, style::Color::Reset);
+}
+
 fn draw_placeholder_panel<W: Write>(stdout: &mut W, area: Rect, title: &str, lines: &[String]) -> io::Result<()> {
     render::render_border(stdout, area, title, true)?;
     let max_lines = area.height as usize;
@@ -541,7 +601,7 @@ fn render_local_charon_preview<W: Write>(stdout: &mut W, app: &mut App, area: Re
 
 fn build_native_session_snapshot(app: &mut App, w: u16, h: u16, self_socket_to_hide: Option<&str>) -> Vec<u8> {
     let mut out = Vec::new();
-    let snapshot_view = if app.active_view == View::Sessions || matches!(chat_layout_variant(w, h), ChatLayoutVariant::Tiny | ChatLayoutVariant::Mid) {
+    let snapshot_view = if app.active_view == View::Sessions || matches!(chat_view::chat_layout_variant(w, h), chat_view::ChatLayoutVariant::Tiny | chat_view::ChatLayoutVariant::Mid) {
         View::Chat
     } else {
         app.active_view
@@ -551,7 +611,7 @@ fn build_native_session_snapshot(app: &mut App, w: u16, h: u16, self_socket_to_h
     } else {
         Vec::new()
     };
-    let tiny_snapshot = matches!(chat_layout_variant(w, h), ChatLayoutVariant::Tiny);
+    let tiny_snapshot = matches!(chat_view::chat_layout_variant(w, h), chat_view::ChatLayoutVariant::Tiny);
     let saved_view = app.active_view;
     app.active_view = snapshot_view;
     let _ = out.queue(cursor::Hide);
@@ -560,7 +620,11 @@ fn build_native_session_snapshot(app: &mut App, w: u16, h: u16, self_socket_to_h
         let _ = draw_header(&mut out, app, w);
     }
     let _ = match snapshot_view {
-        View::Chat => draw_chat(&mut out, app, w, h),
+        View::Chat => {
+            let mut cache = chat_view::ChatVisualCache::default();
+            chat_view::ensure_chat_visual_cache(app, w, h, &mut cache, true);
+            chat_view::draw_chat(&mut out, app, w, h, true, &cache.lines)
+        },
         View::Dashboard => draw_dashboard(&mut out, app, w, h),
         View::Sessions => draw_sessions(&mut out, app, &session_rects, true, w, h, self_socket_to_hide),
         View::InterAgent => draw_inter_agent(&mut out, app, w, h),
@@ -579,7 +643,6 @@ fn chat_rowing_active(app: &App) -> bool {
     matches!(app.chat.messages.last(),
         Some(ChatMessage::Assistant { streaming: true, .. })
         | Some(ChatMessage::Thinking { streaming: true, .. })
-        | Some(ChatMessage::ToolCall { .. })
     )
 }
 
@@ -904,7 +967,7 @@ fn push_chat_block(lines: &mut Vec<ChatRenderLine>, text: &str, width: usize, fg
     }
 }
 
-fn build_chat_visual_lines(app: &App, width: usize, variant: ChatLayoutVariant) -> Vec<ChatRenderLine> {
+fn build_chat_visual_lines_for_messages(messages: &[ChatMessage], width: usize, _variant: ChatLayoutVariant) -> Vec<ChatRenderLine> {
     let robe_bg = style::Color::Rgb { r: 42, g: 18, b: 21 };
     let robe_fg = style::Color::Rgb { r: 224, g: 208, b: 192 };
     let robe_heading = style::Color::Rgb { r: 232, g: 213, b: 163 };
@@ -914,14 +977,14 @@ fn build_chat_visual_lines(app: &App, width: usize, variant: ChatLayoutVariant) 
     let tool_bg = style::Color::Rgb { r: 13, g: 13, b: 26 };
     let code_fg = style::Color::Rgb { r: 230, g: 237, b: 243 };
     let code_bg = style::Color::Rgb { r: 22, g: 27, b: 34 };
-    let mut visual_lines = brand_lines(width, variant);
+    let mut visual_lines = Vec::new();
 
-    if app.chat.messages.is_empty() {
+    if messages.is_empty() {
         visual_lines.push(nonselectable_line(style::Color::DarkGrey, None, "  Welcome to Charon. Type a message to begin."));
         visual_lines.push(nonselectable_line(style::Color::Reset, None, String::new()));
     }
 
-    for message in &app.chat.messages {
+    for message in messages {
         match message {
             ChatMessage::User { text } => {
                 push_chat_block(&mut visual_lines, text, width, user_fg, Some(user_bg), 1);
@@ -1020,6 +1083,29 @@ fn build_chat_visual_lines(app: &App, width: usize, variant: ChatLayoutVariant) 
         }
     }
     visual_lines
+}
+
+fn build_chat_visual_lines(app: &App, width: usize, variant: ChatLayoutVariant) -> Vec<ChatRenderLine> {
+    build_chat_visual_lines_for_messages(&app.chat.messages, width, variant)
+}
+
+fn ensure_chat_visual_cache(
+    app: &App,
+    w: u16,
+    h: u16,
+    cached_width: &mut usize,
+    cached_variant: &mut Option<ChatLayoutVariant>,
+    cached_lines: &mut Vec<ChatRenderLine>,
+    force: bool,
+) {
+    let variant = chat_layout_variant(w, h);
+    let content = chat_content_area(app, w, h);
+    let width = content.width as usize;
+    if force || *cached_width != width || *cached_variant != Some(variant) {
+        *cached_lines = build_chat_visual_lines(app, width, variant);
+        *cached_width = width;
+        *cached_variant = Some(variant);
+    }
 }
 
 fn chat_line_text(line: &ChatRenderLine) -> String {
@@ -1383,10 +1469,13 @@ fn draw_popup_box<W: Write>(stdout: &mut W, area: Rect, title: &str, lines: &[(s
 
 fn chat_info_pane_width(app: &App, w: u16, h: u16) -> u16 {
     let variant = chat_layout_variant(w, h);
-    if app.chat.view_mode == ChatViewMode::Workspace && app.chat.info_pane_open && variant == ChatLayoutVariant::Full && w >= 100 {
-        ((w as f32) * 0.15).floor().max(18.0) as u16
-    } else {
-        0
+    if app.chat.view_mode != ChatViewMode::Workspace {
+        return 0;
+    }
+    match variant {
+        ChatLayoutVariant::Full if w >= 100 => ((w as f32) * 0.18).floor().max(22.0) as u16,
+        ChatLayoutVariant::Mid if w >= 84 => ((w as f32) * 0.24).floor().max(20.0) as u16,
+        _ => 0,
     }
 }
 
@@ -1490,14 +1579,12 @@ fn chat_selection_cols_for_row(line: &ChatRenderLine, row: usize, bounds: Option
     Some((line.copy_offset + sel_start, line.copy_offset + sel_end))
 }
 
-fn copy_chat_selection(app: &mut App, w: u16, h: u16) -> bool {
+fn copy_chat_selection(app: &mut App, lines: &[ChatRenderLine]) -> bool {
     let Some(bounds) = chat_selection_bounds(app) else {
         app.chat.set_clipboard_notice("Nothing selected", false);
         return false;
     };
-    let area = chat_content_area(app, w, h);
-    let lines = build_chat_visual_lines(app, area.width as usize, chat_layout_variant(w, h));
-    let text = chat_selection_text(&lines, bounds);
+    let text = chat_selection_text(lines, bounds);
     if text.is_empty() {
         app.chat.set_clipboard_notice("Nothing selected", false);
         return false;
@@ -1547,35 +1634,281 @@ fn tail_visible_text(text: &str, width: usize) -> String {
     chars[start..].iter().collect()
 }
 
-fn build_chat_transcript_log_lines(app: &App, w: u16, h: u16) -> Vec<String> {
-    let variant = chat_layout_variant(w, h);
-    let width = w.saturating_sub(2) as usize;
+fn ansi_fg(color: style::Color) -> String {
+    match color {
+        style::Color::Black => "\x1b[30m".to_string(),
+        style::Color::DarkGrey => "\x1b[90m".to_string(),
+        style::Color::Red => "\x1b[31m".to_string(),
+        style::Color::DarkRed => "\x1b[31m".to_string(),
+        style::Color::Green => "\x1b[32m".to_string(),
+        style::Color::DarkGreen => "\x1b[32m".to_string(),
+        style::Color::Yellow => "\x1b[33m".to_string(),
+        style::Color::DarkYellow => "\x1b[33m".to_string(),
+        style::Color::Blue => "\x1b[34m".to_string(),
+        style::Color::DarkBlue => "\x1b[34m".to_string(),
+        style::Color::Magenta => "\x1b[35m".to_string(),
+        style::Color::DarkMagenta => "\x1b[35m".to_string(),
+        style::Color::Cyan => "\x1b[36m".to_string(),
+        style::Color::DarkCyan => "\x1b[36m".to_string(),
+        style::Color::White => "\x1b[37m".to_string(),
+        style::Color::Grey => "\x1b[37m".to_string(),
+        style::Color::Rgb { r, g, b } => format!("\x1b[38;2;{};{};{}m", r, g, b),
+        style::Color::AnsiValue(n) => format!("\x1b[38;5;{}m", n),
+        style::Color::Reset => "\x1b[39m".to_string(),
+    }
+}
+
+fn ansi_wrap(color: style::Color, text: impl AsRef<str>) -> String {
+    format!("{}{}\x1b[0m", ansi_fg(color), text.as_ref())
+}
+
+fn set_scroll_region<W: Write>(stdout: &mut W, top: u16, bottom: u16) -> io::Result<()> {
+    write!(stdout, "\x1b[{};{}r", top.saturating_add(1), bottom.saturating_add(1))
+}
+
+fn reset_scroll_region<W: Write>(stdout: &mut W) -> io::Result<()> {
+    write!(stdout, "\x1b[r")
+}
+
+fn transcript_line_ansi(line: &ChatRenderLine) -> String {
+    let mut out = String::new();
+    for span in &line.spans {
+        out.push_str(&ansi_fg(span.fg));
+        out.push_str(&span.text.replace('\r', ""));
+    }
+    out.push_str("\x1b[0m");
+    out.trim_end().to_string()
+}
+
+fn build_transcript_status_lines(app: &App) -> Vec<String> {
+    let provider = app.chat.provider_model();
+    let onboarding = if app.chat.refresh_payload.is_none() {
+        "loading"
+    } else if app.chat.onboarding_complete() {
+        "complete"
+    } else {
+        "setup"
+    };
+    let onboarding_project = app.chat.onboarding_project();
+    let project_name = onboarding_project
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .last()
+        .unwrap_or("");
+    let session_display = if app.chat.session_id.is_empty() {
+        "none"
+    } else {
+        &app.chat.session_id
+    };
+    let tokens = session_info_tokens(app);
+    let chat_in = tokens
+        .and_then(|t| t.get("chat_in"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(app.chat.usage.input_tokens);
+    let chat_out = tokens
+        .and_then(|t| t.get("chat_out"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(app.chat.usage.output_tokens);
+    let max_ctx = tokens
+        .and_then(|t| t.get("max_context"))
+        .and_then(|v| v.as_u64())
+        .or(app.chat.usage.context_window)
+        .unwrap_or(0);
+    let ctx = app
+        .chat
+        .usage
+        .context_pct
+        .map(|v| format!("{:.0}%", v))
+        .unwrap_or_else(|| "-".to_string());
+
+    let left = if app.chat.onboarding_complete() {
+        let mut parts = vec!["🏮 ◈ CHARON".to_string(), "lantern wraith".to_string(), session_display.to_string()];
+        if !project_name.is_empty() {
+            parts.push(project_name.to_string());
+        }
+        parts.push(provider);
+        parts.join("  •  ")
+    } else {
+        format!("CHARON  •  onboarding:{}", onboarding)
+    };
+
+    let mut right_parts = vec![format!("ctx:{}", ctx), format!("chat:{}↑ {}↓", fmt_k(chat_in), fmt_k(chat_out))];
+    if max_ctx > 0 {
+        right_parts.push(format!("max:{}", fmt_k(max_ctx)));
+    }
+    if let Some(hint) = app.chat.orchestration_parse_hint() {
+        right_parts.push(hint);
+    }
+    if app.chat.show_thoughts {
+        right_parts.push("thoughts:on".to_string());
+    }
+    if app.chat.show_timestamps {
+        right_parts.push("⏱".to_string());
+    }
+
+    vec![
+        format!(
+            "{}{}{}",
+            ansi_wrap(style::Color::Rgb { r: 127, g: 29, b: 29 }, "━━ "),
+            ansi_wrap(style::Color::Rgb { r: 212, g: 196, b: 168 }, left),
+            ansi_wrap(style::Color::DarkGrey, format!("  {}", right_parts.join("  •  ")))
+        ),
+        format!(
+            "{}{}",
+            ansi_wrap(style::Color::Rgb { r: 153, g: 27, b: 27 }, "━━ "),
+            ansi_wrap(
+                style::Color::DarkGrey,
+                "F1:chat  F2:dash  F3:sessions  F4:groups  /:commands  Ctrl+P:info  F5:workspace  Ctrl+Q:quit",
+            )
+        ),
+    ]
+}
+
+fn build_transcript_info_lines(app: &App, width: usize) -> Vec<String> {
     let mut out = Vec::new();
-    for line in build_chat_visual_lines(app, width.max(1), variant) {
-        let text = if line.selectable {
-            let mut s = String::new();
-            s.push_str(&" ".repeat(line.copy_offset));
-            s.push_str(&line.copy_text);
-            s
-        } else {
-            line.spans.iter().map(|s| s.text.as_str()).collect::<String>()
-        };
-        out.push(text.trim_end().to_string());
+    let info = app.chat.refresh_payload.as_ref().and_then(|p| p.get("session_info"));
+    let tasks = info.and_then(|i| i.get("tasks")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let goals = info.and_then(|i| i.get("goals")).and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let user_model = info.and_then(|i| i.get("user_model")).and_then(|v| v.as_str()).unwrap_or("");
+    let header = match app.chat.info_pane_tab {
+        0 => "OUTCOMES",
+        1 => "GOALS",
+        _ => "MODEL",
+    };
+    out.push(String::new());
+    out.push(format!("{} {}", ansi_wrap(style::Color::Rgb { r: 196, g: 181, b: 253 }, header), ansi_wrap(style::Color::DarkGrey, "(Ctrl+I to cycle, Ctrl+P to hide)")));
+    out.push(ansi_wrap(style::Color::DarkGrey, "─".repeat(width.saturating_sub(1).max(8))));
+    match app.chat.info_pane_tab {
+        0 => {
+            if tasks.is_empty() {
+                out.push(ansi_wrap(style::Color::DarkGrey, "No outcomes yet."));
+            } else {
+                for task in tasks.iter().take(8) {
+                    let title = task.get("title").and_then(|v| v.as_str()).unwrap_or("task");
+                    let status = task.get("status").and_then(|v| v.as_str()).unwrap_or("active");
+                    let icon = if status == "completed" { "✓" } else { "○" };
+                    out.push(ansi_wrap(style::Color::Rgb { r: 212, g: 196, b: 168 }, format!("{} {}", icon, title)));
+                }
+            }
+        }
+        1 => {
+            if goals.is_empty() {
+                out.push(ansi_wrap(style::Color::DarkGrey, "No goals yet."));
+            } else {
+                for goal in goals.iter().take(8) {
+                    let title = goal.get("title").and_then(|v| v.as_str()).unwrap_or("goal");
+                    let status = goal.get("status").and_then(|v| v.as_str()).unwrap_or("backlog");
+                    out.push(ansi_wrap(style::Color::Rgb { r: 212, g: 196, b: 168 }, format!("• {} [{}]", title, status)));
+                }
+            }
+        }
+        _ => {
+            if user_model.trim().is_empty() {
+                out.push(ansi_wrap(style::Color::DarkGrey, "No user model yet."));
+            } else {
+                for line in user_model.lines().take(12) {
+                    out.push(ansi_wrap(style::Color::Rgb { r: 212, g: 196, b: 168 }, line));
+                }
+            }
+        }
     }
     out
 }
 
-fn chat_transcript_prompt_line(app: &App, w: u16) -> String {
-    let prefix = "> ";
-    let suffix = if app.chat.streaming {
-        "  [streaming]".to_string()
+#[derive(Default)]
+struct NativeTranscriptRenderState {
+    sealed_lines: Vec<String>,
+    live_lines: Vec<String>,
+    last_visible_rows: Vec<String>,
+}
+
+fn build_chat_transcript_line_parts(app: &App, w: u16, h: u16) -> (Vec<String>, Vec<String>) {
+    let variant = chat_layout_variant(w, h);
+    let width = w.saturating_sub(2) as usize;
+    let mut sealed = Vec::new();
+    for line in brand_lines(width.max(1), variant) {
+        sealed.push(transcript_line_ansi(&line));
+    }
+
+    let split_live = matches!(app.chat.messages.last(),
+        Some(ChatMessage::Assistant { streaming: true, .. })
+        | Some(ChatMessage::Thinking { streaming: true, .. })
+    );
+    let sealed_count = if split_live {
+        app.chat.messages.len().saturating_sub(1)
     } else {
-        "".to_string()
+        app.chat.messages.len()
     };
-    let reserve = suffix.chars().count();
-    let input_budget = (w as usize).saturating_sub(prefix.chars().count() + reserve + 1).max(8);
+
+    for line in build_chat_visual_lines_for_messages(&app.chat.messages[..sealed_count], width.max(1), variant) {
+        sealed.push(transcript_line_ansi(&line));
+    }
+
+    if app.chat.info_pane_open {
+        sealed.push(String::new());
+        sealed.extend(build_transcript_info_lines(app, width));
+    }
+
+    let live = if split_live {
+        build_chat_visual_lines_for_messages(&app.chat.messages[sealed_count..], width.max(1), variant)
+            .into_iter()
+            .map(|line| transcript_line_ansi(&line))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    (sealed, live)
+}
+
+fn transcript_visible_rows(sealed: &[String], live: &[String], height: usize) -> Vec<String> {
+    if height == 0 {
+        return Vec::new();
+    }
+    let live_tail_start = live.len().saturating_sub(height);
+    let live_tail = &live[live_tail_start..];
+    let live_count = live_tail.len().min(height);
+    let sealed_slots = height.saturating_sub(live_count);
+    let sealed_start = sealed.len().saturating_sub(sealed_slots);
+    let sealed_slice = &sealed[sealed_start..];
+
+    let mut rows = Vec::new();
+    if sealed_slice.len() < sealed_slots {
+        rows.extend(std::iter::repeat(String::new()).take(sealed_slots - sealed_slice.len()));
+    }
+    rows.extend(sealed_slice.iter().cloned());
+    rows.extend(live_tail.iter().cloned());
+    rows.truncate(height);
+    rows
+}
+
+fn chat_transcript_prompt_line(app: &App, w: u16) -> String {
+    let prefix = ansi_wrap(style::Color::Rgb { r: 248, g: 250, b: 252 }, "> ");
+    let suffix_plain = if let Some((notice, _ok)) = app.chat.clipboard_notice_text() {
+        format!("  [{}]", notice)
+    } else if app.chat.streaming {
+        "  [streaming]  /:commands  Ctrl+P:info  F5:workspace".to_string()
+    } else {
+        "  /:commands  Ctrl+P:info  F5:workspace".to_string()
+    };
+    let reserve = suffix_plain.chars().count();
+    let input_budget = (w as usize).saturating_sub(2 + reserve + 1).max(8);
     let visible_input = tail_visible_text(&app.chat.input, input_budget);
-    format!("{}{}{}", prefix, visible_input, suffix)
+    let input = ansi_wrap(style::Color::Rgb { r: 248, g: 250, b: 252 }, visible_input);
+    let suffix = ansi_wrap(style::Color::DarkGrey, suffix_plain);
+    format!("{}{}{}", prefix, input, suffix)
+}
+
+fn chat_transcript_rowing_lines(_app: &App, _w: u16) -> Vec<String> {
+    Vec::new()
+}
+
+fn transcript_lower_ui_height(_app: &App, _w: u16) -> u16 {
+    0
+}
+
+fn draw_transcript_lower_ui<W: Write>(_stdout: &mut W, _app: &App, _w: u16, _h: u16) -> io::Result<()> {
+    Ok(())
 }
 
 fn render_chat_transcript_mode<W: Write>(
@@ -1583,48 +1916,94 @@ fn render_chat_transcript_mode<W: Write>(
     app: &App,
     w: u16,
     h: u16,
-    last_lines: &mut Vec<String>,
+    state: &mut NativeTranscriptRenderState,
     force_reset: bool,
 ) -> io::Result<()> {
-    let lines = build_chat_transcript_log_lines(app, w, h);
+    let (sealed_lines, live_lines) = build_chat_transcript_line_parts(app, w, h);
+    let status_lines = build_transcript_status_lines(app);
     let prompt = chat_transcript_prompt_line(app, w);
-    let common_prefix = if force_reset {
-        0
-    } else {
-        last_lines.iter().zip(lines.iter()).take_while(|(a, b)| a == b).count()
-    };
 
-    if force_reset {
-        stdout.queue(ct::Clear(ct::ClearType::All))?;
+    // Bottom chrome: live streaming lines + status bar + prompt input
+    let status_count = status_lines.len().min(2) as u16;
+    let bottom_reserve = live_lines.len() as u16 + status_count + 1;
+    let scroll_bottom = h.saturating_sub(bottom_reserve + 1);
+
+    // Set scroll region: sealed content scrolls in the top portion,
+    // bottom chrome stays fixed. This gives us native terminal scrollback.
+    set_scroll_region(stdout, 0, scroll_bottom)?;
+
+    let sealed_extended = sealed_lines.len() >= state.sealed_lines.len()
+        && sealed_lines.starts_with(&state.sealed_lines);
+
+    if force_reset || !sealed_extended {
+        // Full rewrite: position at top of scroll region and write everything
         stdout.queue(cursor::MoveTo(0, 0))?;
-        write!(stdout, "\x1b[3J")?;
-        for line in &lines {
+        for line in &sealed_lines {
             stdout.queue(ct::Clear(ct::ClearType::CurrentLine))?;
             write!(stdout, "{}\r\n", line)?;
         }
-    } else {
+    } else if sealed_lines.len() > state.sealed_lines.len() {
+        // Incremental: just append new sealed lines at the cursor position
+        // The cursor should be at the end of the last sealed line from the previous render.
+        // Position it at the line after the last known sealed line.
+        let prev_count = state.sealed_lines.len();
+        // Move cursor to column 0 (it should already be on the right row from last render)
         stdout.queue(cursor::MoveToColumn(0))?;
-        stdout.queue(ct::Clear(ct::ClearType::CurrentLine))?;
-        for line in lines.iter().skip(common_prefix) {
+        for line in sealed_lines.iter().skip(prev_count) {
+            stdout.queue(ct::Clear(ct::ClearType::CurrentLine))?;
             write!(stdout, "{}\r\n", line)?;
         }
     }
 
+    // Now draw the fixed bottom chrome (outside scroll region)
+    reset_scroll_region(stdout)?;
+
+    // Live streaming lines
+    let live_start = scroll_bottom + 1;
+    for (i, line) in live_lines.iter().enumerate() {
+        let y = live_start + i as u16;
+        if y >= h { break; }
+        stdout.queue(cursor::MoveTo(0, y))?;
+        stdout.queue(ct::Clear(ct::ClearType::CurrentLine))?;
+        write!(stdout, "{}", line)?;
+    }
+    // Clear leftover live lines from previous render
+    let old_live_count = state.live_lines.len() as u16;
+    for row in live_lines.len() as u16..old_live_count {
+        let y = live_start + row;
+        if y >= h { break; }
+        stdout.queue(cursor::MoveTo(0, y))?;
+        stdout.queue(ct::Clear(ct::ClearType::CurrentLine))?;
+    }
+
+    // Status lines
+    let status_start = h.saturating_sub(1 + status_count);
+    for i in 0..status_count as usize {
+        let y = status_start + i as u16;
+        stdout.queue(cursor::MoveTo(0, y))?;
+        stdout.queue(ct::Clear(ct::ClearType::CurrentLine))?;
+        if let Some(line) = status_lines.get(i) {
+            write!(stdout, "{}", line)?;
+        }
+    }
+
+    // Prompt line (very bottom)
+    stdout.queue(cursor::MoveTo(0, h.saturating_sub(1)))?;
     stdout.queue(ct::Clear(ct::ClearType::CurrentLine))?;
     write!(stdout, "{}", prompt)?;
-    *last_lines = lines;
+
+    // Re-enable scroll region for next sealed line output
+    set_scroll_region(stdout, 0, scroll_bottom)?;
+
+    state.sealed_lines = sealed_lines;
+    state.live_lines = live_lines;
+    state.last_visible_rows.clear();
     Ok(())
 }
 
-fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<()> {
-    let variant = chat_layout_variant(w, h);
-    let reserved_bottom = chat_reserved_bottom(app, variant);
-    let info_pane_w = chat_info_pane_width(app, w, h);
-    let pane_gutter = if info_pane_w > 0 { 5 } else { 0 };
-    let left_w = if info_pane_w > 0 { w.saturating_sub(info_pane_w + pane_gutter) } else { w };
+fn draw_chat_transcript<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16, visual_lines: &[ChatRenderLine]) -> io::Result<()> {
     let content = chat_content_area(app, w, h);
     let content_w = content.width as usize;
-    let visual_lines = build_chat_visual_lines(app, content_w, variant);
     let max_lines = content.height as usize;
     let max_scroll = visual_lines.len().saturating_sub(max_lines);
     let scroll = app.chat.scroll.min(max_scroll);
@@ -1632,11 +2011,24 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
     let slice = &visual_lines[start..end];
     let selection_bounds = chat_selection_bounds(app);
 
+    for row in 0..content.height {
+        stdout.queue(cursor::MoveTo(content.x, content.y + row))?;
+        write!(stdout, "{}", " ".repeat(content.width as usize))?;
+    }
     for (i, line) in slice.iter().enumerate() {
         let row_idx = start + i;
         let selection_cols = chat_selection_cols_for_row(line, row_idx, selection_bounds);
         draw_chat_line(stdout, content.x, content.y + i as u16, content_w, line, selection_cols)?;
     }
+    Ok(())
+}
+
+fn draw_chat_chrome<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<()> {
+    let variant = chat_layout_variant(w, h);
+    let _reserved_bottom = chat_reserved_bottom(app, variant);
+    let info_pane_w = chat_info_pane_width(app, w, h);
+    let pane_gutter = if info_pane_w > 0 { 5 } else { 0 };
+    let left_w = if info_pane_w > 0 { w.saturating_sub(info_pane_w + pane_gutter) } else { w };
 
     if info_pane_w > 0 {
         let area = Rect {
@@ -1708,13 +2100,17 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
     let mouse_mode = if app.chat.app_mouse_mode { "mouse:app" } else { "mouse:terminal" };
     let mut right2 = match app.chat.view_mode {
         ChatViewMode::Transcript => {
-            format!("F5:{}  native select/right-click  wheel:terminal scrollback", mode_label)
+            if app.chat.streaming {
+                format!("F5:{}  Native mouse/right-click  Wheel:terminal  F6:{}", mode_label, mouse_mode)
+            } else {
+                format!("F5:{}  Native mouse/right-click  Wheel:terminal  Ctrl+P:peek  F6:{}", mode_label, mouse_mode)
+            }
         }
         ChatViewMode::Workspace => {
             if app.chat.streaming {
-                format!("F5:{}  Wheel:scroll  Right-click/Ctrl+C:copy  F6:{}", mode_label, mouse_mode)
+                format!("F5:{}  Wheel:scroll  Persistent pane  F6:{}", mode_label, mouse_mode)
             } else {
-                format!("F5:{}  Wheel:scroll  Right-click/Ctrl+C:copy  Ctrl+P:info  F6:{}", mode_label, mouse_mode)
+                format!("F5:{}  Wheel:scroll  Persistent pane  ←/→/Ctrl+I tabs  F6:{}", mode_label, mouse_mode)
             }
         }
     };
@@ -1725,8 +2121,6 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
     if chat_rowing_active(app) && variant != ChatLayoutVariant::Tiny {
         let frame = ((animation_clock_start().elapsed().as_millis() / 300) % 4) as usize;
         let activity_lines = rowing_indicator_lines(frame);
-        // Lift the 3-line rowing animation one row higher so the boat/water
-        // line clears the bottom input/status area instead of being clipped.
         let activity_y = h.saturating_sub(9);
         for (i, line) in activity_lines.iter().enumerate() {
             if activity_y + i as u16 >= h.saturating_sub(5) {
@@ -1802,9 +2196,18 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
         let menu_y = anchor.y.saturating_sub(menu_h + 1);
         let area = Rect { x: menu_x + 1, y: menu_y + 1, width: menu_w.saturating_sub(2), height: menu_h.saturating_sub(2) };
         render::render_border(stdout, area, app.chat.menu_title.as_deref().unwrap_or("menu"), true)?;
-        for (i, item) in app.chat.menu_items.iter().take(area.height as usize).enumerate() {
-            stdout.queue(cursor::MoveTo(area.x, area.y + i as u16))?;
-            let selected = i == app.chat.menu_index;
+        let visible_rows = area.height as usize;
+        let total_items = app.chat.menu_items.len();
+        let start_idx = if total_items > visible_rows {
+            app.chat.menu_index.saturating_sub(visible_rows.saturating_sub(1))
+                .min(total_items.saturating_sub(visible_rows))
+        } else {
+            0
+        };
+        for (row, item) in app.chat.menu_items.iter().skip(start_idx).take(visible_rows).enumerate() {
+            let item_idx = start_idx + row;
+            stdout.queue(cursor::MoveTo(area.x, area.y + row as u16))?;
+            let selected = item_idx == app.chat.menu_index;
             stdout.queue(style::SetForegroundColor(if selected { style::Color::Rgb { r: 196, g: 181, b: 253 } } else if item.executable { style::Color::Rgb { r: 226, g: 232, b: 240 } } else { style::Color::Rgb { r: 148, g: 163, b: 184 } }))?;
             let mut line = if item.age.is_empty() {
                 format!("{} {}  {}", if selected { "▸" } else { " " }, item.cmd, item.desc)
@@ -1816,7 +2219,6 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
             stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
         }
     }
-
 
     if variant != ChatLayoutVariant::Tiny {
         if let Some(approval) = app.chat.approval.as_ref() {
@@ -1879,6 +2281,13 @@ fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<
         }
     }
     Ok(())
+}
+
+fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16, repaint_transcript: bool, visual_lines: &[ChatRenderLine]) -> io::Result<()> {
+    if repaint_transcript {
+        draw_chat_transcript(stdout, app, w, h, visual_lines)?;
+    }
+    draw_chat_chrome(stdout, app, w, h)
 }
 
 fn dashboard_sparkline(points: &[u64]) -> String {
@@ -2574,7 +2983,7 @@ fn draw_libris_graph<W: Write>(stdout: &mut W, room: &Value, area: Rect, selecte
     let topics = room.get("topics").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let edges = room.get("edges").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 
-    let mut graph_nodes: Vec<LibrisGraphNode> = nodes.iter().map(|n| LibrisGraphNode {
+    let graph_nodes: Vec<LibrisGraphNode> = nodes.iter().map(|n| LibrisGraphNode {
         agent_id: n.get("agent_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
         name: n.get("name").and_then(|v| v.as_str()).unwrap_or("agent").to_string(),
         role: n.get("role").and_then(|v| v.as_str()).unwrap_or("").to_string(),
@@ -2586,140 +2995,260 @@ fn draw_libris_graph<W: Write>(stdout: &mut W, room: &Value, area: Rect, selecte
     }).collect();
 
     let coordinator = graph_nodes.iter().find(|n| n.role == "coordinator").cloned();
-    let graph_inner = Rect {
-        x: area.x,
-        y: area.y,
-        width: area.width,
-        height: area.height,
-    };
 
     let mut node_anchors: std::collections::HashMap<String, GraphAnchors> = std::collections::HashMap::new();
-    let mut coord_center: Option<GraphPoint> = None;
+    let mut coord_bottom_y: u16 = area.y;
+
+    // ── Coordinator box ────────────────────────────────────────────────
     if let Some(coord) = coordinator {
-        let box_w = graph_inner.width.min(28).max(18);
-        let box_h = 4u16;
-        let box_x = graph_inner.x + graph_inner.width.saturating_sub(box_w) / 2;
-        let box_y = graph_inner.y;
+        let label = format!("coordinator • {}", coord.phase);
+        let content_w = label.len().max(coord.name.len()).max(20) + 2;
+        let box_w = (content_w as u16).min(area.width.saturating_sub(4));
+        let box_h = 2u16; // label + live_line
+        let box_x = area.x + area.width.saturating_sub(box_w) / 2;
+        let box_y = area.y;
         let coord_idx = graph_nodes.iter().position(|n| n.agent_id == coord.agent_id).unwrap_or(usize::MAX);
-        let node_rect = Rect { x: box_x, y: box_y, width: box_w.saturating_sub(2), height: box_h };
+        let node_rect = Rect { x: box_x, y: box_y, width: box_w, height: box_h };
         render::render_border_colored(stdout, node_rect, &coord.name, libris_role_color("coordinator", selected_node == coord_idx))?;
-        draw_box_text(stdout, node_rect, &[
-            format!("{} • {}", coord.role, coord.phase),
-            coord.topic_slug.clone(),
-            coord.live_line.clone(),
-        ], style::Color::Rgb { r: 226, g: 232, b: 240 })?;
+        let live_trunc: String = coord.live_line.chars().take(box_w as usize).collect();
+        draw_box_text(stdout, node_rect, &[label, live_trunc], style::Color::Rgb { r: 226, g: 232, b: 240 })?;
         node_anchors.insert(coord.agent_id.clone(), graph_anchors(node_rect));
-        coord_center = Some(GraphPoint { x: node_rect.x + node_rect.width / 2, y: node_rect.y + node_rect.height + 1 });
+        coord_bottom_y = box_y + box_h + 2; // +2 for border bottom + gap
     }
 
-    let cluster_y = graph_inner.y + 6;
-    let cluster_h = graph_inner.height.saturating_sub(8).max(6);
-    let topic_count = topics.len().max(1) as u16;
-    let cluster_gap = if topic_count >= 4 { 1u16 } else { 2u16 };
-    let cluster_w = if topic_count > 0 { graph_inner.width.saturating_sub(cluster_gap * topic_count.saturating_sub(1)) / topic_count } else { graph_inner.width };
-    let compact_nodes = topic_count >= 3 || graph_inner.width < 110;
-    let mut topic_centers: Vec<GraphPoint> = Vec::new();
+    // ── Topic grid layout ──────────────────────────────────────────────
+    let topic_count = topics.len();
+    if topic_count == 0 {
+        stdout.queue(cursor::MoveTo(area.x + 2, area.y + 3))?;
+        stdout.queue(style::SetForegroundColor(style::Color::DarkGrey))?;
+        write!(stdout, "Waiting for Libris topic clusters\u{2026}")?;
+        stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
+        return Ok(graph_nodes);
+    }
 
+    // Decide grid columns: 1 col if narrow or single topic, 2 cols otherwise
+    let grid_cols: u16 = if topic_count <= 1 || area.width < 70 { 1 } else { 2 };
+    let grid_rows = ((topic_count as u16) + grid_cols - 1) / grid_cols;
+    let col_gap = 3u16;
+    let row_gap = 2u16;
+    let col_w = if grid_cols > 1 {
+        (area.width.saturating_sub(col_gap * (grid_cols - 1))) / grid_cols
+    } else {
+        area.width
+    };
+
+    // Height per topic cluster: distribute remaining space evenly
+    let available_h = area.height.saturating_sub(coord_bottom_y - area.y + row_gap);
+    let cluster_h = (available_h.saturating_sub(row_gap * grid_rows.saturating_sub(1))) / grid_rows;
+    let cluster_h = cluster_h.max(8); // minimum usable height
+
+    // Trunk line from coordinator down to topic row
+    let trunk_y = coord_bottom_y;
+    let topics_start_y = trunk_y + 2;
+
+    // Draw coordinator → topics trunk
+    if graph_nodes.iter().any(|n| n.role == "coordinator") {
+        let coord_cx = area.x + area.width / 2;
+        let trunk_color = style::Color::Rgb { r: 70, g: 60, b: 100 };
+
+        // Vertical from coordinator down
+        draw_vline(stdout, coord_cx, coord_bottom_y.saturating_sub(1), trunk_y, trunk_color)?;
+
+        if topic_count > 1 {
+            // Horizontal spine across topics
+            let first_cx = area.x + col_w / 2;
+            let last_col = (topic_count as u16 - 1) % grid_cols;
+            let last_cx = area.x + last_col * (col_w + col_gap) + col_w / 2;
+            draw_hline(stdout, first_cx, last_cx, trunk_y, trunk_color)?;
+
+            // Vertical drops to each topic in the first row
+            let first_row_count = topic_count.min(grid_cols as usize);
+            for ci in 0..first_row_count {
+                let cx = area.x + (ci as u16) * (col_w + col_gap) + col_w / 2;
+                draw_vline(stdout, cx, trunk_y, topics_start_y.saturating_sub(1), trunk_color)?;
+            }
+        } else {
+            draw_vline(stdout, coord_cx, trunk_y, topics_start_y.saturating_sub(1), trunk_color)?;
+        }
+    }
+
+    // ── Render each topic cluster ──────────────────────────────────────
     for (ti, topic) in topics.iter().enumerate() {
-        let tx = graph_inner.x + ti as u16 * (cluster_w + cluster_gap);
-        let cluster_rect = Rect { x: tx, y: cluster_y, width: cluster_w.saturating_sub(2), height: cluster_h.saturating_sub(1) };
-        topic_centers.push(GraphPoint { x: cluster_rect.x + cluster_rect.width / 2, y: cluster_rect.y.saturating_sub(1) });
+        let col = (ti as u16) % grid_cols;
+        let row = (ti as u16) / grid_cols;
+        let cx = area.x + col * (col_w + col_gap);
+        let cy = topics_start_y + row * (cluster_h + row_gap);
+
+        // Cluster border
+        let inner_w = col_w.saturating_sub(2);
+        let inner_h = cluster_h.saturating_sub(2);
+        let cluster_rect = Rect { x: cx + 1, y: cy + 1, width: inner_w, height: inner_h };
         let topic_title = topic.get("title").and_then(|v| v.as_str()).unwrap_or("topic");
-        render::render_border_colored(stdout, cluster_rect, topic_title, style::Color::Rgb { r: 59, g: 50, b: 82 })?;
+        let topic_status = topic.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        let title_display = if topic_status.is_empty() {
+            topic_title.to_string()
+        } else {
+            format!("{} ({})", topic_title, topic_status)
+        };
+        let title_trunc: String = title_display.chars().take(inner_w.saturating_sub(4) as usize).collect();
+        render::render_border_colored(stdout, cluster_rect, &title_trunc, style::Color::Rgb { r: 80, g: 70, b: 120 })?;
 
         let slug = topic.get("topic_slug").and_then(|v| v.as_str()).unwrap_or("");
         let researcher = graph_nodes.iter().find(|n| n.role == "researcher" && n.topic_slug == slug).cloned();
         let judge = graph_nodes.iter().find(|n| n.role == "judge" && n.topic_slug == slug).cloned();
-        let shades: Vec<LibrisGraphNode> = graph_nodes.iter().filter(|n| n.role == "shade" && n.topic_slug == slug).cloned().collect();
+        let shades: Vec<&LibrisGraphNode> = graph_nodes.iter().filter(|n| n.role == "shade" && n.topic_slug == slug).collect();
 
-        let top_row_y = cluster_rect.y + 1;
-        let node_w = (cluster_rect.width.saturating_sub(3) / 2).max(if compact_nodes { 10 } else { 12 });
-        let node_h = if compact_nodes { 3u16 } else { 4u16 };
+        // ── Researcher + Judge: side by side within cluster ────────
+        let agent_y = cluster_rect.y;
+        let half_w = inner_w.saturating_sub(5) / 2; // leave 3-char gap + 2 padding
+        let agent_h = 2u16; // role•phase + live_line
+
         if let Some(r) = researcher.clone() {
-            let selected = graph_nodes.iter().position(|n| n.agent_id == r.agent_id).unwrap_or(usize::MAX) == selected_node;
-            let rect = Rect { x: cluster_rect.x, y: top_row_y, width: node_w, height: node_h };
-            render::render_border_colored(stdout, rect, &r.name, libris_role_color("researcher", selected))?;
-            let lines = if compact_nodes {
-                vec![format!("r • {}", r.phase), r.live_line.clone()]
-            } else {
-                vec![format!("researcher • {}", r.phase), slug.to_string(), r.live_line.clone()]
-            };
-            draw_box_text(stdout, rect, &lines, style::Color::Rgb { r: 226, g: 232, b: 240 })?;
+            let is_sel = graph_nodes.iter().position(|n| n.agent_id == r.agent_id).unwrap_or(usize::MAX) == selected_node;
+            let rect = Rect { x: cluster_rect.x, y: agent_y, width: half_w, height: agent_h };
+            render::render_border_colored(stdout, rect, &r.name, libris_role_color("researcher", is_sel))?;
+            let phase_line = format!("researcher • {}", r.phase);
+            let phase_trunc: String = phase_line.chars().take(half_w as usize).collect();
+            let live_trunc: String = r.live_line.chars().take(half_w as usize).collect();
+            draw_box_text(stdout, rect, &[phase_trunc, live_trunc], style::Color::Rgb { r: 226, g: 232, b: 240 })?;
             node_anchors.insert(r.agent_id.clone(), graph_anchors(rect));
         }
+
         if let Some(j) = judge.clone() {
-            let selected = graph_nodes.iter().position(|n| n.agent_id == j.agent_id).unwrap_or(usize::MAX) == selected_node;
-            let rect = Rect { x: cluster_rect.x + node_w + 3, y: top_row_y, width: node_w, height: node_h };
-            render::render_border_colored(stdout, rect, &j.name, libris_role_color("judge", selected))?;
-            let lines = if compact_nodes {
-                vec![format!("j • {}", j.phase), j.live_line.clone()]
-            } else {
-                vec![format!("judge • {}", j.phase), slug.to_string(), j.live_line.clone()]
-            };
-            draw_box_text(stdout, rect, &lines, style::Color::Rgb { r: 226, g: 232, b: 240 })?;
+            let is_sel = graph_nodes.iter().position(|n| n.agent_id == j.agent_id).unwrap_or(usize::MAX) == selected_node;
+            let jx = cluster_rect.x + half_w + 5;
+            let rect = Rect { x: jx, y: agent_y, width: half_w, height: agent_h };
+            render::render_border_colored(stdout, rect, &j.name, libris_role_color("judge", is_sel))?;
+            let phase_line = format!("judge • {}", j.phase);
+            let phase_trunc: String = phase_line.chars().take(half_w as usize).collect();
+            let live_trunc: String = j.live_line.chars().take(half_w as usize).collect();
+            draw_box_text(stdout, rect, &[phase_trunc, live_trunc], style::Color::Rgb { r: 226, g: 232, b: 240 })?;
             node_anchors.insert(j.agent_id.clone(), graph_anchors(rect));
         }
 
+        // ── Researcher <=> Judge edge indicator ────────────────────
         let rj_active = edges.iter().any(|e| {
             e.get("topic_slug").and_then(|v| v.as_str()).unwrap_or("") == slug
                 && e.get("active_now").and_then(|v| v.as_bool()).unwrap_or(false)
                 && ((e.get("from_role").and_then(|v| v.as_str()).unwrap_or("") == "researcher" && e.get("to_role").and_then(|v| v.as_str()).unwrap_or("") == "judge")
                     || (e.get("from_role").and_then(|v| v.as_str()).unwrap_or("") == "judge" && e.get("to_role").and_then(|v| v.as_str()).unwrap_or("") == "researcher"))
         });
-        stdout.queue(cursor::MoveTo(cluster_rect.x + 2, top_row_y + node_h + 1))?;
-        stdout.queue(style::SetForegroundColor(if rj_active { style::Color::Rgb { r: 96, g: 165, b: 250 } } else { style::Color::DarkGrey }))?;
-        let comm = "researcher <=> judge";
-        let vis: String = comm.chars().take(cluster_rect.width.saturating_sub(4) as usize).collect();
-        write!(stdout, "{}", vis)?;
+        let rj_strength = edges.iter().filter_map(|e| {
+            if e.get("topic_slug").and_then(|v| v.as_str()).unwrap_or("") == slug
+                && ((e.get("from_role").and_then(|v| v.as_str()).unwrap_or("") == "researcher" && e.get("to_role").and_then(|v| v.as_str()).unwrap_or("") == "judge")
+                    || (e.get("from_role").and_then(|v| v.as_str()).unwrap_or("") == "judge" && e.get("to_role").and_then(|v| v.as_str()).unwrap_or("") == "researcher")) {
+                e.get("activity_strength").and_then(|v| v.as_f64())
+            } else { None }
+        }).fold(0.0f64, f64::max);
+        // Draw connecting arrow between researcher and judge boxes
+        let arrow_y = agent_y + 1; // middle of the agent boxes
+        let arrow_x1 = cluster_rect.x + half_w + 1;
+        let arrow_x2 = cluster_rect.x + half_w + 4;
+        let arrow_color = if rj_active {
+            style::Color::Rgb { r: 96, g: 165, b: 250 }
+        } else {
+            libris_edge_color(false, rj_strength)
+        };
+        stdout.queue(cursor::MoveTo(arrow_x1, arrow_y))?;
+        stdout.queue(style::SetForegroundColor(arrow_color))?;
+        if rj_active {
+            write!(stdout, "<=>")?;
+        } else {
+            write!(stdout, "---")?;
+        }
         stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
 
-        let mut sy = top_row_y + node_h + 3;
-        for shade in shades.iter().take(3) {
-            let selected = graph_nodes.iter().position(|n| n.agent_id == shade.agent_id).unwrap_or(usize::MAX) == selected_node;
-            let rect = Rect { x: cluster_rect.x + 2, y: sy, width: cluster_rect.width.saturating_sub(4), height: if compact_nodes { 2 } else { 3 } };
-            render::render_border_colored(stdout, rect, &shade.name, libris_role_color("shade", selected))?;
-            let lines = if compact_nodes {
-                vec![shade.live_line.clone()]
+        // ── Shade tray (collapsed summary) ─────────────────────────
+        let shade_y = agent_y + agent_h + 2; // below agent boxes + border + gap
+        let shade_active_count = shades.iter().filter(|s| {
+            edges.iter().any(|e| {
+                (e.get("from_agent_id").and_then(|v| v.as_str()).unwrap_or("") == s.agent_id
+                    || e.get("to_agent_id").and_then(|v| v.as_str()).unwrap_or("") == s.agent_id)
+                    && e.get("active_now").and_then(|v| v.as_bool()).unwrap_or(false)
+            })
+        }).count();
+        let shade_total = shades.len();
+
+        if shade_total > 0 && shade_y < cluster_rect.y + inner_h {
+            // Shade summary tray
+            let tray_w = inner_w.saturating_sub(2);
+            let tray_x = cluster_rect.x + 1;
+
+            // Build shade name list for the summary
+            let shade_names: Vec<&str> = shades.iter().map(|s| s.name.as_str()).collect();
+            let names_joined = shade_names.join(", ");
+
+            let header = format!("{} shade{} ({} active)",
+                shade_total,
+                if shade_total == 1 { "" } else { "s" },
+                shade_active_count
+            );
+            let header_trunc: String = header.chars().take(tray_w as usize).collect();
+
+            // Register shade nodes in anchors for edge drawing
+            for shade in &shades {
+                let shade_rect = Rect { x: tray_x, y: shade_y, width: tray_w, height: 1 };
+                node_anchors.insert(shade.agent_id.clone(), graph_anchors(shade_rect));
+            }
+
+            let tray_color = if shade_active_count > 0 {
+                style::Color::Rgb { r: 148, g: 163, b: 184 }
             } else {
-                vec![format!("shade • {}", shade.phase), shade.live_line.clone()]
+                style::Color::DarkGrey
             };
-            draw_box_text(stdout, rect, &lines, style::Color::Rgb { r: 203, g: 213, b: 225 })?;
-            node_anchors.insert(shade.agent_id.clone(), graph_anchors(rect));
-            sy = sy.saturating_add(if compact_nodes { 3 } else { 4 });
+
+            // Draw tray box
+            let tray_h = 2u16.min(inner_h.saturating_sub(shade_y - cluster_rect.y));
+            if tray_h >= 2 {
+                let tray_rect = Rect { x: tray_x, y: shade_y, width: tray_w, height: tray_h };
+                render::render_border_colored(stdout, tray_rect, &header_trunc, tray_color)?;
+                let names_trunc: String = names_joined.chars().take(tray_w as usize).collect();
+                draw_box_text(stdout, tray_rect, &[names_trunc], style::Color::Rgb { r: 120, g: 130, b: 150 })?;
+
+                // Show individual shade phases if there's room
+                let detail_y = shade_y + tray_h + 2;
+                let remaining = (cluster_rect.y + inner_h).saturating_sub(detail_y);
+                for (si, shade) in shades.iter().enumerate().take(remaining as usize) {
+                    let is_sel = graph_nodes.iter().position(|n| n.agent_id == shade.agent_id).unwrap_or(usize::MAX) == selected_node;
+                    let shade_line = format!("  {} {} • {}",
+                        if is_sel { "▸" } else { "·" },
+                        shade.name,
+                        if shade.phase.is_empty() { &shade.status } else { &shade.phase }
+                    );
+                    let shade_trunc: String = shade_line.chars().take(tray_w as usize).collect();
+                    stdout.queue(cursor::MoveTo(tray_x, detail_y + si as u16))?;
+                    stdout.queue(style::SetForegroundColor(if is_sel {
+                        style::Color::Rgb { r: 148, g: 163, b: 184 }
+                    } else {
+                        style::Color::DarkGrey
+                    }))?;
+                    write!(stdout, "{}", shade_trunc)?;
+                    stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
+                    // Update anchor for this shade to its actual rendered position
+                    let shade_rect = Rect { x: tray_x, y: detail_y + si as u16, width: tray_w, height: 1 };
+                    node_anchors.insert(shade.agent_id.clone(), graph_anchors(shade_rect));
+                }
+            }
         }
 
-        let shade_active = edges.iter().any(|e| {
-            e.get("topic_slug").and_then(|v| v.as_str()).unwrap_or("") == slug
-                && e.get("active_now").and_then(|v| v.as_bool()).unwrap_or(false)
-                && (e.get("from_role").and_then(|v| v.as_str()).unwrap_or("") == "shade"
-                    || e.get("to_role").and_then(|v| v.as_str()).unwrap_or("") == "shade")
-        });
-
+        // ── Edge/activity summary at cluster bottom ────────────────
         let edge_summary = edges.iter().filter(|e| e.get("topic_slug").and_then(|v| v.as_str()).unwrap_or("") == slug);
-        let active = edge_summary.clone().filter(|e| e.get("active_now").and_then(|v| v.as_bool()).unwrap_or(false)).count();
-        let total = edge_summary.count();
-        let status_line = format!("{} edges  {} active{}", total, active, if shade_active { "  shade:return" } else { "" });
-        stdout.queue(cursor::MoveTo(cluster_rect.x, cluster_rect.y + cluster_rect.height.saturating_sub(1)))?;
-        stdout.queue(style::SetForegroundColor(if active > 0 { style::Color::Rgb { r: 34, g: 197, b: 94 } } else { style::Color::DarkGrey }))?;
-        let visible: String = status_line.chars().take(cluster_rect.width as usize).collect();
-        write!(stdout, "{}", visible)?;
+        let active_count = edge_summary.clone().filter(|e| e.get("active_now").and_then(|v| v.as_bool()).unwrap_or(false)).count();
+        let total_edges = edge_summary.count();
+        let status_line = format!("{} edges • {} active", total_edges, active_count);
+        let status_y = cluster_rect.y + inner_h.saturating_sub(1);
+        stdout.queue(cursor::MoveTo(cluster_rect.x + 1, status_y))?;
+        stdout.queue(style::SetForegroundColor(if active_count > 0 {
+            style::Color::Rgb { r: 34, g: 197, b: 94 }
+        } else {
+            style::Color::DarkGrey
+        }))?;
+        let status_trunc: String = status_line.chars().take(inner_w.saturating_sub(2) as usize).collect();
+        write!(stdout, "{}", status_trunc)?;
         stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
     }
 
-    if let Some(coord) = coord_center {
-        if let (Some(first), Some(last)) = (topic_centers.first().copied(), topic_centers.last().copied()) {
-            let trunk_y = cluster_y.saturating_sub(3);
-            let edge_color = style::Color::DarkGrey;
-            if trunk_y > coord.y {
-                draw_vline(stdout, coord.x, coord.y, trunk_y, edge_color)?;
-            }
-            draw_hline(stdout, first.x, last.x, trunk_y, edge_color)?;
-            for tp in &topic_centers {
-                draw_vline(stdout, tp.x, trunk_y, tp.y, edge_color)?;
-            }
-        }
-    }
-
+    // ── Draw communication edges ───────────────────────────────────────
     for edge in &edges {
         let src = edge.get("from_agent_id").and_then(|v| v.as_str()).unwrap_or("");
         let dst = edge.get("to_agent_id").and_then(|v| v.as_str()).unwrap_or("");
@@ -2727,24 +3256,26 @@ fn draw_libris_graph<W: Write>(stdout: &mut W, room: &Value, area: Rect, selecte
         let to_role = edge.get("to_role").and_then(|v| v.as_str()).unwrap_or("");
         let active_now = edge.get("active_now").and_then(|v| v.as_bool()).unwrap_or(false);
         let activity_strength = edge.get("activity_strength").and_then(|v| v.as_f64()).unwrap_or(0.15);
+
+        // Skip researcher<=>judge edges (drawn inline as arrows)
+        if (from_role == "researcher" && to_role == "judge") || (from_role == "judge" && to_role == "researcher") {
+            continue;
+        }
+
         let color = libris_edge_color(active_now, activity_strength);
         let Some(src_anchor) = node_anchors.get(src).copied() else { continue; };
         let Some(dst_anchor) = node_anchors.get(dst).copied() else { continue; };
 
-        let (start, end, mid_y) = if from_role == "researcher" && to_role == "judge" {
-            (src_anchor.right, dst_anchor.left, src_anchor.right.y)
-        } else if from_role == "judge" && to_role == "researcher" {
-            (src_anchor.left, dst_anchor.right, src_anchor.left.y)
-        } else if from_role == "shade" && to_role == "researcher" {
+        let (start, end, mid_y) = if from_role == "shade" && to_role == "researcher" {
             let m = dst_anchor.bottom.y + ((src_anchor.top.y.saturating_sub(dst_anchor.bottom.y)) / 2);
             (src_anchor.top, dst_anchor.bottom, m)
         } else if from_role == "researcher" && to_role == "shade" {
             let m = src_anchor.bottom.y + ((dst_anchor.top.y.saturating_sub(src_anchor.bottom.y)) / 2);
             (src_anchor.bottom, dst_anchor.top, m)
         } else if from_role == "coordinator" {
-            (src_anchor.bottom, dst_anchor.top, cluster_y.saturating_sub(3))
+            (src_anchor.bottom, dst_anchor.top, topics_start_y.saturating_sub(1))
         } else if to_role == "coordinator" {
-            (src_anchor.top, dst_anchor.bottom, cluster_y.saturating_sub(3))
+            (src_anchor.top, dst_anchor.bottom, topics_start_y.saturating_sub(1))
         } else {
             let m = mid_u16(src_anchor.center.y, dst_anchor.center.y);
             (src_anchor.center, dst_anchor.center, m)
@@ -2757,13 +3288,6 @@ fn draw_libris_graph<W: Write>(stdout: &mut W, room: &Value, area: Rect, selecte
             draw_hline(stdout, start.x, end.x, mid_y, color)?;
             draw_vline(stdout, end.x, mid_y, end.y, color)?;
         }
-    }
-
-    if topics.is_empty() {
-        stdout.queue(cursor::MoveTo(graph_inner.x, graph_inner.y + 2))?;
-        stdout.queue(style::SetForegroundColor(style::Color::DarkGrey))?;
-        write!(stdout, "Waiting for Libris topic clusters…")?;
-        stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
     }
 
     Ok(graph_nodes)
@@ -2872,7 +3396,7 @@ fn sync_inter_agent_room_panes(app: &mut App, room: &Value, outer_w: u16, outer_
         let visual = visuals.get(&meta.tmux).or_else(|| visuals.get(&format!("boat-{}", meta.tmux)));
         let title = visual.map(|v| v.title.clone()).unwrap_or_else(|| compose_session_title(&meta));
         let existing_idx = app.inter_agent.room_panes.iter().position(|c| match &c.backend_type {
-            BackendType::BoatPane { session_id } => !meta.tmux.is_empty() && session_id == &meta.tmux,
+            BackendType::BoatPane { session_id } | BackendType::RemoteBoat { session_id, .. } => !meta.tmux.is_empty() && session_id == &meta.tmux,
             BackendType::TmuxPane { session_name } => !meta.tmux.is_empty() && session_name == &meta.tmux,
             BackendType::CharonPane { socket_path } => meta.transport == "charon" && !meta.socket.is_empty() && socket_path == &meta.socket,
             BackendType::LocalPty => false,
@@ -2915,7 +3439,7 @@ fn draw_room_panes<W: Write>(stdout: &mut W, app: &mut App, room: &Value, area: 
         let _ = cell.resize(r.width.max(1), r.height.max(1));
         cell.reset_viewport_scroll();
         let visual = match &cell.backend_type {
-            BackendType::BoatPane { session_id } => visuals.get(session_id),
+            BackendType::BoatPane { session_id } | BackendType::RemoteBoat { session_id, .. } => visuals.get(session_id),
             BackendType::TmuxPane { session_name } => visuals.get(session_name),
             BackendType::CharonPane { .. } | BackendType::LocalPty => None,
         };
@@ -3164,6 +3688,7 @@ struct SessionAgentMeta {
     session_label: String,
     transport: String,
     socket: String,
+    server_id: String,
 }
 
 #[derive(Clone)]
@@ -3256,10 +3781,11 @@ fn session_agent_meta(payload: Option<&Value>) -> Vec<SessionAgentMeta> {
             if id.is_empty() && tmux.is_empty() && name.is_empty() {
                 continue;
             }
-            if !has_tmux && tmux.is_empty() && source != "live" && transport != "charon" {
+            if !has_tmux && tmux.is_empty() && source != "live" && transport != "charon" && transport != "remote-boat" {
                 continue;
             }
-            out.push(SessionAgentMeta { id, agent_id, name, project, specialization, last_summary, tmux, status, source, process_target, live_session_id, session_label, transport, socket });
+            let server_id = sess.get("server_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            out.push(SessionAgentMeta { id, agent_id, name, project, specialization, last_summary, tmux, status, source, process_target, live_session_id, session_label, transport, socket, server_id });
         }
         if !out.is_empty() {
             return out;
@@ -3283,7 +3809,7 @@ fn session_agent_meta(payload: Option<&Value>) -> Vec<SessionAgentMeta> {
             if id.is_empty() && tmux.is_empty() && name.is_empty() {
                 None
             } else {
-                Some(SessionAgentMeta { id: id.clone(), agent_id: id, name: name.clone(), project, specialization, last_summary, tmux, status, source: "agent".to_string(), process_target: String::new(), live_session_id: String::new(), session_label: name, transport: String::new(), socket: String::new() })
+                Some(SessionAgentMeta { id: id.clone(), agent_id: id, name: name.clone(), project, specialization, last_summary, tmux, status, source: "agent".to_string(), process_target: String::new(), live_session_id: String::new(), session_label: name, transport: String::new(), socket: String::new(), server_id: String::new() })
             }
         })
         .collect()
@@ -3395,7 +3921,7 @@ fn pane_agent_id(cell: &SessionCell, payload: Option<&Value>, idx: usize) -> Str
     for m in session_agent_meta(payload) {
         let backend_match = match &cell.backend_type {
             BackendType::TmuxPane { session_name } => !m.tmux.is_empty() && m.tmux == *session_name,
-            BackendType::BoatPane { session_id } => !m.tmux.is_empty() && m.tmux == *session_id,
+            BackendType::BoatPane { session_id } | BackendType::RemoteBoat { session_id, .. } => !m.tmux.is_empty() && m.tmux == *session_id,
             BackendType::CharonPane { socket_path } => m.transport == "charon" && !m.socket.is_empty() && m.socket == *socket_path,
             BackendType::LocalPty => false,
         };
@@ -3458,7 +3984,7 @@ fn sync_session_panes_from_payload(app: &mut App, outer_w: u16, outer_h: u16) ->
             let matched = pid == meta.id
                 || match &c.backend_type {
                     BackendType::TmuxPane { session_name } => !meta.tmux.is_empty() && session_name == &meta.tmux,
-                    BackendType::BoatPane { session_id } => !meta.tmux.is_empty() && session_id == &meta.tmux,
+                    BackendType::BoatPane { session_id } | BackendType::RemoteBoat { session_id, .. } => !meta.tmux.is_empty() && session_id == &meta.tmux,
                     BackendType::CharonPane { socket_path } => meta.transport == "charon" && !meta.socket.is_empty() && socket_path == &meta.socket,
                     BackendType::LocalPty => false,
                 };
@@ -3478,6 +4004,15 @@ fn sync_session_panes_from_payload(app: &mut App, outer_w: u16, outer_h: u16) ->
         let r = rects.get(idx).copied().unwrap_or(Rect { x: 0, y: 0, width: 80, height: 24 });
         let cell = if meta.transport == "charon" && !meta.socket.is_empty() {
             SessionCell::attach_charon(idx as u64, &composed_title, &meta.socket, r.width.max(1), r.height.max(1))
+        } else if meta.transport == "remote-boat" && !meta.server_id.is_empty() {
+            // Remote agent — find server in fleet config and connect via SSH
+            let fleet = backend::load_fleet_config();
+            if let Some(server) = fleet.iter().find(|s| s.id == meta.server_id) {
+                let session_id = if meta.tmux.is_empty() { &meta.name } else { &meta.tmux };
+                SessionCell::attach_remote_boat(idx as u64, &composed_title, server, session_id, r.width.max(1), r.height.max(1))
+            } else {
+                continue;
+            }
         } else if meta.transport == "pty" && !meta.socket.is_empty() {
             SessionCell::attach_boat_socket(idx as u64, &composed_title, &meta.tmux, &meta.socket, r.width.max(1), r.height.max(1))
         } else if meta.source == "boat" {
@@ -3791,31 +4326,36 @@ fn main() -> io::Result<()> {
     app.sessions.backend_filter_pending = matches!(mode, &LaunchMode::AutoDiscover);
     let _ = ensure_native_self_pane(&mut app, native_session.as_ref(), outer_w, outer_h);
     let mut session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
+    let mut native_transcript_state = NativeTranscriptRenderState::default();
 
     ct::enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.queue(EnableBracketedPaste)?;
     let mut mouse_capture_enabled = false;
-    if app.active_view == View::Sessions {
+    if app.active_view == View::Chat || app.active_view == View::Sessions {
         stdout.queue(EnableMouseCapture)?;
         mouse_capture_enabled = true;
     }
     stdout.queue(cursor::Hide)?;
     stdout.queue(ct::Clear(ct::ClearType::All))?;
     stdout.queue(cursor::MoveTo(0, 0))?;
-    write!(stdout, "\x1b[3J")?;
     stdout.flush()?;
 
     let mut last_render = Instant::now();
     let frame_duration = Duration::from_millis(16);
     let mut needs_full_redraw = true;
     let mut local_view_dirty = false;
+    let mut chat_transcript_dirty = true;
+    let mut cached_chat = F1MonoCache::default();
     let mut last_rowing_tick = Instant::now();
     let mut last_session_poll = Instant::now() - Duration::from_secs(1);
-    let mut transcript_last_lines: Vec<String> = Vec::new();
-    let mut transcript_mode_active_last = false;
+    let mut front_buf = screen::ScreenBuf::new(outer_w, outer_h);
+    let mut back_buf = screen::ScreenBuf::new(outer_w, outer_h);
+    let mut last_chat_msg_count: usize = 0;
+    let mut last_cache_rebuild = Instant::now();
+    let mut was_streaming = false;
 
-    loop {
+    'main: loop {
         app.chat.clear_expired_notices();
         app.inter_agent.clear_expired_notices();
         let mut any_dirty = false;
@@ -3824,7 +4364,7 @@ fn main() -> io::Result<()> {
             View::Sessions => Duration::from_millis(33),
             _ => Duration::from_millis(250),
         };
-        if last_session_poll.elapsed() >= pane_poll_interval {
+        if last_session_poll.elapsed() >= pane_poll_interval && app.active_view != View::Chat {
             let visible_set: std::collections::HashSet<usize> = if app.active_view == View::Sessions {
                 visible_pane_indices(&mut app).into_iter().collect()
             } else {
@@ -3851,17 +4391,22 @@ fn main() -> io::Result<()> {
             last_session_poll = Instant::now();
         }
         let chat_dirty = app.chat.poll();
+        if chat_dirty {
+            chat_transcript_dirty = true;
+        }
         let native_input_dirty = if let Some(server) = &native_session {
             let commands = server.drain_commands();
             let dirty = !commands.is_empty();
             if dirty {
                 apply_native_commands(&mut app, commands);
-                needs_full_redraw = true;
             }
             dirty
         } else {
             false
         };
+        if native_input_dirty && app.active_view == View::Chat {
+            chat_transcript_dirty = true;
+        }
         let mut session_structure_changed = false;
         if app.active_view == View::Sessions && (chat_dirty || native_input_dirty) && app.chat.refresh_payload.is_some() {
             app.sessions.backend_filter_pending = false;
@@ -3896,7 +4441,7 @@ fn main() -> io::Result<()> {
         }
 
         let now = Instant::now();
-        if app.active_view == View::Chat && chat_rowing_active(&app) && now.duration_since(last_rowing_tick) >= Duration::from_millis(300) {
+        if app.active_view == View::Chat && chat_view::chat_rowing_active(&app) && now.duration_since(last_rowing_tick) >= Duration::from_millis(300) {
             local_view_dirty = true;
             last_rowing_tick = now;
         }
@@ -3905,29 +4450,41 @@ fn main() -> io::Result<()> {
         let chat_view_dirty = app.active_view == View::Chat && (chat_dirty || native_input_dirty || local_view_dirty);
         let inter_agent_dirty = app.active_view == View::InterAgent && (any_dirty || chat_dirty || native_input_dirty || local_view_dirty);
         let native_snapshot_dirty = native_input_dirty;
+
         if (needs_full_redraw || sessions_dirty || dashboard_dirty || chat_view_dirty || inter_agent_dirty || native_snapshot_dirty) && now.duration_since(last_render) >= frame_duration {
-            stdout.queue(cursor::Hide)?;
-            let chat_transcript_mode = app.active_view == View::Chat && app.chat.view_mode == ChatViewMode::Transcript;
             let force_all = needs_full_redraw;
-            if chat_transcript_mode {
-                let force_reset = force_all || !transcript_mode_active_last;
-                render_chat_transcript_mode(&mut stdout, &app, outer_w, outer_h, &mut transcript_last_lines, force_reset)?;
-                needs_full_redraw = false;
-                stdout.flush()?;
+
+            if app.active_view == View::Chat {
+                // Only force cache rebuild when messages actually changed.
+                // Throttle streaming rebuilds to ~100ms to avoid 11-19ms rebuilds every frame.
+                let msg_count = app.chat.messages.len();
+                let msg_changed = msg_count != last_chat_msg_count;
+                let stream_ended = was_streaming && !app.chat.streaming;
+                let cache_age = now.duration_since(last_cache_rebuild);
+                let streaming_update = app.chat.streaming && chat_dirty
+                    && cache_age >= Duration::from_millis(100);
+                let content_changed = msg_changed || streaming_update || stream_ended
+                    || native_input_dirty || force_all;
+                if msg_changed { last_chat_msg_count = msg_count; }
+                if content_changed { last_cache_rebuild = now; }
+                was_streaming = app.chat.streaming;
+                f1_mono::ensure_cache(&app, outer_w, outer_h, &mut cached_chat, content_changed);
+
+                back_buf.clear();
+                draw_header_buf(&mut back_buf, &app, outer_w);
+                f1_mono::draw(&mut back_buf, &app, outer_w, outer_h, &cached_chat);
+                draw_footer_buf(&mut back_buf, &app, outer_w, outer_h);
+                screen::flush(&back_buf, &front_buf, &mut stdout)?;
+                std::mem::swap(&mut front_buf, &mut back_buf);
             } else {
-                if transcript_mode_active_last {
-                    stdout.queue(ct::Clear(ct::ClearType::All))?;
-                    stdout.queue(cursor::MoveTo(0, 0))?;
-                    transcript_last_lines.clear();
-                }
+                // Legacy direct rendering for other views
+                stdout.queue(cursor::Hide)?;
                 if needs_full_redraw {
                     stdout.queue(ct::Clear(ct::ClearType::All))?;
-                    needs_full_redraw = false;
                 }
-
                 draw_header(&mut stdout, &app, outer_w)?;
                 match app.active_view {
-                    View::Chat => draw_chat(&mut stdout, &app, outer_w, outer_h)?,
+                    View::Chat => unreachable!(),
                     View::Dashboard => draw_dashboard(&mut stdout, &app, outer_w, outer_h)?,
                     View::Sessions => draw_sessions(
                         &mut stdout,
@@ -3943,18 +4500,20 @@ fn main() -> io::Result<()> {
                 draw_footer(&mut stdout, &app, outer_w, outer_h)?;
                 stdout.flush()?;
             }
-            if let Some(server) = &native_session {
-                let self_sock = server.socket_path().to_string_lossy().to_string();
-                let (snap_w, snap_h) = server.requested_size().unwrap_or((outer_w, outer_h));
-                server.update_snapshot(build_native_session_snapshot(&mut app, snap_w.max(1), snap_h.max(1), Some(&self_sock)));
+            needs_full_redraw = false;
+            if force_all || chat_dirty || native_input_dirty {
+                if let Some(server) = &native_session {
+                    let self_sock = server.socket_path().to_string_lossy().to_string();
+                    let (snap_w, snap_h) = server.requested_size().unwrap_or((outer_w, outer_h));
+                    server.update_snapshot(build_native_session_snapshot(&mut app, snap_w.max(1), snap_h.max(1), Some(&self_sock)));
+                }
             }
-            transcript_mode_active_last = chat_transcript_mode;
             last_render = now;
             local_view_dirty = false;
         }
 
-        let want_mouse_capture = (app.active_view == View::Chat && app.chat.view_mode == ChatViewMode::Workspace && app.chat.app_mouse_mode)
-            || (app.active_view == View::Sessions && !app.sessions.terminal_mode)
+        let want_mouse_capture = (app.active_view == View::Chat && app.chat.app_mouse_mode)
+            || (app.active_view == View::Sessions && !app.sessions.terminal_mode && app.sessions.app_mouse_mode)
             || (app.active_view == View::InterAgent && app.inter_agent.app_mouse_mode);
         if want_mouse_capture != mouse_capture_enabled {
             if want_mouse_capture {
@@ -3967,15 +4526,27 @@ fn main() -> io::Result<()> {
         }
 
         let event_poll_interval = match app.active_view {
-            View::Sessions if app.sessions.terminal_mode => Duration::from_millis(8),
+            View::Chat => Duration::from_millis(4),
+            View::Sessions if app.sessions.terminal_mode => Duration::from_millis(4),
             View::Sessions => Duration::from_millis(16),
             _ => Duration::from_millis(33),
         };
-        if event::poll(event_poll_interval)? {
+        // Block up to event_poll_interval for first event, then drain all queued events.
+        // This coalesces bursts (e.g. rapid scrolling) into a single render.
+        if !event::poll(event_poll_interval)? { continue; }
+        loop {
+            if !event::poll(Duration::ZERO)? { break; }
             match event::read()? {
                 Event::Key(key) => {
                     match key.code {
-                        KeyCode::F(1) => { app.active_view = View::Chat; needs_full_redraw = true; continue; }
+                        KeyCode::F(1) => {
+                            app.active_view = View::Chat;
+                            front_buf.clear();
+                            stdout.queue(ct::Clear(ct::ClearType::All))?;
+                            stdout.flush()?;
+                            needs_full_redraw = true;
+                            continue;
+                        }
                         KeyCode::F(2) => { app.active_view = View::Dashboard; needs_full_redraw = true; continue; }
                         KeyCode::F(3) => {
                             app.active_view = View::Sessions;
@@ -3993,7 +4564,7 @@ fn main() -> io::Result<()> {
                     }
 
                     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q') {
-                        break;
+                        break 'main;
                     }
 
                     match app.active_view {
@@ -4013,31 +4584,74 @@ fn main() -> io::Result<()> {
                                     }
                                     ChatViewMode::Workspace => {
                                         app.chat.info_pane_open = true;
-                                        app.chat.app_mouse_mode = true;
+                                        app.chat.app_mouse_mode = false;
+                                        app.chat.selection_anchor = None;
+                                        app.chat.selection_focus = None;
+                                        app.chat.selection_dragging = false;
                                     }
                                 }
                                 needs_full_redraw = true;
                             } else if key.code == KeyCode::F(6) {
-                                if app.chat.view_mode == ChatViewMode::Workspace {
-                                    app.chat.app_mouse_mode = !app.chat.app_mouse_mode;
-                                    app.chat.selection_dragging = false;
-                                    if !app.chat.app_mouse_mode {
-                                        app.chat.selection_anchor = None;
-                                        app.chat.selection_focus = None;
+                                app.chat.app_mouse_mode = !app.chat.app_mouse_mode;
+                                app.chat.selection_dragging = false;
+                                app.chat.selection_anchor = None;
+                                app.chat.selection_focus = None;
+                                needs_full_redraw = true;
+                            } else if app.chat.context_menu.is_some() {
+                                match key.code {
+                                    KeyCode::Esc => {
+                                        app.chat.context_menu = None;
+                                        chat_transcript_dirty = true;
+                                        local_view_dirty = true;
                                     }
-                                    needs_full_redraw = true;
+                                    KeyCode::Up => {
+                                        if let Some(ref mut ctx) = app.chat.context_menu {
+                                            ctx.selected = ctx.selected.saturating_sub(1);
+                                        }
+                                        local_view_dirty = true;
+                                    }
+                                    KeyCode::Down => {
+                                        if let Some(ref mut ctx) = app.chat.context_menu {
+                                            let count = f1_mono::context_menu_item_count(ctx);
+                                            ctx.selected = (ctx.selected + 1).min(count.saturating_sub(1));
+                                        }
+                                        local_view_dirty = true;
+                                    }
+                                    KeyCode::Enter => {
+                                        if let Some(ctx) = app.chat.context_menu.take() {
+                                            let copy_idx = if ctx.has_selection { Some(0) } else { None };
+                                            let paste_idx = if ctx.has_selection { 1 } else { 0 };
+                                            if copy_idx == Some(ctx.selected) {
+                                                let _ = f1_mono::copy_selection(&mut app, &cached_chat);
+                                            } else if ctx.selected == paste_idx {
+                                                if let Some(text) = read_from_clipboard() {
+                                                    app.chat.input.push_str(&text);
+                                                }
+                                            }
+                                        }
+                                        chat_transcript_dirty = true;
+                                        local_view_dirty = true;
+                                    }
+                                    _ => {}
                                 }
                             } else if key.code == KeyCode::Esc {
+                                if app.chat.menu_open() {
+                                    app.chat.close_menu();
+                                }
                                 app.chat.selection_anchor = None;
                                 app.chat.selection_focus = None;
                                 app.chat.selection_dragging = false;
+                                chat_transcript_dirty = true;
                                 local_view_dirty = true;
                             } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-                                let _ = copy_chat_selection(&mut app, outer_w, outer_h);
+                                let _ = f1_mono::copy_selection(&mut app, &cached_chat);
+                                chat_transcript_dirty = true;
                                 local_view_dirty = true;
                             } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p') {
-                                app.chat.info_pane_open = !app.chat.info_pane_open;
-                                needs_full_redraw = true;
+                                if app.chat.view_mode == ChatViewMode::Transcript {
+                                    app.chat.info_pane_open = !app.chat.info_pane_open;
+                                    needs_full_redraw = true;
+                                }
                             } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('i') {
                                 app.chat.info_pane_tab = (app.chat.info_pane_tab + 1) % 3;
                                 local_view_dirty = true;
@@ -4111,6 +4725,16 @@ fn main() -> io::Result<()> {
                                         app.chat.menu_move_up();
                                         local_view_dirty = true;
                                     }
+                                    KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                        app.chat.input.push(c);
+                                        app.chat.maybe_open_command_menu();
+                                        local_view_dirty = true;
+                                    }
+                                    KeyCode::Backspace => {
+                                        app.chat.input.pop();
+                                        app.chat.maybe_open_command_menu();
+                                        local_view_dirty = true;
+                                    }
                                     _ => {}
                                 }
                             } else if app.chat.auth_open() {
@@ -4167,10 +4791,12 @@ fn main() -> io::Result<()> {
                                     }
                                     KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                         app.chat.scroll = app.chat.scroll.saturating_add(1);
+                                        chat_transcript_dirty = true;
                                         local_view_dirty = true;
                                     }
                                     KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                         app.chat.scroll = app.chat.scroll.saturating_sub(1);
+                                        chat_transcript_dirty = true;
                                         local_view_dirty = true;
                                     }
                                     KeyCode::Up => {
@@ -4185,10 +4811,12 @@ fn main() -> io::Result<()> {
                                     }
                                     KeyCode::PageUp => {
                                         app.chat.scroll = app.chat.scroll.saturating_add(10);
+                                        chat_transcript_dirty = true;
                                         local_view_dirty = true;
                                     }
                                     KeyCode::PageDown => {
                                         app.chat.scroll = app.chat.scroll.saturating_sub(10);
+                                        chat_transcript_dirty = true;
                                         local_view_dirty = true;
                                     }
                                     _ => {}
@@ -4415,6 +5043,10 @@ fn main() -> io::Result<()> {
                                 }
                             } else {
                                 match key.code {
+                                    KeyCode::F(6) => {
+                                        app.sessions.app_mouse_mode = !app.sessions.app_mouse_mode;
+                                        needs_full_redraw = true;
+                                    }
                                     KeyCode::Tab => {
                                         app.sessions.section = match app.sessions.section {
                                             SessionsSection::Agents => SessionsSection::Projects,
@@ -4575,7 +5207,7 @@ fn main() -> io::Result<()> {
                     if app.active_view == View::Chat && !app.chat.copy_mode {
                         app.chat.input.push_str(&text);
                         app.chat.maybe_open_command_menu();
-                        needs_full_redraw = true;
+                        local_view_dirty = true;
                     } else if app.active_view == View::Sessions && app.sessions.terminal_mode {
                         let bytes = text.into_bytes();
                         let is_local_self = match (app.sessions.panes.get(app.sessions.focused), native_session.as_ref()) {
@@ -4601,34 +5233,74 @@ fn main() -> io::Result<()> {
                     }
                 }
                 Event::Mouse(mouse) => {
-                    if app.active_view == View::Chat && app.chat.view_mode == ChatViewMode::Workspace && app.chat.app_mouse_mode {
-                        let area = chat_content_area(&app, outer_w, outer_h);
-                        let lines = build_chat_visual_lines(&app, area.width as usize, chat_layout_variant(outer_w, outer_h));
+                    if app.active_view == View::Chat && app.chat.app_mouse_mode {
+                        let area = f1_mono::content_area(outer_w, outer_h);
+                        let lines = &cached_chat.visual.lines;
                         match mouse.kind {
                             MouseEventKind::ScrollUp => {
+                                app.chat.context_menu = None;
                                 if point_in_rect(area, mouse.column, mouse.row) {
                                     let max_scroll = lines.len().saturating_sub(area.height as usize);
                                     app.chat.scroll = (app.chat.scroll + 3).min(max_scroll);
+                                    chat_transcript_dirty = true;
                                     local_view_dirty = true;
                                 }
                             }
                             MouseEventKind::ScrollDown => {
+                                app.chat.context_menu = None;
                                 if point_in_rect(area, mouse.column, mouse.row) {
                                     app.chat.scroll = app.chat.scroll.saturating_sub(3);
+                                    chat_transcript_dirty = true;
                                     local_view_dirty = true;
                                 }
                             }
                             MouseEventKind::Down(MouseButton::Left) => {
-                                if let Some(point) = chat_point_at_mouse(&lines, area, app.chat.scroll, mouse.column, mouse.row) {
-                                    app.chat.selection_anchor = Some(point);
-                                    app.chat.selection_focus = Some(point);
-                                    app.chat.selection_dragging = true;
+                                if let Some(ctx) = app.chat.context_menu.clone() {
+                                    // Match draw_context_menu geometry exactly:
+                                    // menu_w=10, borders add 2, top border row, items start at my+1
+                                    let menu_w: u16 = 10;
+                                    let item_count = f1_mono::context_menu_item_count(&ctx);
+                                    let menu_h = item_count as u16;
+                                    let my = if ctx.y + menu_h + 2 >= outer_h {
+                                        ctx.y.saturating_sub(menu_h + 2)
+                                    } else {
+                                        ctx.y + 1
+                                    };
+                                    let mx = ctx.x.min(outer_w.saturating_sub(menu_w + 2));
+                                    // Items are at rows my+1 .. my+1+item_count, columns mx+1 .. mx+1+menu_w
+                                    let item_y_start = my + 1;
+                                    if mouse.column > mx && mouse.column <= mx + menu_w
+                                        && mouse.row >= item_y_start && mouse.row < item_y_start + menu_h
+                                    {
+                                        let clicked = (mouse.row - item_y_start) as usize;
+                                        let copy_idx = if ctx.has_selection { Some(0) } else { None };
+                                        let paste_idx = if ctx.has_selection { 1 } else { 0 };
+                                        if copy_idx == Some(clicked) {
+                                            let _ = f1_mono::copy_selection(&mut app, &cached_chat);
+                                        } else if clicked == paste_idx {
+                                            if let Some(text) = read_from_clipboard() {
+                                                app.chat.input.push_str(&text);
+                                            }
+                                        }
+                                        app.chat.context_menu = None;
+                                    } else {
+                                        app.chat.context_menu = None;
+                                    }
+                                    chat_transcript_dirty = true;
+                                    local_view_dirty = true;
                                 } else {
-                                    app.chat.selection_anchor = None;
-                                    app.chat.selection_focus = None;
-                                    app.chat.selection_dragging = false;
+                                    if let Some(point) = f1_mono::point_at_mouse(&cached_chat, &app, outer_w, outer_h, mouse.column, mouse.row) {
+                                        app.chat.selection_anchor = Some(point);
+                                        app.chat.selection_focus = Some(point);
+                                        app.chat.selection_dragging = true;
+                                    } else {
+                                        app.chat.selection_anchor = None;
+                                        app.chat.selection_focus = None;
+                                        app.chat.selection_dragging = false;
+                                    }
+                                    chat_transcript_dirty = true;
+                                    local_view_dirty = true;
                                 }
-                                local_view_dirty = true;
                             }
                             MouseEventKind::Drag(MouseButton::Left) => {
                                 if app.chat.selection_dragging {
@@ -4638,28 +5310,39 @@ fn main() -> io::Result<()> {
                                     } else if mouse.row >= area.y.saturating_add(area.height) {
                                         app.chat.scroll = app.chat.scroll.saturating_sub(1);
                                     }
-                                    if let Some(point) = chat_point_at_mouse(&lines, area, app.chat.scroll, mouse.column, mouse.row) {
+                                    if let Some(point) = f1_mono::point_at_mouse(&cached_chat, &app, outer_w, outer_h, mouse.column, mouse.row) {
                                         app.chat.selection_focus = Some(point);
                                     }
+                                    chat_transcript_dirty = true;
                                     local_view_dirty = true;
                                 }
                             }
                             MouseEventKind::Up(MouseButton::Left) => {
                                 if app.chat.selection_dragging {
                                     app.chat.selection_dragging = false;
-                                    if let Some(point) = chat_point_at_mouse(&lines, area, app.chat.scroll, mouse.column, mouse.row) {
+                                    if let Some(point) = f1_mono::point_at_mouse(&cached_chat, &app, outer_w, outer_h, mouse.column, mouse.row) {
                                         app.chat.selection_focus = Some(point);
                                     }
+                                    chat_transcript_dirty = true;
                                     local_view_dirty = true;
                                 }
                             }
-                            MouseEventKind::Down(MouseButton::Right) | MouseEventKind::Up(MouseButton::Right) => {
-                                let _ = copy_chat_selection(&mut app, outer_w, outer_h);
+                            MouseEventKind::Down(MouseButton::Right) => {
+                                let has_sel = app.chat.selection_anchor.is_some()
+                                    && app.chat.selection_focus.is_some()
+                                    && app.chat.selection_anchor != app.chat.selection_focus;
+                                app.chat.context_menu = Some(crate::chat::ContextMenu {
+                                    x: mouse.column,
+                                    y: mouse.row,
+                                    selected: 0,
+                                    has_selection: has_sel,
+                                });
                                 local_view_dirty = true;
                             }
+                            MouseEventKind::Up(MouseButton::Right) => {}
                             _ => {}
                         }
-                    } else if app.active_view == View::Sessions {
+                    } else if app.active_view == View::Sessions && app.sessions.app_mouse_mode {
                         match mouse.kind {
                             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                                 if let Some(pane_idx) = pane_at_point(&mut app, &session_rects, mouse.column, mouse.row) {
@@ -4761,11 +5444,13 @@ fn main() -> io::Result<()> {
                     outer_w = w;
                     outer_h = h;
                     session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
+                    front_buf.resize(outer_w, outer_h);
+                    back_buf.resize(outer_w, outer_h);
                     needs_full_redraw = true;
                 }
                 _ => {}
             }
-        }
+        } // event drain loop
 
         let before = app.sessions.panes.len();
         app.sessions.panes.retain(|c| !c.is_eof());

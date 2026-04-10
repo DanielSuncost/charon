@@ -11,6 +11,7 @@ from automation_runtime import (
     heartbeat_automation,
     list_automations,
     mark_run_started,
+    reconcile_stale_automation_runs,
 )
 from tools import ToolContext
 
@@ -89,6 +90,55 @@ def _browser_check(doc: dict[str, Any]) -> tuple[bool, str, dict[str, Any], str]
     return ok, summary, details, error
 
 
+def _browser_workflow(doc: dict[str, Any]) -> tuple[bool, str, dict[str, Any], str]:
+    from tools.browser_tool import execute_browser
+
+    action = doc.get('action') or {}
+    steps = list(action.get('steps') or [])
+    state_dir = Path(str((doc.get('state_dir') or ''))) if doc.get('state_dir') else None
+    project_root = Path(str(doc.get('project_root') or '.'))
+    ctx = ToolContext(project_root=project_root, state_dir=state_dir, agent_id=str(doc.get('automation_id') or ''))
+    details: dict[str, Any] = {'steps': []}
+    screenshot_on_failure = bool(action.get('screenshot_on_failure', True))
+
+    if not steps:
+        return False, 'Missing workflow steps for browser workflow.', {}, 'missing_steps'
+
+    for idx, step in enumerate(steps, start=1):
+        step_action = str(step.get('action') or '').strip().lower()
+        record = {'index': idx, 'action': step_action}
+        if step_action == 'assert_text':
+            state = execute_browser({'action': 'get_state'}, ctx)
+            text = state.content or ''
+            expected = str(step.get('text') or step.get('expected_text') or '').strip()
+            record['expected_text'] = expected
+            record['state_excerpt'] = text[:500]
+            details['steps'].append(record)
+            if not expected or expected not in text:
+                if screenshot_on_failure:
+                    ss = execute_browser({'action': 'screenshot'}, ctx)
+                    details['screenshot'] = ss.content[:500]
+                return False, f'Browser workflow failed at step {idx}: expected text not found.', details, 'workflow_expected_text_missing'
+            continue
+
+        params = {'action': step_action}
+        for key in ('url', 'index', 'selector', 'text', 'direction', 'seconds'):
+            if key in step:
+                params[key] = step.get(key)
+        result = execute_browser(params, ctx)
+        record['result'] = (result.content or '')[:500]
+        record['is_error'] = bool(result.is_error)
+        details['steps'].append(record)
+        content_lower = (result.content or '').lower()
+        if result.is_error or content_lower.startswith('error:') or 'browser error:' in content_lower:
+            if screenshot_on_failure:
+                ss = execute_browser({'action': 'screenshot'}, ctx)
+                details['screenshot'] = ss.content[:500]
+            return False, f'Browser workflow failed at step {idx}: {step_action}', details, f'workflow_step_{step_action}_failed'
+
+    return True, 'Browser workflow completed successfully.', details, ''
+
+
 def _execute_automation_kind(doc: dict[str, Any]) -> tuple[bool, str, dict[str, Any], str]:
     kind = str(doc.get('kind') or '')
     action = doc.get('action') or {}
@@ -96,6 +146,8 @@ def _execute_automation_kind(doc: dict[str, Any]) -> tuple[bool, str, dict[str, 
         return _http_check(action)
     if kind == 'browser_check':
         return _browser_check(doc)
+    if kind == 'browser_workflow':
+        return _browser_workflow(doc)
     return False, f'Unsupported automation kind: {kind}', {'kind': kind}, 'unsupported_kind'
 
 
@@ -206,6 +258,10 @@ def _scheduler_main(state_dir: Path, poll_seconds: float) -> None:
 
 def start_scheduler(state_dir: Path, *, poll_seconds: float = 5.0) -> bool:
     key = str(Path(state_dir).resolve())
+    try:
+        reconcile_stale_automation_runs(Path(state_dir))
+    except Exception:
+        pass
     with _scheduler_lock:
         existing = _scheduler_threads.get(key)
         if existing and existing.is_alive():

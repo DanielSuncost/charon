@@ -32,6 +32,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import socket
 import sys
 import threading
@@ -468,6 +469,49 @@ def _sanitize_saved_messages(messages: list[dict]) -> list[dict]:
     return cleaned
 
 
+def _iso_to_epoch(iso_str: str) -> float:
+    """Convert an ISO-8601 timestamp to epoch seconds (best-effort)."""
+    if not iso_str:
+        return 0.0
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return 0.0
+
+
+def _full_messages_from_store(agent_id: str) -> list | None:
+    """Load full raw message list from the lossless SQLite store.
+
+    Returns a list of Message objects, or None if unavailable.
+    Used by save paths to ensure JSONL always contains the complete
+    history (not compacted engine.messages).
+    """
+    try:
+        from context_store import ContextStore
+        from store_adapter import get_db
+        from providers import Message as _Msg
+        db = get_db(STATE_DIR)
+        stored = ContextStore.get_messages_for_agent(db, agent_id, limit=10000)
+        if not stored:
+            return None
+        return [
+            _Msg(role=sm.role, content=sm.content,
+                 tool_calls=sm.tool_calls,
+                 tool_call_id=sm.tool_call_id,
+                 tool_name=sm.tool_name,
+                 is_error=sm.is_error,
+                 thinking=sm.thinking,
+                 timestamp=_iso_to_epoch(sm.created_at))
+            for sm in stored
+        ]
+    except Exception:
+        return None
+
+
 def _ui_settings_path() -> Path:
     return STATE_DIR / 'ui_settings.json'
 
@@ -563,6 +607,22 @@ def _collect_devop_rooms(state_dir: Path, project_root: Path) -> list[dict]:
 def _dashboard_spark_points(values: list[int], limit: int = 12) -> list[int]:
     vals = [max(0, int(v or 0)) for v in values][-limit:]
     return vals or [0]
+
+
+def _load_workflow_steps_spec(project_root: Path, raw_value: str) -> list[dict] | None:
+    raw = str(raw_value or '').strip()
+    if not raw:
+        return None
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = project_root / candidate
+    try:
+        if candidate.exists():
+            data = json.loads(candidate.read_text(encoding='utf-8'))
+            return data if isinstance(data, list) else None
+    except Exception:
+        return None
+    return None
 
 
 def _project_goal_tree(state_dir: Path, project_path: str) -> list[dict]:
@@ -727,10 +787,29 @@ class ChatBackend:
         self._session_tasks: list[dict] = []
         self._pending_provider_switch: dict | None = None
         self._pending_libris_intake: dict | None = None
+        self._pending_remote_onboard: dict | None = None
         self.visible_thoughts: bool = bool(_load_ui_settings().get('visible_thoughts', False))
         self._goal_inference_token_estimate: int = 0
         self._room_runners: set[str] = set()
         self._last_orchestration_parse: dict = {}
+        self._owned_boat_sessions: set[str] = set()
+        self._shutdown_cleaned = False
+
+    def _register_owned_boat_session(self, session_name: str | None) -> None:
+        name = str(session_name or '').strip()
+        if name:
+            self._owned_boat_sessions.add(name)
+
+    def _cleanup_owned_sessions(self) -> None:
+        if self._shutdown_cleaned:
+            return
+        self._shutdown_cleaned = True
+        for session_name in list(self._owned_boat_sessions):
+            try:
+                _terminate_boat_session(session_name)
+            except Exception:
+                pass
+        self._owned_boat_sessions.clear()
 
     def _room_runner_mode(self, room: dict | None, fallback: str = 'teacher-student') -> str:
         meta = room.get('meta') if isinstance(room, dict) and isinstance(room.get('meta'), dict) else {}
@@ -1494,6 +1573,7 @@ class ChatBackend:
             cmd = adapter.spawn_command(project_root=ROOT, session_name=agent_name, participant=adapter.build_participant(participant_seed))
             _sp.Popen(cmd, cwd=str(ROOT), env=child_env, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
             session_name = f'boat-{agent_name}'
+            self._register_owned_boat_session(session_name)
             launched.append(agent_name)
             participant = dict(participant_seed)
             participant['session'] = session_name
@@ -2191,16 +2271,34 @@ class ChatBackend:
         # Only resume when explicitly requested via --resume flag or /resume command
         if self._active_agent_id and os.environ.get('CHARON_RESUME', '').strip():
             try:
-                from conversation_store import load_conversation, dict_to_message
-                saved = _sanitize_saved_messages(load_conversation(STATE_DIR, self._active_agent_id))
+                saved = None
+                aid = self._active_agent_id
+
+                # Try lossless store first — query by agent_id directly
+                store_msgs = _full_messages_from_store(aid)
+                if store_msgs:
+                    if self.engine:
+                        self.engine.messages = list(store_msgs)
+                    from conversation_store import message_to_dict
+                    saved = [message_to_dict(m) for m in store_msgs]
+                else:
+                    # Fall back to JSONL
+                    from conversation_store import load_conversation, dict_to_message
+                    saved = _sanitize_saved_messages(load_conversation(STATE_DIR, aid))
+                    if saved and self.engine:
+                        msgs = [dict_to_message(m) for m in saved]
+                        self.engine.messages = msgs
+                        # Migrate JSONL messages into lossless store for future resumes
+                        if self.engine.has_lossless_store:
+                            self.engine.import_into_store(msgs)
+
                 if saved:
-                    self.engine.messages = [dict_to_message(m) for m in saved]
-                    self._load_tasks_from_ledger(self._active_agent_id)
+                    self._load_tasks_from_ledger(aid)
                     emit({
                         'type': 'conversation_restored',
                         'messages': saved,
                         'count': len(saved),
-                        'agent_id': self._active_agent_id,
+                        'agent_id': aid,
                     })
             except Exception:
                 pass
@@ -2289,6 +2387,44 @@ class ChatBackend:
                     agents[-1]['shade_stats'] = get_agent_shade_stats(STATE_DIR, agent_id)
                 except Exception:
                     agents[-1]['shade_stats'] = {}
+        except Exception:
+            pass
+
+        # Remote fleet agents
+        try:
+            from fleet_registry import load_fleet
+            from fleet_sync import get_cached_fleet_status
+            fleet = load_fleet()
+            fleet_status = get_cached_fleet_status()
+            for server in fleet.get('servers', []):
+                server_id = server.get('id', server.get('host', ''))
+                server_info = fleet_status.get(server_id, {})
+                server_sessions = server_info.get('sessions', {})
+                for agent_cfg in server.get('agents', []):
+                    agent_name = agent_cfg.get('name', '')
+                    session_info = server_sessions.get(agent_name, {})
+                    remote_status = session_info.get('status', 'offline') if server_info.get('online') else 'offline'
+                    agents.append({
+                        'id': f"remote:{server_id}:{agent_name}",
+                        'name': agent_name,
+                        'status': remote_status,
+                        'role': agent_cfg.get('type', 'remote'),
+                        'goal': '',
+                        'specialization': agent_cfg.get('specialization', ''),
+                        'project': agent_cfg.get('project', ''),
+                        'mode': 'persistent',
+                        'visibility': 'user',
+                        'last_active': '',
+                        'parent_agent_id': '',
+                        'tmux_session': session_info.get('session_id', ''),
+                        'recent_actions': [],
+                        'last_summary': '',
+                        'memory_notes': 0,
+                        'is_remote': True,
+                        'server_id': server_id,
+                        'host': server.get('host', ''),
+                        'transport': 'remote-boat',
+                    })
         except Exception:
             pass
 
@@ -2488,6 +2624,42 @@ class ChatBackend:
                         'command': command[:80],
                         'transport': transport or ('pty' if sock_path.exists() else ''),
                         'socket': str(sock_path) if sock_path else '',
+                    })
+        except Exception:
+            pass
+
+        # Remote fleet agent sessions
+        try:
+            from fleet_registry import load_fleet as _fleet_load
+            from fleet_sync import get_cached_fleet_status as _fleet_status
+            _fleet = _fleet_load()
+            _fstatus = _fleet_status()
+            for _srv in _fleet.get('servers', []):
+                _sid = _srv.get('id', _srv.get('host', ''))
+                _sinfo = _fstatus.get(_sid, {})
+                _ssessions = _sinfo.get('sessions', {})
+                for _acfg in _srv.get('agents', []):
+                    _aname = _acfg.get('name', '')
+                    _sess_info = _ssessions.get(_aname, {})
+                    _rstatus = _sess_info.get('status', 'offline') if _sinfo.get('online') else 'offline'
+                    _remote_id = f"remote:{_sid}:{_aname}"
+                    sessions.append({
+                        'id': _remote_id,
+                        'agentId': _remote_id,
+                        'agentName': _aname,
+                        'sessionLabel': f'{_aname} @ {_sid}',
+                        'status': _rstatus,
+                        'project': _acfg.get('project', '').split('/')[-1] if _acfg.get('project') else '',
+                        'location': _srv.get('host', ''),
+                        'lastActivity': '',
+                        'tmuxSession': _sess_info.get('session_id', _aname),
+                        'tmux_session': _sess_info.get('session_id', _aname),
+                        'hasTmux': _rstatus in ('running', 'idle'),
+                        'role': _acfg.get('type', 'remote'),
+                        'source': 'fleet',
+                        'transport': 'remote-boat',
+                        'server_id': _sid,
+                        'socket': '',
                     })
         except Exception:
             pass
@@ -3177,6 +3349,9 @@ class ChatBackend:
             {'cmd': '/automate continuous every <n> seconds check <url>', 'desc': 'Create an always-on loop automation'},
             {'cmd': '/monitor browser every hour <url> expect "text"', 'desc': 'Create a browser-rendered functional monitor'},
             {'cmd': '/automate browser every <n> <unit> check <url> expect "text"', 'desc': 'Create a browser-based rendered-page monitor'},
+            {'cmd': '/automate browser-workflow every <n> <unit> steps <json>', 'desc': 'Create a multi-step browser workflow automation'},
+            {'cmd': '/automate browser-workflow every <n> <unit> from <file>', 'desc': 'Create a multi-step browser workflow automation from a JSON file'},
+            {'cmd': '/automate webhook <automation_id> <url>', 'desc': 'Set a webhook for automation failure/recovery alerts'},
         ]
 
     def _get_suggestions(self, prefix: str) -> list[dict]:
@@ -3184,7 +3359,7 @@ class ChatBackend:
         prefix = prefix.strip().lower()
         catalog = self._command_catalog()
         if not prefix or prefix == '/':
-            return catalog[:40]
+            return catalog
 
         starts = [c for c in catalog if c['cmd'].lower().startswith(prefix)]
         if starts:
@@ -3597,6 +3772,24 @@ class ChatBackend:
                     except Exception as e:
                         emit({'type': 'error', 'error': f'Automation status failed: {e}', 'request_id': request_id})
                     return
+                if rest.startswith('webhook '):
+                    body = rest[8:].strip()
+                    parts = body.split(None, 1)
+                    if len(parts) < 2:
+                        emit({'type': 'error', 'error': 'Usage: /automate webhook <automation_id> <url>', 'request_id': request_id})
+                        return
+                    automation_id, webhook_url = parts[0].strip(), parts[1].strip()
+                    try:
+                        from automation_runtime import set_automation_webhook
+                        doc = set_automation_webhook(STATE_DIR, automation_id, webhook_url)
+                        if not doc:
+                            emit({'type': 'error', 'error': f'No automation found: {automation_id}', 'request_id': request_id})
+                            return
+                        emit({'type': 'status', 'message': f'Updated webhook for automation {automation_id}', 'request_id': request_id})
+                        emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': request_id})
+                    except Exception as e:
+                        emit({'type': 'error', 'error': f'Automation webhook update failed: {e}', 'request_id': request_id})
+                    return
                 for action_name, fn_name in [('pause', 'pause_automation'), ('resume', 'resume_automation'), ('stop', 'request_stop_automation')]:
                     if rest.startswith(action_name + ' '):
                         automation_id = rest[len(action_name) + 1:].strip()
@@ -3612,12 +3805,75 @@ class ChatBackend:
                         except Exception as e:
                             emit({'type': 'error', 'error': f'Automation {action_name} failed: {e}', 'request_id': request_id})
                         return
+                workflow_mode = False
+                if rest.lower().startswith('browser-workflow '):
+                    workflow_mode = True
+                    rest = rest[17:].strip()
                 interval = _parse_interval_phrase(rest)
                 sec_match = re.search(r'\bevery\s+(\d+)\s+seconds?\b', rest, re.I)
                 if sec_match:
                     interval = int(sec_match.group(1))
                 cron_match = re.search(r'^cron\s+"([^"]+)"\s+check\s+', rest, re.I)
                 continuous_match = re.search(r'^continuous(?:\s+every\s+(\d+)\s+seconds?)?\s+check\s+', rest, re.I)
+                workflow_steps_match = re.search(r'\bsteps\s+(.+)$', rest, re.I)
+                workflow_file_match = re.search(r'\bfrom\s+([^\s]+)\s*$', rest, re.I)
+                if workflow_mode:
+                    mode = 'scheduled'
+                    schedule = {}
+                    if cron_match:
+                        schedule = {'type': 'cron', 'cron': cron_match.group(1).strip()}
+                    elif continuous_match:
+                        mode = 'continuous'
+                        poll_seconds = int(continuous_match.group(1) or 60)
+                        schedule = {'type': 'continuous', 'poll_seconds': poll_seconds}
+                    else:
+                        if interval <= 0:
+                            emit({'type': 'error', 'error': 'Usage: /automate browser-workflow every <n> <unit> steps <json> | from <file>', 'request_id': request_id})
+                            return
+                        schedule = {'type': 'interval', 'interval_seconds': interval}
+                    steps = None
+                    workflow_source = ''
+                    if workflow_steps_match:
+                        raw_steps = workflow_steps_match.group(1).strip()
+                        try:
+                            parsed = json.loads(raw_steps)
+                        except Exception as e:
+                            emit({'type': 'error', 'error': f'Invalid workflow JSON: {e}', 'request_id': request_id})
+                            return
+                        steps = parsed if isinstance(parsed, list) else None
+                        workflow_source = 'inline-json'
+                    elif workflow_file_match:
+                        workflow_path = workflow_file_match.group(1).strip().strip('"').strip("'")
+                        steps = _load_workflow_steps_spec(Path(self._devop_project_root()), workflow_path)
+                        workflow_source = workflow_path
+                    if not isinstance(steps, list) or not steps:
+                        emit({'type': 'error', 'error': 'Workflow steps must be a non-empty JSON list. Use steps <json> or from <file>.', 'request_id': request_id})
+                        return
+                    title = 'Browser workflow automation'
+                    first_url = ''
+                    for step in steps:
+                        if isinstance(step, dict) and step.get('url'):
+                            first_url = str(step.get('url') or '')
+                            break
+                    try:
+                        from automation_runtime import create_automation
+                        doc = create_automation(
+                            STATE_DIR,
+                            Path(self._devop_project_root()),
+                            title=title if not first_url else f'Browser workflow: {first_url}',
+                            goal=rest,
+                            kind='browser_workflow',
+                            mode=mode,
+                            schedule=schedule,
+                            action={'steps': steps, 'screenshot_on_failure': True, 'workflow_source': workflow_source},
+                            created_by_agent_id=self._active_agent_id or '',
+                            operation_role='monitor',
+                        )
+                        emit({'type': 'status', 'message': f'Started browser workflow automation {doc.get("automation_id")}\nMode: {mode}\nSource: {workflow_source or "inline-json"}\nNext run: {doc.get("next_run_at") or "continuous"}', 'request_id': request_id})
+                        emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': request_id})
+                    except Exception as e:
+                        emit({'type': 'error', 'error': f'Failed to create browser workflow automation: {e}', 'request_id': request_id})
+                    return
                 url_match = re.search(r'(https?://\S+)', rest)
                 if not url_match or 'check' not in rest.lower():
                     emit({'type': 'error', 'error': 'Usage: /automate every <n> <unit> check <url>', 'request_id': request_id})
@@ -3657,6 +3913,118 @@ class ChatBackend:
                 except Exception as e:
                     emit({'type': 'error', 'error': f'Failed to create automation: {e}', 'request_id': request_id})
                 return
+            if command == '/add-remote' or command.startswith('/add-remote '):
+                rest = command[12:].strip() if command.startswith('/add-remote ') else ''
+                try:
+                    from remote_onboard import test_ssh, check_boat_installed, deploy_boat_remote, discover_remote_agents, auto_configure_fleet, full_onboard
+
+                    if not rest:
+                        emit({'type': 'status', 'message': (
+                            'Usage: /add-remote <host> [user]\n'
+                            '  /add-remote 55.55.55.55 ubuntu    — test SSH and discover agents\n'
+                            '  /add-remote confirm                — save discovered config\n'
+                            '  /add-remote cancel                 — discard pending onboarding'
+                        ), 'request_id': request_id})
+                        return
+
+                    if rest == 'cancel':
+                        self._pending_remote_onboard = None
+                        emit({'type': 'status', 'message': 'Remote onboarding cancelled.', 'request_id': request_id})
+                        return
+
+                    if rest == 'confirm':
+                        pending = self._pending_remote_onboard
+                        if not pending:
+                            emit({'type': 'error', 'error': 'No pending remote onboard. Run /add-remote <host> first.', 'request_id': request_id})
+                            return
+                        all_agents = pending.get('agents', [])
+                        if not all_agents:
+                            emit({'type': 'error', 'error': 'No agents to add. Run /add-remote <host> to discover agents first.', 'request_id': request_id})
+                            return
+                        server = auto_configure_fleet(
+                            host=pending['host'],
+                            user=pending.get('user', ''),
+                            agents=all_agents,
+                        )
+                        self._pending_remote_onboard = None
+                        # Start fleet sync if not already running
+                        try:
+                            from fleet_sync import start_fleet_sync
+                            start_fleet_sync()
+                        except Exception:
+                            pass
+                        emit({'type': 'status', 'message': (
+                            f'Added server "{server["id"]}" ({server["host"]}) with '
+                            f'{len(server.get("agents", []))} agent(s) to fleet.\n'
+                            f'Remote sessions will appear in F3 grid shortly.'
+                        ), 'request_id': request_id})
+                        emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': request_id})
+                        return
+
+                    # Parse host and optional user
+                    parts = rest.split()
+                    host = parts[0]
+                    user = parts[1] if len(parts) > 1 else ''
+
+                    # Step 1: Test SSH
+                    emit({'type': 'status', 'message': f'Testing SSH to {user + "@" if user else ""}{host}...', 'request_id': request_id})
+                    ssh_ok, ssh_msg = test_ssh(host, user)
+                    emit({'type': 'status', 'message': ssh_msg, 'request_id': request_id})
+                    if not ssh_ok:
+                        if not user:
+                            emit({'type': 'status', 'message': 'Tip: try with a username: /add-remote <host> <user>', 'request_id': request_id})
+                        return
+
+                    # Step 2: Check boat
+                    emit({'type': 'status', 'message': 'Checking for charons-boat on remote...', 'request_id': request_id})
+                    boat_ok, boat_msg = check_boat_installed(host, user)
+                    if boat_ok:
+                        emit({'type': 'status', 'message': f'charons-boat found: {boat_msg}', 'request_id': request_id})
+                    else:
+                        emit({'type': 'status', 'message': 'charons-boat not found. Deploying...', 'request_id': request_id})
+                        dep_ok, dep_msg = deploy_boat_remote(host, user)
+                        if dep_ok:
+                            emit({'type': 'status', 'message': f'Deployed: {dep_msg}', 'request_id': request_id})
+                        else:
+                            emit({'type': 'status', 'message': f'Deploy failed: {dep_msg}\nContinuing with tmux discovery...', 'request_id': request_id})
+
+                    # Step 3: Discover agents
+                    emit({'type': 'status', 'message': 'Discovering agents...', 'request_id': request_id})
+                    discovery = discover_remote_agents(host, user)
+                    boat_agents = discovery.get('boat_sessions', [])
+                    tmux_agents = discovery.get('tmux_agents', [])
+                    tmux_other = discovery.get('tmux_other', [])
+                    all_agents = boat_agents + tmux_agents
+
+                    if not all_agents and not tmux_other:
+                        emit({'type': 'status', 'message': 'No agents found on remote. You can still add the server manually.', 'request_id': request_id})
+                        # Save pending with empty agents so user can still confirm (creates empty server entry)
+                        self._pending_remote_onboard = {'host': host, 'user': user, 'agents': []}
+                        return
+
+                    lines = [f'Found {len(all_agents)} agent(s) on {host}:']
+                    for i, a in enumerate(all_agents, 1):
+                        source = 'boat-wrapped' if a.get('source') == 'boat' else 'tmux session'
+                        lines.append(f'  {i}. {a["name"]} ({a["type"]}) — {source}, {a["status"]}')
+                    if tmux_other:
+                        lines.append(f'\nAlso found {len(tmux_other)} other tmux session(s):')
+                        for a in tmux_other:
+                            lines.append(f'  - {a["name"]} (unrecognized agent)')
+                    if tmux_agents:
+                        lines.append(f'\nTmux agents will be auto-bridged via boat\'s tmux discovery.')
+                    lines.append(f'\nType /add-remote confirm to save, or /add-remote cancel to abort.')
+
+                    self._pending_remote_onboard = {
+                        'host': host,
+                        'user': user,
+                        'agents': all_agents,
+                        'discovery': discovery,
+                    }
+                    emit({'type': 'status', 'message': '\n'.join(lines), 'request_id': request_id})
+                except Exception as e:
+                    emit({'type': 'error', 'error': f'Remote onboarding failed: {e}', 'request_id': request_id})
+                return
+
             if command == '/project' or command.startswith('/project '):
                 rest = command[8:].strip() if command.startswith('/project ') else ''
                 try:
@@ -3733,6 +4101,7 @@ class ChatBackend:
                     if result.get('ok'):
                         display_name = str(result.get('display_name') or agent_kind)
                         session_name = str(result.get('tmux_session') or result.get('session_name') or '')
+                        self._register_owned_boat_session(session_name)
                         emit({'type': 'status', 'message': f'✓ {display_name} session created: {session_name}', 'request_id': request_id})
                         emit({'type': 'status', 'message': 'To view or interact with it, press F3 for the sessions grid.', 'request_id': request_id})
                         self.handle_refresh(request_id)
@@ -4106,6 +4475,7 @@ class ChatBackend:
                     for session_name in participant_sessions:
                         if session_name and _terminate_boat_session(str(session_name)):
                             terminated.append(str(session_name))
+                            self._owned_boat_sessions.discard(str(session_name))
                     if delete_room(STATE_DIR, room_id):
                         msg = f'Deleted room record: {room_id}'
                         if terminated:
@@ -4122,16 +4492,37 @@ class ChatBackend:
             if command == '/resume' or command.startswith('/resume '):
                 arg = command[8:].strip() if command.startswith('/resume ') else ''
                 try:
-                    from conversation_store import list_conversations, load_conversation, dict_to_message
+                    from conversation_store import list_conversations, load_conversation, dict_to_message, message_to_dict
                     convos = list_conversations(STATE_DIR)
                     if arg:
-                        # Direct resume
-                        saved = _sanitize_saved_messages(load_conversation(STATE_DIR, arg))
-                        if saved:
-                            self._active_agent_id = arg
-                            engine, _ = self._ensure_engine()
+                        # Direct resume — must reset the engine so it gets the
+                        # correct agent_id for the target session.
+                        self._active_agent_id = arg
+                        self.engine = None  # force re-creation with new agent_id
+                        engine, _ = self._ensure_engine()
+                        restored_count = 0
+                        saved = None
+
+                        # Try lossless store first — full raw history.
+                        # Query with arg directly in case engine.agent_id differs.
+                        store_msgs = _full_messages_from_store(arg)
+                        if store_msgs:
+                            restored_count = len(store_msgs)
                             if engine:
-                                engine.messages = [dict_to_message(m) for m in saved]
+                                engine.messages = list(store_msgs)
+                            saved = [message_to_dict(m) for m in store_msgs]
+
+                        if not restored_count:
+                            # Fall back to JSONL
+                            saved = _sanitize_saved_messages(load_conversation(STATE_DIR, arg))
+                            if saved and engine:
+                                msgs = [dict_to_message(m) for m in saved]
+                                engine.messages = msgs
+                                # Migrate into lossless store
+                                if engine.has_lossless_store:
+                                    engine.import_into_store(msgs)
+
+                        if saved:
                             self._load_tasks_from_ledger(arg)
                             emit({
                                 'type': 'conversation_restored',
@@ -4149,6 +4540,32 @@ class ChatBackend:
                     elif convos:
                         # Show session picker with last user message preview
                         import time
+
+                        # Pre-load SQLite counts + last user messages for accuracy
+                        _store_info = {}
+                        try:
+                            from context_store import ContextStore
+                            from store_adapter import get_db
+                            _sdb = get_db(STATE_DIR)
+                            # Batch: get counts per agent
+                            for row in _sdb.fetchall(
+                                "SELECT agent_id, COUNT(*) as cnt FROM conversation_messages GROUP BY agent_id"
+                            ):
+                                _store_info[row['agent_id']] = {'count': row['cnt'], 'preview': ''}
+                            # Batch: get last user message per agent (for preview)
+                            for aid, info in _store_info.items():
+                                row = _sdb.fetchone(
+                                    "SELECT content FROM conversation_messages "
+                                    "WHERE agent_id = ? AND role = 'user' AND content != '' "
+                                    "ORDER BY seq DESC LIMIT 1",
+                                    (aid,),
+                                )
+                                if row and row['content']:
+                                    first_line = row['content'].strip().split('\n')[0]
+                                    info['preview'] = first_line[:60] + ('…' if len(first_line) > 60 else '')
+                        except Exception:
+                            pass
+
                         items = []
                         for c in sorted(convos, key=lambda x: x.get('last_timestamp', 0), reverse=True):
                             age = ''
@@ -4158,22 +4575,28 @@ class ChatBackend:
                                 elif secs < 3600: age = f'{int(secs/60)}m ago'
                                 elif secs < 86400: age = f'{int(secs/3600)}h ago'
                                 else: age = f'{int(secs/86400)}d ago'
-                            # Find last user message for preview
-                            preview = ''
-                            try:
-                                saved = load_conversation(STATE_DIR, c['agent_id'])
-                                for msg in reversed(saved):
-                                    if msg.get('role') == 'user' and msg.get('content', '').strip():
-                                        first_line = msg['content'].strip().split('\n')[0]
-                                        preview = first_line[:60]
-                                        if len(first_line) > 60:
-                                            preview += '…'
-                                        break
-                            except Exception:
-                                pass
+                            # Use SQLite info when available and more complete
+                            aid = c['agent_id']
+                            si = _store_info.get(aid)
                             msg_count = c.get('message_count', 0)
+                            preview = ''
+                            if si and si['count'] >= msg_count:
+                                msg_count = si['count']
+                                preview = si.get('preview', '')
+                            if not preview:
+                                try:
+                                    saved = load_conversation(STATE_DIR, aid)
+                                    for msg in reversed(saved):
+                                        if msg.get('role') == 'user' and msg.get('content', '').strip():
+                                            first_line = msg['content'].strip().split('\n')[0]
+                                            preview = first_line[:60]
+                                            if len(first_line) > 60:
+                                                preview += '…'
+                                            break
+                                except Exception:
+                                    pass
                             items.append({
-                                'id': c['agent_id'],
+                                'id': aid,
                                 'desc': f"{preview or '(no messages)'}",
                                 'age': f"{msg_count}msg  {age}",
                             })
@@ -5357,7 +5780,9 @@ class ChatBackend:
         state['updated_at'] = datetime.now(timezone.utc).isoformat()
         path = STATE_DIR / 'onboarding.json'
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(state, indent=2))
+        tmp = path.with_suffix('.json.tmp')
+        tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False))
+        tmp.replace(path)
 
     def _on_setup_complete(self, onboarding: dict, request_id: str | None):
         """Post-setup: create default agent, detect other agents, report results.
@@ -5798,9 +6223,18 @@ class ChatBackend:
             # Persist conversation
             if self._active_agent_id and engine:
                 try:
+                    # When lossless store is active, messages are already persisted
+                    # to SQLite on every turn.  Write JSONL as backup using the
+                    # FULL history from the store (not engine.messages which may
+                    # have been truncated by legacy compaction).
                     from conversation_store import save_conversation, message_to_dict
+                    msgs_to_save = None
+                    if engine.has_lossless_store:
+                        msgs_to_save = _full_messages_from_store(self._active_agent_id)
+                    if msgs_to_save is None:
+                        msgs_to_save = list(engine.messages)
                     save_conversation(STATE_DIR, self._active_agent_id,
-                        [message_to_dict(m) for m in engine.messages])
+                        [message_to_dict(m) for m in msgs_to_save])
                     # Register session on first save (not on startup)
                     if not hasattr(self, '_session_registered'):
                         self._session_registered = True
@@ -6268,8 +6702,14 @@ class ChatBackend:
         if self._active_agent_id and self.engine and self.engine.messages:
             try:
                 from conversation_store import save_conversation, message_to_dict
+                # Use full history from lossless store when available
+                msgs_to_save = None
+                if self.engine.has_lossless_store:
+                    msgs_to_save = _full_messages_from_store(self._active_agent_id)
+                if msgs_to_save is None:
+                    msgs_to_save = list(self.engine.messages)
                 save_conversation(STATE_DIR, self._active_agent_id,
-                    [message_to_dict(m) for m in self.engine.messages])
+                    [message_to_dict(m) for m in msgs_to_save])
             except Exception:
                 pass
         # Unregister live session
@@ -6383,9 +6823,21 @@ class ChatBackend:
         except Exception:
             pass
 
-        # Save conversation on exit
+        # Save conversation and cleanup owned sessions on exit
         import atexit
+        atexit.register(self._cleanup_owned_sessions)
         atexit.register(self._save_conversation_now)
+
+        def _shutdown_handler(signum, frame):
+            self._cleanup_owned_sessions()
+            self._save_conversation_now()
+            raise SystemExit(0)
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                signal.signal(sig, _shutdown_handler)
+            except Exception:
+                pass
 
         # Start background worker for consolidation, goal inference, etc.
         self._chat_busy = False
@@ -6395,9 +6847,11 @@ class ChatBackend:
             try:
                 line = sys.stdin.buffer.readline()
             except (EOFError, KeyboardInterrupt):
+                self._cleanup_owned_sessions()
                 self._save_conversation_now()
                 break
             if not line:
+                self._cleanup_owned_sessions()
                 self._save_conversation_now()
                 break
 

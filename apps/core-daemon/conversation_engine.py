@@ -46,6 +46,20 @@ _BROWSER_TOOLS = {'Browser', 'X'}
 # Lossless context management (graceful fallback if unavailable)
 
 
+def _iso_to_epoch(iso_str: str) -> float:
+    """Convert an ISO-8601 timestamp to epoch seconds (best-effort)."""
+    if not iso_str:
+        return 0.0
+    try:
+        from datetime import datetime, timezone
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except Exception:
+        return 0.0
+
+
 def _sanitize_assistant_text(text: str) -> str:
     if not isinstance(text, str) or not text:
         return text
@@ -476,6 +490,58 @@ class ConversationEngine:
                 ContextStore.persist_message(self._ctx_db, self.agent_id, msg)
             except Exception:
                 pass
+
+    def load_from_store(self) -> int:
+        """Load full conversation from lossless context store into engine.
+
+        Restores ALL raw messages (never compacted) so resume picks up
+        with full context.  Returns the count of messages loaded, or 0
+        if the lossless store is unavailable or empty.
+        """
+        if not (self._lossless_enabled and self._ctx_db and self.agent_id):
+            return 0
+        try:
+            stored = ContextStore.get_messages_for_agent(
+                self._ctx_db, self.agent_id, limit=10000,
+            )
+            if not stored:
+                return 0
+            self.messages = [
+                Message(
+                    role=sm.role,
+                    content=sm.content,
+                    tool_calls=sm.tool_calls,
+                    tool_call_id=sm.tool_call_id,
+                    tool_name=sm.tool_name,
+                    is_error=sm.is_error,
+                    thinking=sm.thinking,
+                    timestamp=_iso_to_epoch(sm.created_at),
+                )
+                for sm in stored
+            ]
+            return len(self.messages)
+        except Exception:
+            return 0
+
+    def import_into_store(self, messages: list[Message]) -> int:
+        """Import messages into the lossless store (JSONL migration).
+
+        Only imports if the store is empty for this agent.  Returns
+        the count of messages imported.
+        """
+        if not (self._lossless_enabled and self._ctx_db and self.agent_id):
+            return 0
+        try:
+            return ContextStore.import_messages(
+                self._ctx_db, self.agent_id, messages,
+            )
+        except Exception:
+            return 0
+
+    @property
+    def has_lossless_store(self) -> bool:
+        """Whether the lossless context store is active."""
+        return self._lossless_enabled and self._ctx_db is not None
 
     def _assemble_context(self) -> list[Message]:
         """Assemble messages from the context store for the LLM call.

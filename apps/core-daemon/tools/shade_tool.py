@@ -170,10 +170,11 @@ def _run_shade(
         from shade_orchestrator import (
             get_contract, mark_phase_completed, mark_phase_failed,
             next_pending_phase, build_phase_instruction,
+            assess_contract_outcome, save_triage_record,
         )
 
         # Create provider using shade-specific config (falls back to main if not set)
-        provider, model, _ = get_shade_provider_and_model(state_dir)
+        provider, model, provider_meta = get_shade_provider_and_model(state_dir)
 
         # Build shade system prompt
         scope_str = ', '.join(scope) if scope else 'entire project'
@@ -204,6 +205,35 @@ def _run_shade(
         contract = get_contract(state_dir, contract_id)
         if not contract:
             return
+        try:
+            from shade_orchestrator import append_phase_event
+            append_phase_event(
+                state_dir,
+                contract_id=contract_id,
+                phase_id='-',
+                event_type='shade_model_resolved',
+                payload={
+                    'provider': str(provider),
+                    'model': str(model),
+                    'provider_meta': provider_meta if isinstance(provider_meta, dict) else {},
+                },
+            )
+        except Exception:
+            pass
+
+        contract['resolved_provider'] = str(provider)
+        contract['resolved_model'] = str(model)
+        contract['resolved_provider_meta'] = provider_meta if isinstance(provider_meta, dict) else {}
+        try:
+            from shade_orchestrator import save_contracts, load_contracts
+            contracts = load_contracts(state_dir)
+            for idx, rec in enumerate(contracts):
+                if rec.get('id') == contract_id:
+                    contracts[idx] = contract
+                    save_contracts(state_dir, contracts)
+                    break
+        except Exception:
+            pass
 
         libris_meta = dict(contract.get('metadata') or {}) if isinstance(contract.get('metadata'), dict) else {}
         libris_op = str(libris_meta.get('operation_id') or '').strip()
@@ -280,6 +310,58 @@ def _run_shade(
             contract = get_contract(state_dir, contract_id)
             if not contract or contract.get('status') != 'running':
                 break
+
+        contract = get_contract(state_dir, contract_id)
+        if contract:
+            assessment = assess_contract_outcome(contract)
+            if assessment.get('outcome') in ('failed_runtime', 'failed_quality', 'partial', 'stalled'):
+                reviewer_task_id = ''
+                try:
+                    from agent_runtime import append_inbox_event
+                    review_prompt = (
+                        f"Review failed/suspect worker contract {contract_id}.\n\n"
+                        f"Goal: {contract.get('goal') or ''}\n"
+                        f"Outcome: {assessment.get('outcome') or ''}\n"
+                        f"Status: {assessment.get('status') or ''}\n"
+                        f"Completed phases: {assessment.get('completed_phases')}/{assessment.get('total_phases')}\n"
+                        f"Current phase: {assessment.get('current_phase_id') or '-'}\n"
+                        f"Failed phases: {', '.join(assessment.get('failed_phase_ids') or []) or '(none)'}\n"
+                        f"Provider/model: {assessment.get('resolved_provider') or '(unknown)'} / {assessment.get('resolved_model') or '(unknown)'}\n"
+                        f"Expected outputs: {', '.join(assessment.get('expected_outputs') or []) or '(none)'}\n"
+                        f"Quality flags: {json.dumps(assessment.get('quality_flags') or [], ensure_ascii=False)}\n\n"
+                        f"Produce a concise triage verdict covering: root cause, whether the prompt was adequate, whether the model/provider seems too weak, whether completion evidence is sufficient, and the best next action."
+                    )
+                    reviewer_task_id = f"triage-review-{contract_id}"
+                    append_inbox_event(
+                        state_dir,
+                        str(contract.get('parent_agent_id') or ''),
+                        'worker_triage_requested',
+                        {
+                            'task_id': reviewer_task_id,
+                            'contract_id': contract_id,
+                            'instruction': review_prompt,
+                            'assessment': assessment,
+                        },
+                    )
+                except Exception:
+                    reviewer_task_id = ''
+                triage = save_triage_record(state_dir, contract, assessment, reviewer_task_id=reviewer_task_id)
+                try:
+                    from shade_orchestrator import append_phase_event
+                    append_phase_event(
+                        state_dir,
+                        contract_id=contract_id,
+                        phase_id='-',
+                        event_type='worker_triage_summary',
+                        payload={
+                            'triage_id': triage.get('triage_id', ''),
+                            'outcome': assessment.get('outcome'),
+                            'recommendation': triage.get('recommendation', ''),
+                            'reviewer_task_id': reviewer_task_id,
+                        },
+                    )
+                except Exception:
+                    pass
 
         if contract and contract.get('status') == 'completed':
             _emit_libris_phase('done', 'idle', 'Shade contract completed.')

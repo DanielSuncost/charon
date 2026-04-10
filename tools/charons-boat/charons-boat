@@ -129,12 +129,54 @@ cmd_revoke() {
   echo "⛵ All pairing keys revoked"
 }
 
+cmd_deploy() {
+  local target="${1:-}"
+  if [ -z "$target" ]; then
+    echo "Usage: charons-boat deploy user@host"
+    exit 1
+  fi
+
+  local remote_bin="\$HOME/.local/bin"
+  local files=(
+    "${SCRIPT_DIR}/charons-boat"
+    "${SCRIPT_DIR}/boat_session.py"
+    "${SCRIPT_DIR}/boat_stream.py"
+    "${SCRIPT_DIR}/boat_attach.py"
+  )
+
+  echo "⛵ Deploying charons-boat to ${target}..."
+
+  # Create remote directory
+  ssh "$target" "mkdir -p ${remote_bin}" || { echo "Failed to create remote directory"; exit 1; }
+
+  # Copy files
+  scp "${files[@]}" "${target}:${remote_bin}/" || { echo "Failed to copy files"; exit 1; }
+
+  # Make executable
+  ssh "$target" "chmod +x ${remote_bin}/charons-boat" || { echo "Failed to set permissions"; exit 1; }
+
+  # Verify
+  local version
+  version=$(ssh "$target" "${remote_bin}/charons-boat version 2>/dev/null || echo 'installed'")
+  echo "⛵ Deployed successfully: ${version}"
+  echo "  Remote path: ${remote_bin}/charons-boat"
+  echo ""
+  echo "  Ensure ${remote_bin} is in PATH on the remote host:"
+  echo "    ssh ${target} 'echo \"export PATH=\\\"\\\$HOME/.local/bin:\\\$PATH\\\"\" >> ~/.bashrc'"
+}
+
+cmd_version() {
+  echo "charons-boat 0.1.0"
+}
+
 case "${1:-help}" in
   wrap) shift; cmd_wrap "$@" ;;
   attach) shift; cmd_attach "$@" ;;
   serve) shift; cmd_serve "$@" ;;
   status) cmd_status ;;
   revoke) cmd_revoke ;;
+  deploy) shift; cmd_deploy "$@" ;;
+  version|--version) cmd_version ;;
   stream) shift; exec python3 "${SCRIPT_DIR}/boat_stream.py" "$@" ;;
   help|--help|-h)
     echo "charons-boat — Universal agent session bridge for Charon"
@@ -144,12 +186,15 @@ case "${1:-help}" in
     echo "  charons-boat attach <session>                 Attach current terminal to a PTY boat session"
     echo "  charons-boat stream                           Stream PTY sessions (JSON over stdio)"
     echo "  charons-boat serve [--generate-code]          Start for remote access"
+    echo "  charons-boat deploy user@host                 Install boat on a remote server"
     echo "  charons-boat status                           Show status"
     echo "  charons-boat revoke                           Revoke pairing keys"
+    echo "  charons-boat version                          Show version"
     echo ""
     echo "Examples:"
     echo "  charons-boat wrap -- pi"
     echo "  charons-boat wrap --name myhermes -- hermes"
+    echo "  charons-boat deploy dan@gpu-box"
     ;;
   *) echo "Unknown command: $1. Run 'charons-boat help' for usage."; exit 1 ;;
 esac

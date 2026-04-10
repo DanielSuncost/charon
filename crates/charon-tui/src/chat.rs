@@ -17,7 +17,7 @@ pub struct LaunchOptions {
 
 pub struct BackendProcess {
     _child: Child,
-    stdin: ChildStdin,
+    stdin_tx: mpsc::Sender<String>,
     rx: Receiver<BackendEvent>,
     request_id: u64,
     last_refresh: Instant,
@@ -38,6 +38,7 @@ impl BackendProcess {
         let mut cmd = Command::new("python3");
         cmd.arg(script)
             .current_dir(&root)
+            .env("PYTHONUNBUFFERED", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -54,9 +55,19 @@ impl BackendProcess {
 
         let mut child = cmd.spawn()?;
 
-        let stdin = child.stdin.take().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "missing stdin"))?;
+        let mut stdin = child.stdin.take().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "missing stdin"))?;
         let stdout = child.stdout.take().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "missing stdout"))?;
         let stderr = child.stderr.take().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "missing stderr"))?;
+
+        // Writer thread — sends to backend stdin without blocking the UI
+        let (stdin_tx, stdin_rx) = mpsc::channel::<String>();
+        thread::spawn(move || {
+            for line in stdin_rx {
+                if stdin.write_all(line.as_bytes()).is_err() { break; }
+                if stdin.write_all(b"\n").is_err() { break; }
+                let _ = stdin.flush();
+            }
+        });
 
         let (tx, rx) = mpsc::channel();
         let tx_out = tx.clone();
@@ -101,7 +112,7 @@ impl BackendProcess {
 
         Ok(Self {
             _child: child,
-            stdin,
+            stdin_tx,
             rx,
             request_id: 0,
             last_refresh: Instant::now(),
@@ -142,9 +153,7 @@ impl BackendProcess {
             map.insert("request_id".to_string(), Value::String(format!("r{}", self.request_id)));
         }
         let line = serde_json::to_string(&v)?;
-        self.stdin.write_all(line.as_bytes())?;
-        self.stdin.write_all(b"\n")?;
-        self.stdin.flush()?;
+        self.stdin_tx.send(line).map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e))?;
         Ok(())
     }
 }
@@ -272,6 +281,15 @@ pub struct ChatState {
     pub selection_dragging: bool,
     pub clipboard_notice: Option<(String, bool, Instant)>,
     pub provisional_outcomes: Vec<ProvisionalOutcome>,
+    pub context_menu: Option<ContextMenu>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ContextMenu {
+    pub x: u16,
+    pub y: u16,
+    pub selected: usize,
+    pub has_selection: bool,
 }
 
 impl ChatState {
@@ -310,6 +328,7 @@ impl ChatState {
             selection_dragging: false,
             clipboard_notice: None,
             provisional_outcomes: Vec::new(),
+            context_menu: None,
         })
     }
 
@@ -317,7 +336,11 @@ impl ChatState {
         if self.copy_mode {
             return false;
         }
-        self.backend.maybe_refresh();
+        // Skip refresh while streaming — the stdin write can block if the
+        // backend is busy and not reading its pipe, stalling the entire UI.
+        if !self.streaming {
+            self.backend.maybe_refresh();
+        }
         let events = self.backend.poll();
         let changed = !events.is_empty();
         for ev in events {
