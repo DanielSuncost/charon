@@ -112,6 +112,17 @@ def execute_clarify(params: dict, ctx: ToolContext) -> ToolResult:
                     r['status'] = 'answered'
                     r['updated_at'] = _now_iso()
                     _save(state_dir, data)
+                    try:
+                        from worker_provider import apply_worker_provider_choice
+                        q = str(r.get('question') or '').lower()
+                        answer_norm = ans.strip().lower()
+                        if 'which provider should i use for worker tasks' in q and answer_norm in ('codex', 'lmstudio'):
+                            applied = apply_worker_provider_choice(state_dir, answer_norm)
+                            r['applied_at'] = _now_iso()
+                            r['applied_result'] = applied
+                            _save(state_dir, data)
+                    except Exception:
+                        pass
                     return ToolResult(content=f'Clarification answered: {cid}', details=r)
             return ToolResult(content=f'Clarification not found: {cid}', is_error=True)
 

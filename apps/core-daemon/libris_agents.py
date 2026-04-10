@@ -647,6 +647,28 @@ def _run_libris_role(
         from model_registry import get_shade_provider_and_model
         from system_prompt_builder import build_system_prompt
         from libris_runtime import record_usage, append_operation_event, get_operation_state, emit_agent_phase
+        from worker_provider import request_worker_provider_for_background_flow
+
+        provider_status = request_worker_provider_for_background_flow(
+            state_dir,
+            purpose='Libris worker tasks',
+            agent_id=agent.get('id', ''),
+            project_root=project_root,
+        )
+        if not provider_status.get('ok'):
+            append_operation_event(state_dir, project_root, operation_id, f'{role}_blocked_worker_provider', {
+                'agent_id': agent.get('id', ''),
+                'topic_slug': topic_slug,
+                'reason': provider_status.get('reason') or 'no_provider',
+                'available_providers': provider_status.get('available_providers') or [],
+            })
+            emit_agent_phase(
+                state_dir, project_root, operation_id,
+                agent_id=agent.get('id', ''), role=role,
+                phase='awaiting_worker_provider', status='blocked', topic_slug=topic_slug,
+                summary='Waiting for worker provider selection before spawning Libris worker.'
+            )
+            return
 
         op = get_operation_state(state_dir, project_root, operation_id)
         policy = (op.get('model_policy') or {}) if op else {}

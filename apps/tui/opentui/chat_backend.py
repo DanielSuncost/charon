@@ -2110,9 +2110,8 @@ class ChatBackend:
                 import asyncio as _aio
                 from task_summarizer import summarize_instruction_rich, summarize_instruction_fast
                 try:
-                    from model_registry import get_shade_provider_and_model, load_registry
-                    reg = load_registry(STATE_DIR)
-                    provider, model, ready = get_shade_provider_and_model(STATE_DIR, reg=reg)
+                    from model_registry import get_shade_provider_and_model
+                    provider, model, ready = get_shade_provider_and_model(STATE_DIR, phase_name='analysis', task_complexity='normal')
                 except Exception:
                     provider = model = None
                     ready = False
@@ -3529,6 +3528,67 @@ class ChatBackend:
                     'items': suggestions,
                     'request_id': request_id,
                 })
+                return
+
+            if command == '/clarifications':
+                try:
+                    from clarify_tool import execute_clarify
+                    from tools import ToolContext
+                    clar_ctx = ToolContext(project_root=ROOT, agent_id=(self._active_agent_id or ''), state_dir=STATE_DIR)
+                    pending = execute_clarify({'action': 'list'}, clar_ctx)
+                    details = pending.details or {}
+                    items = details.get('items') or []
+                    if not items:
+                        emit({'type': 'status', 'message': 'No pending clarifications.', 'request_id': request_id})
+                        return
+                    suggestions = []
+                    for row in items[:8]:
+                        cid = str(row.get('clarification_id') or '')
+                        question = str(row.get('question') or '')
+                        choices = [str(c).strip() for c in (row.get('choices') or []) if str(c).strip()]
+                        if 'Which provider should I use for worker tasks?' in question and choices:
+                            for choice in choices:
+                                suggestions.append({
+                                    'cmd': f'/clarify {cid} {choice}',
+                                    'desc': f'{question} → choose {choice}',
+                                })
+                        else:
+                            suggestions.append({
+                                'cmd': f'/clarify {cid} <answer>',
+                                'desc': question,
+                            })
+                    emit({
+                        'type': 'suggestions',
+                        'title': 'Pending Clarifications',
+                        'items': suggestions,
+                        'request_id': request_id,
+                    })
+                except Exception as e:
+                    emit({'type': 'error', 'error': f'Failed to load clarifications: {e}', 'request_id': request_id})
+                return
+
+            if command.startswith('/clarify '):
+                rest = command[9:].strip()
+                parts = rest.split(None, 1)
+                if len(parts) != 2:
+                    emit({'type': 'error', 'error': 'Usage: /clarify <clarification_id> <answer>', 'request_id': request_id})
+                    return
+                cid, answer = parts[0].strip(), parts[1].strip()
+                try:
+                    from clarify_tool import execute_clarify
+                    from tools import ToolContext
+                    clar_ctx = ToolContext(project_root=ROOT, agent_id=(self._active_agent_id or ''), state_dir=STATE_DIR)
+                    result = execute_clarify({'action': 'answer', 'clarification_id': cid, 'answer': answer}, clar_ctx)
+                    if result.is_error:
+                        emit({'type': 'error', 'error': result.content, 'request_id': request_id})
+                    else:
+                        applied = (result.details or {}).get('applied_result') or {}
+                        msg = result.content
+                        if applied:
+                            msg += f' — applied worker provider {applied.get("provider")} ({applied.get("model")})'
+                        emit({'type': 'status', 'message': msg, 'request_id': request_id})
+                except Exception as e:
+                    emit({'type': 'error', 'error': f'Clarification answer failed: {e}', 'request_id': request_id})
                 return
 
             if command.startswith('/setup '):
@@ -6456,7 +6516,8 @@ class ChatBackend:
     def _chat_worker(self, message: str, request_id: str | None):
         """Run handle_chat on a worker thread."""
         try:
-            self.handle_chat(message, request_id)
+            with self._engine_lock:
+                self.handle_chat(message, request_id)
         finally:
             self._chat_busy = False
 

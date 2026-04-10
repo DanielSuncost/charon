@@ -660,6 +660,8 @@ def _chat_command_catalog() -> list[str]:
         '/setup model <name>',
         '/setup project <name>',
         '/setup complete',
+        '/clarifications',
+        '/clarify <clarification_id> <answer>',
         '/quit',
         '/exit',
     ]
@@ -690,6 +692,43 @@ def _handle_chat_slash_command(msg: str, *, agent_id: str, conversation_id: str,
     text = (msg or '').strip()
     if text in ('/help', '/setup'):
         _print_chat_suggestions('/setup' if text == '/setup' else '')
+        return True
+
+    if text == '/clarifications':
+        tools_mod = _load_module('tools_clarify_cli_tools', ROOT / 'apps' / 'core-daemon' / 'tools' / '__init__.py')
+        clarify_mod = _load_module('clarify_cli_mod', ROOT / 'apps' / 'core-daemon' / 'tools' / 'clarify_tool.py')
+        ctx = tools_mod.ToolContext(project_root=ROOT, agent_id=agent_id, state_dir=STATE_DIR)
+        res = clarify_mod.execute_clarify({'action': 'list'}, ctx)
+        details = res.details or {}
+        items = details.get('items') or []
+        if not items:
+            print('No pending clarifications.')
+            return True
+        print('Pending clarifications:')
+        for row in items:
+            cid = row.get('clarification_id')
+            question = row.get('question')
+            choices = row.get('choices') or []
+            print(f'- {cid}: {question}')
+            for choice in choices:
+                print(f'  /clarify {cid} {choice}')
+        return True
+
+    if text.startswith('/clarify '):
+        rest = text[len('/clarify '):].strip()
+        parts = rest.split(None, 1)
+        if len(parts) != 2:
+            print('Usage: /clarify <clarification_id> <answer>')
+            return True
+        cid, answer = parts[0].strip(), parts[1].strip()
+        tools_mod = _load_module('tools_clarify_cli_tools_answer', ROOT / 'apps' / 'core-daemon' / 'tools' / '__init__.py')
+        clarify_mod = _load_module('clarify_cli_mod_answer', ROOT / 'apps' / 'core-daemon' / 'tools' / 'clarify_tool.py')
+        ctx = tools_mod.ToolContext(project_root=ROOT, agent_id=agent_id, state_dir=STATE_DIR)
+        res = clarify_mod.execute_clarify({'action': 'answer', 'clarification_id': cid, 'answer': answer}, ctx)
+        print(res.content)
+        applied = (res.details or {}).get('applied_result') or {}
+        if applied:
+            print(f"applied worker provider={applied.get('provider')} model={applied.get('model')}")
         return True
 
     if text.startswith('/model'):

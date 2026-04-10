@@ -723,6 +723,23 @@ def execute_x(params: dict, ctx: ToolContext) -> ToolResult:
         if action == 'triage_new_bookmarks':
             limit = int(params.get('limit') or 5)
             project = str(params.get('project') or '').strip()
+            state_dir = _require_state_dir(ctx)
+            try:
+                from worker_provider import ensure_worker_provider_or_request_clarification
+                provider_status = ensure_worker_provider_or_request_clarification(state_dir, ctx=ctx, purpose='X bookmark triage')
+                if not provider_status.get('ok'):
+                    payload = {
+                        'count': 0,
+                        'items': [],
+                        'status': 'needs_provider_choice',
+                        'reason': provider_status.get('reason') or 'no_provider',
+                        'available_providers': provider_status.get('available_providers') or [],
+                        'clarification': provider_status.get('clarification') or {},
+                        'message': provider_status.get('question') or 'No usable provider is configured for X bookmark triage.',
+                    }
+                    return ToolResult(content=json.dumps(payload, indent=2), is_error=True, details=payload)
+            except Exception:
+                pass
             fetched = _run(_fetch_bookmarks_impl(ctx, limit, new_only=True))
             bookmarks = list(fetched.get('bookmarks') or [])
             if not bookmarks:

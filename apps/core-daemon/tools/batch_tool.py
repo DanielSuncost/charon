@@ -79,6 +79,26 @@ def execute_spawn_batch(params: dict, ctx: ToolContext) -> ToolResult:
     if not ctx.state_dir:
         return ToolResult(content='Error: state_dir not available.', is_error=True)
 
+    try:
+        from worker_provider import ensure_worker_provider_or_request_clarification
+        provider_status = ensure_worker_provider_or_request_clarification(ctx.state_dir, ctx=ctx, purpose='batches')
+        if not provider_status.get('ok'):
+            choices = provider_status.get('available_providers') or []
+            clarification = provider_status.get('clarification') or {}
+            cid = clarification.get('clarification_id') or ''
+            question = provider_status.get('question') or 'No usable provider is configured for batches.'
+            return ToolResult(
+                content=(
+                    f'{question}\n'
+                    + (f'Clarification ID: {cid}\n' if cid else '')
+                    + ('Choices:\n' + '\n'.join(f'- {c}' for c in choices) if choices else 'No provider options detected.')
+                ),
+                is_error=True,
+                details=provider_status,
+            )
+    except Exception:
+        pass
+
     # Validate tasks
     clean_tasks = []
     for i, t in enumerate(tasks):
