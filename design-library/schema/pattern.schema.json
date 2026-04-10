@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "design-library/schema/pattern.schema.json",
+  "title": "Pattern",
+  "type": "object",
+  "required": ["pattern_id", "name", "description", "pattern_type", "status"],
+  "properties": {
+    "pattern_id": { "type": "string" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "pattern_type": {
+      "type": "string",
+      "enum": [
+        "layout",
+        "navigation",
+        "component",
+        "interaction",
+        "motion",
+        "onboarding",
+        "content_presentation",
+        "data_density",
+        "conversion",
+        "workflow"
+      ]
+    },
+    "applicability": { "type": "array", "items": { "type": "string" } },
+    "strengths": { "type": "array", "items": { "type": "string" } },
+    "failure_modes": { "type": "array", "items": { "type": "string" } },
+    "example_ids": { "type": "array", "items": { "type": "string" } },
+    "design_language_tags": { "type": "array", "items": { "type": "string" } },
+    "implementation_notes": { "type": ["string", "null"] },
+    "training_value": { "type": ["number", "null"], "minimum": 0, "maximum": 10 },
+    "status": { "type": "string" }
+  },
+  "additionalProperties": true
+}
