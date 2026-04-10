@@ -4,6 +4,7 @@ Zero external deps beyond playwright. No telemetry.
 
 Uses Playwright Chromium with CDP for:
 - Navigation, click, input, scroll, go_back, wait, screenshot, get_state
+- Selector-based click/input/assert_text helpers for stable workflow automation
 - Proper interactive element indexing via JS DOM walk + bounding box filtering
 """
 from __future__ import annotations
@@ -310,6 +311,44 @@ async def _do_screenshot() -> bytes:
     return await page.screenshot(full_page=False)
 
 
+async def _do_click_selector(selector: str) -> str:
+    page = await _ensure_page()
+    locator = page.locator(selector).first
+    await locator.wait_for(state='visible', timeout=10000)
+    await locator.scroll_into_view_if_needed(timeout=5000)
+    await locator.click(timeout=10000)
+    await page.wait_for_timeout(800)
+    return f'Clicked selector {selector}.\n\n' + await _page_state(page)
+
+
+async def _do_input_selector(selector: str, text: str) -> str:
+    page = await _ensure_page()
+    locator = page.locator(selector).first
+    await locator.wait_for(state='visible', timeout=10000)
+    await locator.scroll_into_view_if_needed(timeout=5000)
+    await locator.fill(text, timeout=10000)
+    await page.wait_for_timeout(300)
+    return f'Filled selector {selector}.'
+
+
+async def _do_assert_text(expected_text: str) -> str:
+    page = await _ensure_page()
+    state = await _page_state(page)
+    if expected_text and expected_text in state:
+        return f'Assertion passed: found text {expected_text!r}.\n\n' + state
+    return f'Error: expected text not found: {expected_text!r}.\n\n' + state
+
+
+async def _do_assert_selector(selector: str) -> str:
+    page = await _ensure_page()
+    locator = page.locator(selector).first
+    count = await locator.count()
+    if count <= 0:
+        return f'Error: selector not found: {selector}'
+    await locator.wait_for(state='attached', timeout=5000)
+    return f'Assertion passed: selector exists {selector}.'
+
+
 async def _do_scroll(direction: str) -> str:
     page = await _ensure_page()
     delta = 600 if direction == 'down' else -600
@@ -341,11 +380,13 @@ BROWSER_TOOL_DEF = {
             'action': {
                 'type': 'string',
                 'enum': ['navigate', 'click', 'input', 'screenshot',
-                         'scroll', 'go_back', 'wait', 'get_state'],
+                         'scroll', 'go_back', 'wait', 'get_state',
+                         'click_selector', 'input_selector', 'assert_text', 'assert_selector'],
             },
             'url': {'type': 'string', 'description': 'URL for navigate.'},
             'index': {'type': 'number', 'description': 'Element index for click/input.'},
-            'text': {'type': 'string', 'description': 'Text for input action.'},
+            'selector': {'type': 'string', 'description': 'CSS selector for selector-based actions.'},
+            'text': {'type': 'string', 'description': 'Text for input/assert action.'},
             'direction': {'type': 'string', 'enum': ['up', 'down']},
             'seconds': {'type': 'number', 'description': 'Wait duration.'},
         },
@@ -380,11 +421,23 @@ def execute_browser(params: dict, ctx: ToolContext) -> ToolResult:
                 return ToolResult(content='Error: index is required.', is_error=True)
             return ToolResult(content=_run(_do_click(int(index)))[:12000])
 
+        if action == 'click_selector':
+            selector = str(params.get('selector', '')).strip()
+            if not selector:
+                return ToolResult(content='Error: selector is required.', is_error=True)
+            return ToolResult(content=_run(_do_click_selector(selector))[:12000])
+
         if action == 'input':
             index = params.get('index')
             if index is None:
                 return ToolResult(content='Error: index is required.', is_error=True)
             return ToolResult(content=_run(_do_input(int(index), str(params.get('text', '')))))
+
+        if action == 'input_selector':
+            selector = str(params.get('selector', '')).strip()
+            if not selector:
+                return ToolResult(content='Error: selector is required.', is_error=True)
+            return ToolResult(content=_run(_do_input_selector(selector, str(params.get('text', '')))))
 
         if action == 'screenshot':
             img_bytes = _run(_do_screenshot())
@@ -404,6 +457,20 @@ def execute_browser(params: dict, ctx: ToolContext) -> ToolResult:
             seconds = min(int(params.get('seconds', 2)), 30)
             _run(asyncio.sleep(seconds), timeout=seconds + 5)
             return ToolResult(content=f'Waited {seconds}s.')
+
+        if action == 'assert_text':
+            text = str(params.get('text', '')).strip()
+            if not text:
+                return ToolResult(content='Error: text is required.', is_error=True)
+            content = _run(_do_assert_text(text))
+            return ToolResult(content=content[:15000], is_error=content.lower().startswith('error:'))
+
+        if action == 'assert_selector':
+            selector = str(params.get('selector', '')).strip()
+            if not selector:
+                return ToolResult(content='Error: selector is required.', is_error=True)
+            content = _run(_do_assert_selector(selector))
+            return ToolResult(content=content[:12000], is_error=content.lower().startswith('error:'))
 
         return ToolResult(content=f'Unknown action: {action}', is_error=True)
 

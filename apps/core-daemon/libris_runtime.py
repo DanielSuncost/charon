@@ -2021,6 +2021,7 @@ def get_libris_swarm_state(state_dir: Path, project_root: Path, operation_id: st
         'prompt': op.get('prompt') or '',
         'status': op.get('status') or 'unknown',
         'budget_status': op.get('budget_status') or _evaluate_budget(op),
+        'candidate_topics_count': len(op.get('candidate_topics') or []),
         'coordinator': coordinator,
         'topics': topic_cards,
         'members': members,

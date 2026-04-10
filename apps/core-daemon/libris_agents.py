@@ -222,7 +222,6 @@ def _run_operation_controller(
     try:
         from libris_runtime import (
             get_operation_state,
-            infer_candidate_topics,
             save_candidate_topics,
             init_topic,
             update_topic_runtime,
@@ -261,22 +260,49 @@ def _run_operation_controller(
             waited += 3
 
         if not topics:
-            max_topics = int(((get_operation_state(state_dir, project_root, operation_id).get('budget_status') or {}).get('budget') or {}).get('max_topics') or 0) or max_topics_default
-            topics = infer_candidate_topics(prompt, limit=max_topics)
-            save_candidate_topics(
+            from tools import ToolContext
+            from clarify_tool import execute_clarify
+
+            question = (
+                'Libris could not confidently derive candidate research topics from your request: '
+                f'"{prompt[:220]}". What should it research?' 
+            )
+            choices = [
+                f'Focus strictly on the named topic: {prompt[:120]}',
+                'Narrow to core definitions, key papers, and major methods only',
+                'Narrow to one domain/application area before researching',
+                'Rewrite the topic in my own words / give a custom direction',
+            ]
+            clar_ctx = ToolContext(project_root=project_root, agent_id=coordinator.get('id', ''), state_dir=state_dir)
+            clar = execute_clarify({'action': 'ask', 'question': question, 'choices': choices}, clar_ctx)
+            clar_details = clar.details or {}
+            clar_id = str(clar_details.get('clarification_id') or '')
+            set_operation_status(
                 state_dir,
                 project_root,
                 operation_id,
-                topics,
-                plan_markdown='# Fallback candidate topic generation\n\nCoordinator did not save topics in time; using prompt-derived candidate leads.',
+                'awaiting_clarification',
+                'Coordinator did not produce candidate topics; waiting for user clarification.',
             )
             emit_agent_phase(
                 state_dir, project_root, operation_id,
                 agent_id=coordinator.get('id', ''), role='coordinator',
-                phase='ranking', status='running',
-                summary='Fallback candidate topics generated from the prompt.'
+                phase='awaiting_clarification', status='blocked',
+                summary='Waiting for targeted user clarification before selecting research topics.'
             )
-            append_operation_event(state_dir, project_root, operation_id, 'candidate_topics_fallback_generated', {'count': len(topics)})
+            append_operation_event(
+                state_dir,
+                project_root,
+                operation_id,
+                'clarification_requested',
+                {
+                    'clarification_id': clar_id,
+                    'reason': 'missing_candidate_topics',
+                    'question': question,
+                    'choices': choices,
+                },
+            )
+            return
 
         op = get_operation_state(state_dir, project_root, operation_id)
         budget = (op.get('budget_status') or {}).get('budget') or {}
