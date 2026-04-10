@@ -237,6 +237,9 @@ pub enum ChatMessage {
     Status { text: String },
     Error { text: String },
     Stderr { text: String },
+    /// A user message waiting in the queue (follow-up or steer).
+    /// `tag` is "queued" or "steering". Converted to User on delivery.
+    QueuedUser { text: String, tag: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -396,7 +399,7 @@ impl ChatState {
                 let msg = text.trim_start_matches("/steer ").trim();
                 if !msg.is_empty() {
                     let _ = self.backend.send_steer(msg);
-                    self.messages.push(ChatMessage::Status { text: format!("steer: {}", msg) });
+                    self.messages.push(ChatMessage::QueuedUser { text: msg.to_string(), tag: "steering".to_string() });
                 }
             } else {
                 self.transcript.push(format!("> {}", text));
@@ -406,7 +409,7 @@ impl ChatState {
             // During streaming, queue as follow-up
             let _ = self.backend.send_follow_up(&text);
             self.pending_queue.push(text.clone());
-            self.messages.push(ChatMessage::Status { text: format!("queued: {}", text) });
+            self.messages.push(ChatMessage::QueuedUser { text: text.clone(), tag: "queued".to_string() });
         } else {
             // Normal send
             self.transcript.push(format!("> {}", text));
@@ -912,20 +915,32 @@ impl ChatState {
                 // Backend acknowledged the follow-up; already tracked locally
             }
             "follow_up_delivered" => {
-                // Backend delivered a queued follow-up to the engine
+                // Convert the QueuedUser message to a normal User message
                 if let Some(msg) = self.pending_queue.first().cloned() {
                     self.pending_queue.remove(0);
-                    self.messages.push(ChatMessage::User { text: msg });
+                    // Find and convert the matching QueuedUser in messages
+                    for m in self.messages.iter_mut().rev() {
+                        if let ChatMessage::QueuedUser { text, tag } = m {
+                            if *tag == "queued" && *text == msg {
+                                *m = ChatMessage::User { text: msg.clone() };
+                                break;
+                            }
+                        }
+                    }
                 }
             }
             "steer_queued" => {
-                let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or("");
-                self.push_status(&format!("steering: {}", msg));
+                // Backend acknowledged — QueuedUser already in messages
             }
             "steer_delivered" => {
-                let skipped = v.get("skipped_tools").and_then(|x| x.as_u64()).unwrap_or(0);
-                if skipped > 0 {
-                    self.push_status(&format!("steered (skipped {} tool calls)", skipped));
+                // Convert the steering QueuedUser to a normal User message
+                for m in self.messages.iter_mut().rev() {
+                    if let ChatMessage::QueuedUser { text, tag } = m {
+                        if *tag == "steering" {
+                            *m = ChatMessage::User { text: text.clone() };
+                            break;
+                        }
+                    }
                 }
             }
             "done" => {

@@ -512,6 +512,14 @@ fn build_chat_visual_lines(app: &App, width: usize, variant: ChatLayoutVariant) 
             ChatMessage::Status { text } => push_chat_block(&mut visual_lines, &format!("  {}", text), width, style::Color::Yellow, None, 0),
             ChatMessage::Error { text } => push_chat_block(&mut visual_lines, &format!("  ✗ {}", text), width, style::Color::Rgb { r: 248, g: 113, b: 113 }, None, 0),
             ChatMessage::Stderr { text } => push_chat_block(&mut visual_lines, &format!("  stderr: {}", text), width, style::Color::Rgb { r: 248, g: 113, b: 113 }, None, 0),
+            ChatMessage::QueuedUser { text, tag } => {
+                // Render like a user message but with a dim italic tag prefix
+                let tagged = format!("  {}: {}", tag, text);
+                let queued_fg = style::Color::Rgb { r: 148, g: 163, b: 184 };
+                let queued_bg = style::Color::Rgb { r: 25, g: 30, b: 42 };
+                push_chat_block(&mut visual_lines, &tagged, width, queued_fg, Some(queued_bg), 1);
+                visual_lines.push(single_span_line(style::Color::Reset, None, String::new()));
+            }
         }
     }
     visual_lines
