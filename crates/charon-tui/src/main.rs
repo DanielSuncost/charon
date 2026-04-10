@@ -4353,6 +4353,7 @@ fn main() -> io::Result<()> {
     let mut back_buf = screen::ScreenBuf::new(outer_w, outer_h);
     let mut last_chat_msg_count: usize = 0;
     let mut last_cache_rebuild = Instant::now();
+    let mut last_snapshot = Instant::now();
     let mut was_streaming = false;
 
     'main: loop {
@@ -4462,7 +4463,7 @@ fn main() -> io::Result<()> {
                 let stream_ended = was_streaming && !app.chat.streaming;
                 let cache_age = now.duration_since(last_cache_rebuild);
                 let streaming_update = app.chat.streaming && chat_dirty
-                    && cache_age >= Duration::from_millis(100);
+                    && cache_age >= Duration::from_millis(200);
                 let content_changed = msg_changed || streaming_update || stream_ended
                     || native_input_dirty || force_all;
                 if msg_changed { last_chat_msg_count = msg_count; }
@@ -4501,12 +4502,16 @@ fn main() -> io::Result<()> {
                 stdout.flush()?;
             }
             needs_full_redraw = false;
-            if force_all || chat_dirty || native_input_dirty {
+            // Throttle native snapshot publishing — it rebuilds the entire visual
+            // cache from scratch which is expensive (11-19ms+). Only publish
+            // every 2 seconds, or immediately on force_all (view switch/resize).
+            if force_all || ((chat_dirty || native_input_dirty) && now.duration_since(last_snapshot) >= Duration::from_secs(2)) {
                 if let Some(server) = &native_session {
                     let self_sock = server.socket_path().to_string_lossy().to_string();
                     let (snap_w, snap_h) = server.requested_size().unwrap_or((outer_w, outer_h));
                     server.update_snapshot(build_native_session_snapshot(&mut app, snap_w.max(1), snap_h.max(1), Some(&self_sock)));
                 }
+                last_snapshot = now;
             }
             last_render = now;
             local_view_dirty = false;

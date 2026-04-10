@@ -84,6 +84,27 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
     metadata = params.get('metadata') or {}
     state_dir = ctx.state_dir or Path('.charon_state')
 
+    try:
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from worker_provider import ensure_worker_provider_or_request_clarification
+        provider_status = ensure_worker_provider_or_request_clarification(state_dir, ctx=ctx, purpose='shades')
+        if not provider_status.get('ok'):
+            choices = provider_status.get('available_providers') or []
+            clarification = provider_status.get('clarification') or {}
+            cid = clarification.get('clarification_id') or ''
+            question = provider_status.get('question') or 'No usable provider is configured for shades.'
+            return ToolResult(
+                content=(
+                    f'{question}\n'
+                    + (f'Clarification ID: {cid}\n' if cid else '')
+                    + ('Choices:\n' + '\n'.join(f'- {c}' for c in choices) if choices else 'No provider options detected.')
+                ),
+                is_error=True,
+                details=provider_status,
+            )
+    except Exception:
+        pass
+
     # 1. Create shade agent
     try:
         sys.path.insert(0, str(Path(__file__).parent.parent))
