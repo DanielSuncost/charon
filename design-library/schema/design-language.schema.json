@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "design-library/schema/design-language.schema.json",
+  "title": "Design Language",
+  "type": "object",
+  "required": ["design_language_id", "name", "description"],
+  "properties": {
+    "design_language_id": { "type": "string" },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "traits": { "type": "array", "items": { "type": "string" } },
+    "anti_traits": { "type": "array", "items": { "type": "string" } },
+    "representative_example_ids": { "type": "array", "items": { "type": "string" } },
+    "related_pattern_ids": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": true
+}

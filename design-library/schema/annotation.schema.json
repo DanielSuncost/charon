@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "design-library/schema/annotation.schema.json",
+  "title": "Annotation",
+  "type": "object",
+  "required": ["annotation_id", "example_id"],
+  "properties": {
+    "annotation_id": { "type": "string" },
+    "example_id": { "type": "string" },
+    "visual_style_tags": { "type": "array", "items": { "type": "string" } },
+    "interaction_tags": { "type": "array", "items": { "type": "string" } },
+    "component_tags": { "type": "array", "items": { "type": "string" } },
+    "layout_tags": { "type": "array", "items": { "type": "string" } },
+    "ux_tags": { "type": "array", "items": { "type": "string" } },
+    "motion_tags": { "type": "array", "items": { "type": "string" } },
+    "design_language_tags": { "type": "array", "items": { "type": "string" } },
+    "strengths": { "type": "array", "items": { "type": "string" } },
+    "weaknesses": { "type": "array", "items": { "type": "string" } },
+    "novelty": { "type": ["number", "null"], "minimum": 0, "maximum": 10 },
+    "production_likelihood": { "type": ["number", "null"], "minimum": 0, "maximum": 10 },
+    "annotation_confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 10 },
+    "annotator": { "type": ["string", "null"] },
+    "annotated_at": { "type": ["string", "null"] }
+  },
+  "additionalProperties": true
+}

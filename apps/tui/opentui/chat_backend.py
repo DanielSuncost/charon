@@ -3591,6 +3591,48 @@ class ChatBackend:
                     emit({'type': 'error', 'error': f'Clarification answer failed: {e}', 'request_id': request_id})
                 return
 
+            if command.startswith('/idea '):
+                text = command[6:].strip()
+                if not text:
+                    emit({'type': 'error', 'error': 'Usage: /idea <description>', 'request_id': request_id})
+                    return
+                try:
+                    import user_model_structured as ums
+                    # Get message_seq from context store if available
+                    msg_seq = -1
+                    agent_id = self._active_agent_id or ''
+                    if agent_id and self.engine:
+                        msg_seq = len(self.engine.messages) - 1
+                    idea = ums.record_idea(
+                        STATE_DIR,
+                        summary=text,
+                        session_id=agent_id,
+                        message_seq=msg_seq,
+                        message_text=text,
+                        source='explicit',
+                    )
+                    emit({'type': 'status', 'message': f'Recorded idea: {idea["summary"]} ({idea["id"]})', 'request_id': request_id})
+                except Exception as e:
+                    emit({'type': 'error', 'error': f'Failed to record idea: {e}', 'request_id': request_id})
+                return
+
+            if command == '/ideas':
+                try:
+                    import user_model_structured as ums
+                    ideas = ums.list_ideas(STATE_DIR)
+                    if not ideas:
+                        emit({'type': 'status', 'message': 'No ideas recorded yet. Use /idea <text> to capture one.', 'request_id': request_id})
+                    else:
+                        lines = [f'Ideas ({len(ideas)} total):']
+                        for i, idea in enumerate(ideas, 1):
+                            tag = f' [{idea.get("category", "")}]' if idea.get('category', 'general') != 'general' else ''
+                            src = '⚡' if idea.get('source') == 'auto' else '✏'
+                            lines.append(f'  {src} #{i}{tag}: {idea.get("summary", "?")}  ({idea.get("id", "?")})')
+                        emit({'type': 'status', 'message': '\n'.join(lines), 'request_id': request_id})
+                except Exception as e:
+                    emit({'type': 'error', 'error': f'Failed to list ideas: {e}', 'request_id': request_id})
+                return
+
             if command.startswith('/setup '):
                 rest = command[7:].strip()
                 self._run_setup_command(rest, request_id)

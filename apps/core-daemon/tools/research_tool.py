@@ -423,8 +423,14 @@ def execute_research(params: dict, ctx: ToolContext) -> ToolResult:
 
         if action == 'start_autonomous_project':
             prompt = str(params.get('prompt') or '').strip()
+            op_id = str(params.get('operation_id') or '').strip()
+            if not prompt and op_id:
+                existing = get_operation_state(state_dir, ctx.project_root, op_id)
+                if not existing:
+                    return ToolResult(content=f'No operation found: {op_id}', is_error=True)
+                prompt = str(existing.get('prompt') or '').strip()
             if not prompt:
-                return ToolResult(content='Error: prompt is required.', is_error=True)
+                return ToolResult(content='Error: prompt is required (or provide operation_id for an existing operation with a stored prompt).', is_error=True)
             from libris_agents import start_autonomous_libris_research
             res = start_autonomous_libris_research(
                 state_dir,

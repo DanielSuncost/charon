@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "design-library/schema/example.schema.json",
+  "title": "Example",
+  "type": "object",
+  "required": [
+    "example_id",
+    "source_id",
+    "title",
+    "source_url",
+    "captured_at",
+    "surface_type",
+    "platform",
+    "summary",
+    "quality_score",
+    "status"
+  ],
+  "properties": {
+    "example_id": { "type": "string" },
+    "source_id": { "type": "string" },
+    "title": { "type": "string" },
+    "source_url": { "type": "string" },
+    "canonical_url": { "type": ["string", "null"] },
+    "creator": { "type": ["string", "null"] },
+    "product_or_brand": { "type": ["string", "null"] },
+    "captured_at": { "type": "string" },
+    "surface_type": {
+      "type": "string",
+      "enum": [
+        "landing_page",
+        "dashboard",
+        "settings",
+        "onboarding",
+        "auth",
+        "profile",
+        "search",
+        "feed",
+        "editor",
+        "e_commerce",
+        "mobile_screen",
+        "marketing_site",
+        "data_viz",
+        "form",
+        "nav_system",
+        "modal_flow",
+        "unknown"
+      ]
+    },
+    "platform": {
+      "type": "string",
+      "enum": ["web", "ios", "android", "desktop", "responsive", "unknown"]
+    },
+    "image_paths": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "video_paths": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "thumbnail_path": { "type": ["string", "null"] },
+    "raw_text": { "type": ["string", "null"] },
+    "summary": { "type": "string" },
+    "why_notable": { "type": ["string", "null"] },
+    "quality_score": { "type": "number", "minimum": 0, "maximum": 10 },
+    "training_candidate": { "type": "boolean" },
+    "status": {
+      "type": "string",
+      "enum": ["inbox", "annotated", "pattern_extracted", "shortlisted", "approved", "rejected", "duplicate"]
+    }
+  },
+  "additionalProperties": true
+}

@@ -223,7 +223,7 @@ def ensure_worker_provider_or_request_clarification(state_dir: Path, *, ctx=None
     clarification = None
     if ctx is not None:
         try:
-            from clarify_tool import execute_clarify
+            from tools.clarify_tool import execute_clarify
             pending_path = Path(state_dir) / 'clarifications.json'
             existing = None
             if pending_path.exists():
