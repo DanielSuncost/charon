@@ -416,6 +416,49 @@ def _build_coordination(state_dir: Path, agent_id: str) -> str:
     return '\n'.join(lines) if lines else ''
 
 
+def _build_fleet_context() -> str:
+    """Layer 7b: Remote fleet status — gives the LLM awareness of remote agents."""
+    try:
+        from fleet_registry import load_fleet
+        from fleet_sync import get_cached_fleet_status
+    except ImportError:
+        return ''
+
+    fleet = load_fleet()
+    servers = fleet.get('servers', [])
+    if not servers:
+        return ''
+
+    status = get_cached_fleet_status()
+    lines = ['## Active Fleet']
+
+    for server in servers:
+        sid = server.get('id', server.get('host', ''))
+        server_info = status.get(sid, {})
+        online = server_info.get('online', False)
+        sessions = server_info.get('sessions', {})
+
+        for agent_cfg in server.get('agents', []):
+            aname = agent_cfg.get('name', '')
+            sess = sessions.get(aname, {})
+            astatus = sess.get('status', 'offline') if online else 'offline'
+            spec = agent_cfg.get('specialization', '')
+            project = agent_cfg.get('project', '')
+            parts = [f'Remote: {aname} @ {sid} ({astatus})']
+            if spec:
+                parts.append(f'specialist: {spec}')
+            if project:
+                parts.append(f'project: {project}')
+            lines.append('- ' + ', '.join(parts))
+
+    if len(lines) <= 1:
+        return ''
+
+    lines.append('')
+    lines.append('Use FleetStatus, FleetSend, and FleetHistory tools to interact with remote agents.')
+    return '\n'.join(lines)
+
+
 def _build_tools(tools: list[dict] | None = None) -> str:
     """Layer 8: Available tools + guidelines."""
     tool_defs = tools or ALL_TOOL_DEFS
@@ -561,6 +604,12 @@ def build_system_prompt(
             parts.append(block)
 
     # Layer 7: Shade contract is already in identity block for shades
+
+    # Layer 7b: Fleet status (skip for shades)
+    if not is_shade:
+        block = _build_fleet_context()
+        if block:
+            parts.append(block)
 
     # Layer 8: Tools + guidelines
     parts.append(_build_tools(tools))

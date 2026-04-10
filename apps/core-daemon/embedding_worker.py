@@ -6,16 +6,20 @@ import json
 import os
 import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 MODEL_NAME = os.environ.get('CHARON_EMBED_MODEL', 'BAAI/bge-base-en-v1.5')
 MODEL_DEVICE = os.environ.get('CHARON_EMBED_DEVICE', '').strip() or None
+IDLE_TIMEOUT_SECS = max(15, int(os.environ.get('CHARON_EMBED_IDLE_SECS', '120') or '120'))
 
 _model = None
 _model_dim: int | None = None
 _model_lock = threading.Lock()
+_last_activity = time.monotonic()
+_activity_lock = threading.Lock()
 
 
 def _get_model():
@@ -39,7 +43,19 @@ def get_dim() -> int:
     return int(_model_dim or 0)
 
 
+def touch_activity() -> None:
+    global _last_activity
+    with _activity_lock:
+        _last_activity = time.monotonic()
+
+
+def idle_for_seconds() -> float:
+    with _activity_lock:
+        return max(0.0, time.monotonic() - _last_activity)
+
+
 def embed(texts: list[str]) -> list[list[float]]:
+    touch_activity()
     model = _get_model()
     arr = model.encode(texts, normalize_embeddings=True)
     return [e.tolist() for e in arr]
@@ -58,6 +74,7 @@ class Handler(BaseHTTPRequestHandler):
         return
 
     def do_GET(self):
+        touch_activity()
         if self.path == '/health':
             self._send(200, {'ok': True, 'model': MODEL_NAME, 'device': MODEL_DEVICE or 'auto'})
             return
@@ -67,6 +84,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {'error': 'not found'})
 
     def do_POST(self):
+        touch_activity()
         if self.path != '/embed':
             self._send(404, {'error': 'not found'})
             return
@@ -103,6 +121,19 @@ def main() -> int:
     port = int(args.port or _find_free_port())
 
     server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+
+    def _idle_watch() -> None:
+        while True:
+            time.sleep(5.0)
+            if idle_for_seconds() >= IDLE_TIMEOUT_SECS:
+                try:
+                    server.shutdown()
+                except Exception:
+                    pass
+                return
+
+    threading.Thread(target=_idle_watch, daemon=True).start()
+
     meta = {
         'pid': os.getpid(),
         'host': '127.0.0.1',

@@ -82,9 +82,16 @@ pub fn render_border_colored<W: Write>(
     Ok(())
 }
 
-fn scrolled_cell<'a>(terminal: &'a TerminalState, viewport_scroll: usize, col: u16, row: u16) -> Option<&'a crate::terminal::Cell> {
+fn scrolled_cell<'a>(
+    terminal: &'a TerminalState,
+    viewport_scroll: usize,
+    visible_rows: u16,
+    col: u16,
+    row: u16,
+) -> Option<&'a crate::terminal::Cell> {
     let total_rows = terminal.scrollback.len() + terminal.height as usize;
-    let render_row = total_rows.saturating_sub(viewport_scroll + terminal.height as usize) + row as usize;
+    let start_row = total_rows.saturating_sub(viewport_scroll + visible_rows as usize);
+    let render_row = start_row + row as usize;
     if render_row < terminal.scrollback.len() {
         let line = terminal.scrollback.get(render_row)?;
         line.cells.get(col as usize)
@@ -131,7 +138,7 @@ pub fn render_terminal<W: Write>(
 
         for col in 0..render_w {
             let default_cell = crate::terminal::Cell::default();
-            let cell = scrolled_cell(terminal, viewport_scroll, col, row).unwrap_or(&default_cell);
+            let cell = scrolled_cell(terminal, viewport_scroll, render_h, col, row).unwrap_or(&default_cell);
 
             // Resolve colors (handle inverse)
             let (fg, bg) = if cell.attrs.inverse {

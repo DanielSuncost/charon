@@ -130,6 +130,7 @@ def _default_alert_policy() -> dict[str, Any]:
         'alert_on_recovery': True,
         'alert_on_success': False,
         'dedupe_state_changes': True,
+        'webhook_url': '',
     }
 
 
@@ -307,6 +308,58 @@ def update_automation_doc(state_dir: Path, automation_id: str, mutate) -> dict[s
     return doc
 
 
+def set_automation_webhook(state_dir: Path, automation_id: str, webhook_url: str) -> dict[str, Any]:
+    url = str(webhook_url or '').strip()
+    doc = update_automation_doc(
+        state_dir,
+        automation_id,
+        lambda d: d.__setitem__('alert_policy', {**(d.get('alert_policy') or {}), 'webhook_url': url}),
+    )
+    if doc:
+        append_automation_event(state_dir, automation_id, 'automation_webhook_updated', summary='Updated automation webhook URL.', payload={'webhook_url': url})
+    return doc
+
+
+def reconcile_stale_automation_runs(state_dir: Path, *, stale_after_seconds: int = 300) -> list[str]:
+    recovered: list[str] = []
+    now = _now_ts()
+    for item in list_automations(state_dir):
+        automation_id = str(item.get('automation_id') or '')
+        if not automation_id:
+            continue
+        active_runs = int(item.get('active_run_count') or 0)
+        started_at = str(item.get('current_run_started_at') or '')
+        if active_runs <= 0 or not started_at:
+            continue
+        try:
+            started_ts = datetime.fromisoformat(started_at.replace('Z', '+00:00')).timestamp()
+        except Exception:
+            started_ts = 0.0
+        if started_ts <= 0 or (now - started_ts) < stale_after_seconds:
+            continue
+
+        def _mut(doc: dict[str, Any]) -> None:
+            doc['active_run_count'] = 0
+            doc['current_run_started_at'] = ''
+            if str(doc.get('status') or '') == 'stopping' and doc.get('stop_requested'):
+                doc['status'] = 'stopped'
+                doc['next_run_ts'] = 0
+                doc['next_run_at'] = ''
+            elif str(doc.get('mode') or '') == 'continuous':
+                doc['status'] = 'active'
+                doc['next_run_ts'] = _now_ts()
+                doc['next_run_at'] = _now_iso()
+            else:
+                next_ts, next_iso = compute_next_run(_now_ts(), str(doc.get('mode') or 'scheduled'), doc.get('schedule') or {})
+                doc['status'] = 'active'
+                doc['next_run_ts'] = next_ts or 0
+                doc['next_run_at'] = next_iso or ''
+        update_automation_doc(state_dir, automation_id, _mut)
+        append_automation_event(state_dir, automation_id, 'stale_run_recovered', summary='Recovered stale automation run after restart.', payload={'stale_after_seconds': stale_after_seconds})
+        recovered.append(automation_id)
+    return recovered
+
+
 def heartbeat_automation(state_dir: Path, automation_id: str, summary: str = '') -> dict[str, Any]:
     doc = update_automation_doc(state_dir, automation_id, lambda d: d.__setitem__('last_heartbeat_at', _now_iso()))
     if summary:
@@ -359,6 +412,20 @@ def mark_run_started(state_dir: Path, automation_id: str) -> dict[str, Any]:
         doc['current_run_started_at'] = _now_iso()
         doc['last_heartbeat_at'] = _now_iso()
     return update_automation_doc(state_dir, automation_id, _mut)
+
+
+def _deliver_webhook(webhook_url: str, payload: dict[str, Any]) -> tuple[bool, str]:
+    url = str(webhook_url or '').strip()
+    if not url:
+        return False, 'missing_webhook_url'
+    try:
+        import httpx
+        resp = httpx.post(url, json=payload, timeout=10)
+        if 200 <= resp.status_code < 300:
+            return True, ''
+        return False, f'http_{resp.status_code}'
+    except Exception as e:
+        return False, str(e)
 
 
 def finalize_run(
@@ -429,7 +496,31 @@ def finalize_run(
     if alert_policy.get('dedupe_state_changes', True) and current_state == last_state and not ok:
         should_alert = False
     if should_alert:
-        append_automation_event(state_dir, automation_id, 'automation_alert', summary=summary, payload={'run_id': run_id, 'state': current_state, 'error': error})
+        alert_payload = {'run_id': run_id, 'state': current_state, 'error': error}
+        append_automation_event(state_dir, automation_id, 'automation_alert', summary=summary, payload=alert_payload)
+        webhook_url = str(alert_policy.get('webhook_url') or '').strip()
+        if webhook_url:
+            webhook_payload = {
+                'automation_id': automation_id,
+                'run_id': run_id,
+                'title': doc.get('title') or '',
+                'kind': doc.get('kind') or '',
+                'mode': doc.get('mode') or '',
+                'state': current_state,
+                'ok': ok,
+                'summary': summary,
+                'error': error,
+                'details': details or {},
+                'ts': row['ts'],
+            }
+            delivered, webhook_error = _deliver_webhook(webhook_url, webhook_payload)
+            append_automation_event(
+                state_dir,
+                automation_id,
+                'automation_webhook_delivered' if delivered else 'automation_webhook_failed',
+                summary='Delivered automation webhook.' if delivered else f'Automation webhook failed: {webhook_error}',
+                payload={'webhook_url': webhook_url, 'run_id': run_id, 'error': webhook_error},
+            )
     update_automation_doc(state_dir, automation_id, lambda d: d.__setitem__('last_alert_state', current_state))
     return row
 
@@ -463,6 +554,8 @@ __all__ = [
     'compute_next_run',
     'create_automation',
     'heartbeat_automation',
+    'set_automation_webhook',
+    'reconcile_stale_automation_runs',
     'set_automation_status',
     'pause_automation',
     'resume_automation',
