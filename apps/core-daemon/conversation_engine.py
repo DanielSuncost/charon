@@ -543,6 +543,40 @@ class ConversationEngine:
         """Whether the lossless context store is active."""
         return self._lossless_enabled and self._ctx_db is not None
 
+    @staticmethod
+    def _repair_orphaned_tool_calls(messages: list) -> list:
+        """Patch orphaned tool calls that have no matching tool result.
+
+        This happens when the process crashes between persisting an assistant
+        message with tool_calls and persisting the tool results.  The LLM API
+        requires every function_call to have a matching function_call_output,
+        so we inject a synthetic error result for any orphan.
+        """
+        # Collect all tool_call_ids that have results
+        answered: set[str] = set()
+        for m in messages:
+            if getattr(m, 'role', None) == 'tool_result' and getattr(m, 'tool_call_id', None):
+                answered.add(m.tool_call_id)
+
+        # Find orphaned tool_calls and inject synthetic results after them
+        repaired: list = []
+        for m in messages:
+            repaired.append(m)
+            if getattr(m, 'role', None) == 'assistant' and getattr(m, 'tool_calls', None):
+                for tc in m.tool_calls:
+                    tc_id = getattr(tc, 'id', None)
+                    if tc_id and tc_id not in answered:
+                        from providers import Message as _Msg
+                        repaired.append(_Msg(
+                            role='tool_result',
+                            content='(interrupted — tool was not executed)',
+                            tool_call_id=tc_id,
+                            tool_name=getattr(tc, 'name', 'unknown'),
+                            is_error=True,
+                        ))
+                        answered.add(tc_id)
+        return repaired
+
     def _assemble_context(self) -> list[Message]:
         """Assemble messages from the context store for the LLM call.
 
@@ -552,7 +586,10 @@ class ConversationEngine:
         """
         if not (self._lossless_enabled and self._ctx_db and self._ctx_assembler
                 and self.agent_id):
-            return self.messages
+            repaired = self._repair_orphaned_tool_calls(self.messages)
+            if len(repaired) != len(self.messages):
+                self.messages = repaired  # persist the fix
+            return repaired
 
         try:
             result = self._ctx_assembler.assemble(
@@ -568,9 +605,10 @@ class ConversationEngine:
             else:
                 self._recall_guidance = None
 
-            return result.messages if result.messages else self.messages
+            msgs = result.messages if result.messages else self.messages
+            return self._repair_orphaned_tool_calls(msgs)
         except Exception:
-            return self.messages
+            return self._repair_orphaned_tool_calls(self.messages)
 
     def _get_system_prompt(self) -> str:
         """Get system prompt with optional recall guidance appended."""
