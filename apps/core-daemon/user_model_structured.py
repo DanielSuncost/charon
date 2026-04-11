@@ -174,6 +174,28 @@ def save_structured(state_dir: Path, model: dict) -> None:
 
 # ── Ideas ──────────────────────────────────────────────────────────
 
+_CATEGORY_KEYWORDS = {
+    'feature': ('add ', 'implement', 'enable', 'support', 'should be able to',
+                'need a', 'want a', 'we need', 'button', 'panel', 'pane',
+                'widget', 'command', 'shortcut', 'ui ', 'ux ', 'display'),
+    'project': ('build ', 'create ', 'new project', 'start a', 'launch',
+                'app ', 'application', 'service', 'platform', 'system'),
+    'improvement': ('improve', 'optimize', 'faster', 'better', 'fix ',
+                    'reduce', 'refactor', 'simplify', 'clean up', 'polish',
+                    'performance', 'latency', 'lag', 'slow'),
+}
+
+
+def _auto_categorize(text: str) -> str:
+    """Guess idea category from keywords. Returns 'feature', 'project', 'improvement', or 'general'."""
+    lower = text.lower()
+    scores: dict[str, int] = {}
+    for cat, keywords in _CATEGORY_KEYWORDS.items():
+        scores[cat] = sum(1 for kw in keywords if kw in lower)
+    best = max(scores, key=scores.get)  # type: ignore[arg-type]
+    return best if scores[best] > 0 else 'general'
+
+
 def record_idea(
     state_dir: Path,
     *,
@@ -181,11 +203,16 @@ def record_idea(
     session_id: str = '',
     message_seq: int = -1,
     message_text: str = '',
-    category: str = 'general',
+    category: str = '',
     source: str = 'explicit',
 ) -> dict:
-    """Record an idea in the user model. Returns the new idea entry."""
+    """Record an idea in the user model. Returns the new idea entry.
+
+    If category is empty, auto-categorizes from the summary text.
+    """
     import uuid
+    if not category:
+        category = _auto_categorize(summary)
     idea = {
         'id': f'idea-{uuid.uuid4().hex[:8]}',
         'summary': summary.strip()[:240],
@@ -203,6 +230,20 @@ def record_idea(
     ideas.append(idea)
     model['ideas'] = ideas
     save_structured(state_dir, model)
+
+    # Cross-link: also create a backlog goal if goal_runtime is available
+    try:
+        from goal_runtime import ingest_idea as _ingest_goal
+        _ingest_goal(
+            state_dir,
+            agent_id=session_id or 'global',
+            project='charon',
+            text=summary,
+            priority='normal',
+        )
+    except Exception:
+        pass
+
     return idea
 
 

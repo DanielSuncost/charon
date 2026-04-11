@@ -12,6 +12,13 @@ EXAMPLES_INBOX = LIB / "examples" / "inbox"
 INDEX_BY_SOURCE = LIB / "indexes" / "examples-by-source.json"
 
 
+def normalize_url(url: str | None) -> str:
+    url = (url or "").strip()
+    url = re.sub(r"#.*$", "", url)
+    url = re.sub(r"\?.*$", "", url)
+    return url.rstrip("/")
+
+
 def slugify(text: str) -> str:
     text = (text or "").strip().lower()
     text = re.sub(r"https?://\S+", "", text)
@@ -56,8 +63,43 @@ def next_example_id(source_id: str, captured_at: str, raw_text: str) -> str:
     return f"{prefix}_{seq:03d}"
 
 
+def iter_example_files():
+    for subdir in ["inbox", "annotated", "approved", "rejected"]:
+        base = LIB / "examples" / subdir
+        if base.exists():
+            yield from sorted(base.glob("*.json"))
+
+
+def find_existing_by_url(url: str):
+    target = normalize_url(url)
+    if not target:
+        return None
+    for path in iter_example_files():
+        try:
+            data = load_json(path, {})
+        except Exception:
+            continue
+        source_url = normalize_url(data.get("source_url"))
+        canonical_url = normalize_url(data.get("canonical_url"))
+        if target and (target == source_url or target == canonical_url):
+            return {"path": path, "record": data}
+    return None
+
+
 def ingest(args):
     ensure_source(args.source_id)
+    source_url = normalize_url(args.source_url)
+    canonical_url = normalize_url(args.canonical_url or args.source_url)
+    existing = find_existing_by_url(canonical_url) or find_existing_by_url(source_url)
+    if existing:
+        print(json.dumps({
+            "ok": True,
+            "duplicate": True,
+            "example_id": existing["record"].get("example_id"),
+            "path": str(existing["path"].relative_to(ROOT))
+        }, indent=2))
+        return
+
     captured_at = args.captured_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     title = infer_title(args.title or args.raw_text, "Untitled example")
     example_id = next_example_id(args.source_id, captured_at, args.raw_text or title)
@@ -65,8 +107,8 @@ def ingest(args):
         "example_id": example_id,
         "source_id": args.source_id,
         "title": title,
-        "source_url": args.source_url,
-        "canonical_url": args.canonical_url or args.source_url,
+        "source_url": source_url,
+        "canonical_url": canonical_url,
         "creator": args.creator,
         "product_or_brand": args.product_or_brand,
         "captured_at": captured_at,

@@ -406,6 +406,138 @@ fn draw_auth(buf: &mut ScreenBuf, app: &App, w: u16, h: u16) {
     draw_popup(buf, popup_x, popup_y, popup_w, popup_h, "authentication", &lines);
 }
 
+fn draw_info_pane(buf: &mut ScreenBuf, app: &App, w: u16, h: u16) {
+    let pane_w = (w.saturating_sub(8)).min(44).max(28);
+    let pane_h = h.saturating_sub(8).min(30).max(10);
+    let px = w.saturating_sub(pane_w + 3);
+    let py: u16 = 3;
+
+    let tab = app.chat.info_pane_tab;
+    let tabs = ["Outcomes", "Goals", "Model", "Ideas"];
+    let tab_line: String = tabs.iter().enumerate().map(|(i, t)| {
+        if i == tab { format!("[{}]", t) } else { t.to_string() }
+    }).collect::<Vec<_>>().join(" ");
+
+    let info = app.chat.refresh_payload.as_ref()
+        .and_then(|p| p.get("session_info"));
+    let dim = Color::Rgb { r: 100, g: 100, b: 120 };
+    let fg = Color::Rgb { r: 212, g: 196, b: 168 };
+    let hi = Color::Rgb { r: 196, g: 181, b: 253 };
+    let bg = Color::Rgb { r: 15, g: 15, b: 25 };
+
+    // Draw pane background + border
+    let area = Rect { x: px + 1, y: py + 1, width: pane_w.saturating_sub(2), height: pane_h.saturating_sub(2) };
+    render_border(buf, area, "info (Ctrl+I cycle, Ctrl+P close)", true);
+    for row in 0..area.height {
+        buf.fill(area.y + row, area.x, area.x + area.width, ' ', dim, bg);
+    }
+
+    // Tab bar
+    buf.put_str(area.x, area.y, &tab_line, hi, bg, false);
+    let used = tab_line.chars().count() as u16;
+    buf.fill(area.y, area.x + used, area.x + area.width, ' ', dim, bg);
+    // Separator
+    for x in area.x..area.x + area.width {
+        buf.set(x, area.y + 1, Cell { ch: '─', fg: dim, bg, bold: false });
+    }
+
+    let content_y = area.y + 2;
+    let content_h = area.height.saturating_sub(2);
+    let cw = area.width as usize;
+
+    match tab {
+        0 => {
+            // Outcomes
+            let tasks = info.and_then(|i| i.get("tasks")).and_then(|v| v.as_array());
+            let mut row = 0u16;
+            if let Some(tasks) = tasks {
+                for task in tasks.iter().rev().take(content_h as usize) {
+                    let title = task.get("title").and_then(|v| v.as_str()).unwrap_or("task");
+                    let status = task.get("status").and_then(|v| v.as_str()).unwrap_or("active");
+                    let icon = if status == "completed" { "✓" } else { "○" };
+                    let line: String = format!("{} {}", icon, title).chars().take(cw).collect();
+                    buf.put_str(area.x, content_y + row, &line, fg, bg, false);
+                    row += 1;
+                }
+            }
+            // Provisional outcomes
+            for po in app.chat.provisional_outcomes.iter().rev() {
+                if row >= content_h { break; }
+                let line: String = format!("◌ {}", po.summary).chars().take(cw).collect();
+                buf.put_str(area.x, content_y + row, &line, dim, bg, false);
+                row += 1;
+            }
+            if row == 0 {
+                buf.put_str(area.x, content_y, "No outcomes yet.", dim, bg, false);
+            }
+        }
+        1 => {
+            // Goals
+            let goals = info.and_then(|i| i.get("goals")).and_then(|v| v.as_array());
+            let mut row = 0u16;
+            if let Some(goals) = goals {
+                for goal in goals.iter().take(content_h as usize) {
+                    let title = goal.get("title").and_then(|v| v.as_str()).unwrap_or("goal");
+                    let status = goal.get("status").and_then(|v| v.as_str()).unwrap_or("backlog");
+                    let line: String = format!("• {} [{}]", title, status).chars().take(cw).collect();
+                    buf.put_str(area.x, content_y + row, &line, fg, bg, false);
+                    row += 1;
+                }
+            }
+            if row == 0 {
+                buf.put_str(area.x, content_y, "No goals yet.", dim, bg, false);
+            }
+        }
+        2 => {
+            // User Model
+            let model_text = info.and_then(|i| i.get("user_model")).and_then(|v| v.as_str()).unwrap_or("");
+            if model_text.is_empty() {
+                buf.put_str(area.x, content_y, "No user model yet.", dim, bg, false);
+            } else {
+                for (i, line) in model_text.lines().take(content_h as usize).enumerate() {
+                    let truncated: String = line.chars().take(cw).collect();
+                    buf.put_str(area.x, content_y + i as u16, &truncated, fg, bg, false);
+                }
+            }
+        }
+        3 => {
+            // Ideas
+            let ideas = info.and_then(|i| i.get("ideas")).and_then(|v| v.as_array());
+            let mut row = 0u16;
+            if let Some(ideas) = ideas {
+                for (i, idea) in ideas.iter().rev().take(content_h as usize).enumerate() {
+                    let summary = idea.get("summary").and_then(|v| v.as_str()).unwrap_or("?");
+                    let cat = idea.get("category").and_then(|v| v.as_str()).unwrap_or("");
+                    let src = if idea.get("source").and_then(|v| v.as_str()) == Some("auto") { "⚡" } else { "✏" };
+                    let tag = if !cat.is_empty() && cat != "general" { format!("[{}] ", cat) } else { String::new() };
+                    let line: String = format!("{} #{} {}{}", src, i + 1, tag, summary).chars().take(cw).collect();
+                    buf.put_str(area.x, content_y + row, &line, fg, bg, false);
+                    row += 1;
+                }
+            }
+            // Also show local pending queue if any
+            if !app.chat.pending_queue.is_empty() {
+                if row > 0 && row < content_h {
+                    for x in area.x..area.x + area.width {
+                        buf.set(x, content_y + row, Cell { ch: '─', fg: dim, bg, bold: false });
+                    }
+                    row += 1;
+                }
+                for msg in &app.chat.pending_queue {
+                    if row >= content_h { break; }
+                    let line: String = format!("⏳ {}", msg).chars().take(cw).collect();
+                    buf.put_str(area.x, content_y + row, &line, Color::Rgb { r: 148, g: 163, b: 184 }, bg, false);
+                    row += 1;
+                }
+            }
+            if row == 0 {
+                buf.put_str(area.x, content_y, "No ideas yet. Use /idea <text>.", dim, bg, false);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Render the full F1 chat view into the screen buffer.
 pub fn draw(buf: &mut ScreenBuf, app: &App, w: u16, h: u16, cache: &F1MonoCache) {
     let rowing = chat_view::chat_rowing_active(app);
@@ -433,6 +565,9 @@ pub fn draw(buf: &mut ScreenBuf, app: &App, w: u16, h: u16, cache: &F1MonoCache)
         draw_context_menu(buf, ctx, w, h);
     }
     // Overlays
+    if app.chat.info_pane_open {
+        draw_info_pane(buf, app, w, h);
+    }
     if app.chat.approval_open() {
         draw_approval(buf, app, w, h);
     }

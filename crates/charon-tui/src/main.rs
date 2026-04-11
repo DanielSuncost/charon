@@ -4665,10 +4665,10 @@ fn main() -> io::Result<()> {
                                     needs_full_redraw = true;
                                 }
                             } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('i') {
-                                app.chat.info_pane_tab = (app.chat.info_pane_tab + 1) % 3;
+                                app.chat.info_pane_tab = (app.chat.info_pane_tab + 1) % 4;
                                 local_view_dirty = true;
                             } else if key.code == KeyCode::BackTab {
-                                app.chat.info_pane_tab = (app.chat.info_pane_tab + 2) % 3;
+                                app.chat.info_pane_tab = (app.chat.info_pane_tab + 2) % 4;
                                 local_view_dirty = true;
                             } else if app.chat.info_pane_open
                                 && !app.chat.copy_mode
@@ -4676,7 +4676,7 @@ fn main() -> io::Result<()> {
                                 && !app.chat.auth_open()
                                 && !app.chat.menu_open()
                                 && key.code == KeyCode::Right {
-                                app.chat.info_pane_tab = (app.chat.info_pane_tab + 1) % 3;
+                                app.chat.info_pane_tab = (app.chat.info_pane_tab + 1) % 4;
                                 local_view_dirty = true;
                             } else if app.chat.info_pane_open
                                 && !app.chat.copy_mode
@@ -4684,7 +4684,7 @@ fn main() -> io::Result<()> {
                                 && !app.chat.auth_open()
                                 && !app.chat.menu_open()
                                 && key.code == KeyCode::Left {
-                                app.chat.info_pane_tab = (app.chat.info_pane_tab + 2) % 3;
+                                app.chat.info_pane_tab = (app.chat.info_pane_tab + 2) % 4;
                                 local_view_dirty = true;
                             } else if app.chat.copy_mode {
                                 if key.code == KeyCode::Esc {
@@ -4851,12 +4851,12 @@ fn main() -> io::Result<()> {
                                     needs_full_redraw = true;
                                 }
                                 KeyCode::Tab => {
-                                    app.dashboard.focus_row = (app.dashboard.focus_row + 1) % 3;
+                                    app.dashboard.focus_row = (app.dashboard.focus_row + 1) % 4;
                                     app.dashboard.focus_col = 0;
                                     needs_full_redraw = true;
                                 }
                                 KeyCode::BackTab => {
-                                    app.dashboard.focus_row = (app.dashboard.focus_row + 2) % 3;
+                                    app.dashboard.focus_row = (app.dashboard.focus_row + 2) % 4;
                                     app.dashboard.focus_col = 0;
                                     needs_full_redraw = true;
                                 }
