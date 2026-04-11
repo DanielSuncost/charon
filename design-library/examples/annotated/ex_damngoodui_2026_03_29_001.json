@@ -15,10 +15,41 @@
   "raw_text": "Clean set of interactions by @kail_designs",
   "summary": "Short interaction showcase featuring polished UI transitions and refined motion.",
   "why_notable": "High interaction polish and concise visual clarity.",
-  "quality_score": 8.4,
+  "quality_score": 8.6,
   "training_candidate": true,
-  "status": "inbox",
-  "visual_style_tags": [],
-  "component_tags": [],
-  "interaction_tags": []
+  "status": "annotated",
+  "visual_style_tags": [
+    "minimal",
+    "premium"
+  ],
+  "component_tags": [
+    "card_grid"
+  ],
+  "interaction_tags": [
+    "animated_transition"
+  ],
+  "layout_tags": [
+    "floating_overlay"
+  ],
+  "ux_tags": [
+    "high_feedback"
+  ],
+  "motion_tags": [
+    "subtle_motion"
+  ],
+  "design_language_tags": [
+    "restrained_productivity"
+  ],
+  "strengths": [
+    "high motion polish",
+    "clear visual hierarchy",
+    "reusable interaction ideas"
+  ],
+  "weaknesses": [
+    "limited product context",
+    "unclear full workflow"
+  ],
+  "annotation_confidence": 6.5,
+  "annotator": "charon",
+  "annotated_at": "2026-04-11T00:20:20+00:00"
 }
