@@ -1,0 +1,61 @@
+{
+  "example_id": "ex_x_damngoodui_2026_04_11_003",
+  "source_id": "src_x_damngoodui",
+  "title": "Reveal the raw markdown code by peeling back the document page by @wcools",
+  "source_url": "https://x.com/joshmillgate/status/2037232760452956297",
+  "canonical_url": "https://x.com/joshmillgate/status/2037232760452956297",
+  "creator": "@wcools",
+  "product_or_brand": null,
+  "captured_at": "2026-04-11T00:20:36+00:00",
+  "surface_type": "editor",
+  "platform": "web",
+  "image_paths": [],
+  "video_paths": [],
+  "thumbnail_path": null,
+  "raw_text": "Reveal the raw markdown code by peeling back the document page by @wcools",
+  "summary": "Interaction concept showing a document surface peeled back to reveal underlying markdown.",
+  "why_notable": "Distinct metaphor-driven interaction with strong explanatory value for layered editor UI.",
+  "quality_score": 9.0,
+  "training_candidate": true,
+  "status": "annotated",
+  "visual_style_tags": [
+    "editorial",
+    "premium"
+  ],
+  "component_tags": [
+    "modal",
+    "drawer"
+  ],
+  "interaction_tags": [
+    "animated_transition",
+    "progressive_disclosure"
+  ],
+  "layout_tags": [
+    "floating_overlay",
+    "centered_single_column"
+  ],
+  "ux_tags": [
+    "high_feedback",
+    "strong_hierarchy"
+  ],
+  "motion_tags": [
+    "cinematic",
+    "stateful_transition"
+  ],
+  "design_language_tags": [
+    "editorial_minimal",
+    "developer_tooling_precision"
+  ],
+  "strengths": [
+    "memorable metaphor",
+    "high explanatory power",
+    "distinct interaction identity"
+  ],
+  "weaknesses": [
+    "may be too theatrical for routine workflows",
+    "discoverability may depend on cueing"
+  ],
+  "annotation_confidence": 7.8,
+  "annotator": "charon",
+  "annotated_at": "2026-04-11T06:07:40+00:00"
+}

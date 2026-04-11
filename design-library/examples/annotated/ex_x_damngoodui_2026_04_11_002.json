@@ -1,0 +1,60 @@
+{
+  "example_id": "ex_x_damngoodui_2026_04_11_002",
+  "source_id": "src_x_damngoodui",
+  "title": "Excellent showcase of how interactions translate across devices by @pacovitiello",
+  "source_url": "https://x.com/DamnGoodUI/status/2028924179722932668",
+  "canonical_url": "https://x.com/DamnGoodUI/status/2028924179722932668",
+  "creator": "@pacovitiello",
+  "product_or_brand": null,
+  "captured_at": "2026-04-11T00:20:36+00:00",
+  "surface_type": "mobile_screen",
+  "platform": "responsive",
+  "image_paths": [],
+  "video_paths": [],
+  "thumbnail_path": null,
+  "raw_text": "Excellent showcase of how interactions translate across devices by @pacovitiello",
+  "summary": "Cross-device interaction showcase emphasizing consistency and adaptation across form factors.",
+  "why_notable": "Useful reference for responsive interaction behavior and multi-device design language continuity.",
+  "quality_score": 8.8,
+  "training_candidate": true,
+  "status": "annotated",
+  "visual_style_tags": [
+    "premium",
+    "minimal"
+  ],
+  "component_tags": [
+    "card_grid",
+    "tabs"
+  ],
+  "interaction_tags": [
+    "animated_transition",
+    "gesture_navigation"
+  ],
+  "layout_tags": [
+    "split_pane"
+  ],
+  "ux_tags": [
+    "high_feedback",
+    "strong_hierarchy"
+  ],
+  "motion_tags": [
+    "subtle_motion",
+    "stateful_transition"
+  ],
+  "design_language_tags": [
+    "tactile_mobile",
+    "restrained_productivity"
+  ],
+  "strengths": [
+    "cross-device consistency",
+    "clear transition logic",
+    "strong adaptation across surfaces"
+  ],
+  "weaknesses": [
+    "limited product context",
+    "uncertain full navigation model"
+  ],
+  "annotation_confidence": 7.2,
+  "annotator": "charon",
+  "annotated_at": "2026-04-11T06:07:40+00:00"
+}
