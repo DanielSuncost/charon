@@ -3633,6 +3633,49 @@ class ChatBackend:
                     emit({'type': 'error', 'error': f'Failed to list ideas: {e}', 'request_id': request_id})
                 return
 
+            if command.startswith('/idea-detail '):
+                idea_id = command[13:].strip()
+                if not idea_id:
+                    emit({'type': 'error', 'error': 'Usage: /idea-detail <idea-id>', 'request_id': request_id})
+                    return
+                try:
+                    import user_model_structured as ums
+                    # Support both full id and #N shorthand
+                    if idea_id.startswith('#'):
+                        try:
+                            idx = int(idea_id[1:]) - 1
+                            all_ideas = ums.list_ideas(STATE_DIR)
+                            if 0 <= idx < len(all_ideas):
+                                idea_id = all_ideas[idx].get('id', '')
+                            else:
+                                emit({'type': 'error', 'error': f'Idea {idea_id} not found.', 'request_id': request_id})
+                                return
+                        except ValueError:
+                            pass
+                    result = ums.lookup_idea_context(STATE_DIR, idea_id)
+                    if not result:
+                        emit({'type': 'error', 'error': f'Idea {idea_id} not found.', 'request_id': request_id})
+                        return
+                    lines = [
+                        f'Idea: {result.get("summary", "?")}',
+                        f'ID: {result.get("id", "?")}  Category: {result.get("category", "?")}  Source: {result.get("source", "?")}',
+                        f'Session: {result.get("session_id", "none")}  Message: #{result.get("message_seq", "?")}',
+                        f'Captured: {result.get("created_at", "?")}',
+                    ]
+                    if result.get('message_text'):
+                        lines.append(f'\nOriginal text:\n  {result["message_text"][:300]}')
+                    ctx_msgs = result.get('context_messages', [])
+                    if ctx_msgs:
+                        lines.append('\nConversation context:')
+                        for cm in ctx_msgs:
+                            role = cm.get('role', '?')
+                            content = cm.get('content', '')[:200]
+                            lines.append(f'  [{role}] {content}')
+                    emit({'type': 'status', 'message': '\n'.join(lines), 'request_id': request_id})
+                except Exception as e:
+                    emit({'type': 'error', 'error': f'Failed to look up idea: {e}', 'request_id': request_id})
+                return
+
             if command.startswith('/setup '):
                 rest = command[7:].strip()
                 self._run_setup_command(rest, request_id)
