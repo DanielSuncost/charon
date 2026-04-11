@@ -15,10 +15,26 @@
   "raw_text": "Open sourced the ultimate vibecoding framework that has allowed me to reliably build beautiful apps",
   "summary": "Tooling/product presentation example associated with app-building workflow and aesthetic positioning.",
   "why_notable": "Potential source of app UI references, though less directly a pure UI showcase than the other posts.",
-  "quality_score": 7.4,
+  "quality_score": 6.6,
   "training_candidate": false,
-  "status": "inbox",
-  "visual_style_tags": [],
+  "status": "rejected",
+  "visual_style_tags": [
+    "developer_tooling"
+  ],
   "component_tags": [],
-  "interaction_tags": []
+  "interaction_tags": [],
+  "design_language_tags": [
+    "developer_tooling_precision"
+  ],
+  "strengths": [
+    "possible downstream source lead"
+  ],
+  "weaknesses": [
+    "not a strong standalone UI example",
+    "weak direct pattern signal",
+    "insufficient visual specificity"
+  ],
+  "annotation_confidence": 7.0,
+  "annotator": "charon",
+  "annotated_at": "2026-04-11T06:07:40+00:00"
 }
