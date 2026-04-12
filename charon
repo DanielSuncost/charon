@@ -45,6 +45,10 @@ case "${1:-}" in
   agents|list)
     exec python3 "${CHARON_ROOT}/scripts/charon_agents.py" list
     ;;
+  sync)
+    shift
+    exec python3 "${CHARON_ROOT}/scripts/charon_sync.py" "$@"
+    ;;
   --help|-h|help)
     echo "Charon — Agent Operating System"
     echo ""
@@ -57,6 +61,11 @@ case "${1:-}" in
     echo "  charon setup                 Run setup/onboarding"
     echo "  charon status                Show current config"
     echo "  charon agents                List agents"
+    echo "  charon sync                  Sync state between machines"
+    echo "    sync register <host>       Register a remote machine"
+    echo "    sync push [--project X]    Push state to remote"
+    echo "    sync pull [--project X]    Pull state from remote"
+    echo "    sync status                Show sync status"
     echo ""
     echo "Sessions & daemon (handled by the TUI):"
     echo "  charon --list                List sessions"

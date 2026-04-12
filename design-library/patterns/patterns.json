@@ -1,1 +1,46 @@
-[]
+[
+  {
+    "pattern_id": "pat_cross_device_interaction_continuity",
+    "name": "Cross-Device Interaction Continuity",
+    "description": "An interaction pattern that preserves the same conceptual behavior across multiple device form factors while adapting layout and gesture details to each surface.",
+    "pattern_type": "interaction",
+    "applicability": ["mobile_screen", "responsive", "dashboard", "workspace"],
+    "strengths": [
+      "Builds a coherent product feel across devices",
+      "Makes transitions between surfaces feel intentional",
+      "Improves transfer learning for users moving between platforms"
+    ],
+    "failure_modes": [
+      "Can force unnatural parity across devices",
+      "May ignore platform-native affordances",
+      "Can become over-abstract if adaptation rules are weak"
+    ],
+    "example_ids": ["ex_x_damngoodui_2026_04_11_002"],
+    "design_language_tags": ["tactile_mobile", "restrained_productivity"],
+    "implementation_notes": "Keep the core interaction model stable, but adapt density, gesture vocabulary, and motion timing for each device class rather than copying layouts verbatim.",
+    "training_value": 9,
+    "status": "active"
+  },
+  {
+    "pattern_id": "pat_peel_back_source_reveal",
+    "name": "Peel-Back Source Reveal",
+    "description": "A layered editor interaction where the polished document surface is peeled back or displaced to reveal an underlying source representation such as markdown or structured content.",
+    "pattern_type": "interaction",
+    "applicability": ["editor", "developer_tooling", "knowledge_workspace"],
+    "strengths": [
+      "Makes abstraction layers legible",
+      "Creates a memorable mental model for view/source relationships",
+      "Provides high explanatory value in demos and onboarding"
+    ],
+    "failure_modes": [
+      "May feel theatrical in high-frequency workflows",
+      "Can reduce efficiency if overused",
+      "Needs strong cues to remain discoverable"
+    ],
+    "example_ids": ["ex_x_damngoodui_2026_04_11_003"],
+    "design_language_tags": ["editorial_minimal", "developer_tooling_precision"],
+    "implementation_notes": "Best used sparingly for mode-switching, inspection, or teaching moments. Pair the reveal with strong spatial continuity and obvious return paths.",
+    "training_value": 9,
+    "status": "active"
+  }
+]
