@@ -178,6 +178,7 @@ case "${1:-help}" in
   deploy) shift; cmd_deploy "$@" ;;
   version|--version) cmd_version ;;
   stream) shift; exec python3 "${SCRIPT_DIR}/boat_stream.py" "$@" ;;
+  harbor) shift; exec python3 "${SCRIPT_DIR}/harbor_worker.py" "$@" ;;
   help|--help|-h)
     echo "charons-boat — Universal agent session bridge for Charon"
     echo ""
@@ -185,6 +186,7 @@ case "${1:-help}" in
     echo "  charons-boat wrap [--name NAME] [--attach] -- <command>  Wrap command in a PTY"
     echo "  charons-boat attach <session>                 Attach current terminal to a PTY boat session"
     echo "  charons-boat stream                           Stream PTY sessions (JSON over stdio)"
+    echo "  charons-boat harbor                           Harbor protocol worker (structured task dispatch)"
     echo "  charons-boat serve [--generate-code]          Start for remote access"
     echo "  charons-boat deploy user@host                 Install boat on a remote server"
     echo "  charons-boat status                           Show status"

@@ -22,6 +22,13 @@ CHARON_ROOT="$(cd "$(dirname "$SOURCE")" && pwd)"
 RUST_TUI_MANIFEST="${CHARON_ROOT}/crates/charon-tui/Cargo.toml"
 RUST_TUI_BIN="${CHARON_ROOT}/crates/charon-tui/target/release/charon"
 
+# Activate project venv if it exists
+if [ -d "${CHARON_ROOT}/.venv" ]; then
+  export VIRTUAL_ENV="${CHARON_ROOT}/.venv"
+  export PATH="${CHARON_ROOT}/.venv/bin:${PATH}"
+fi
+
+# Subcommands that don't launch the TUI
 case "${1:-}" in
   chat)
     shift
@@ -56,89 +63,79 @@ case "${1:-}" in
     echo "  F3  Session Grid"
     exit 0
     ;;
-  --resume=*|--resume)
-    # Resume a previous conversation
-    if [[ "$1" == "--resume="* ]]; then
-      export CHARON_RESUME="${1#--resume=}"
-    else
-      export CHARON_RESUME="${2:-latest}"
-      shift
-    fi
-    shift
-    ;& # fall through to TUI launch
-  --agent|--agent=*)
-    # --agent AG-0005 or --agent=AG-0005
-    # Start a new session tied to a specific agent (shares its memory/specialization)
-    if [[ "$1" == "--agent="* ]]; then
-      export CHARON_AGENT="${1#--agent=}"
-    else
-      export CHARON_AGENT="${2:-}"
-      shift
-    fi
-    shift
-    ;& # fall through to TUI launch
-  --provider|--provider=*)
-    # --provider codex or --provider=codex
-    if [[ "$1" == "--provider="* ]]; then
-      export CHARON_PROVIDER="${1#--provider=}"
-    else
-      export CHARON_PROVIDER="${2:-}"
-      shift
-    fi
-    shift
-    ;& # fall through to TUI launch
-  claude-code|codex|lmstudio|opencode|api)
-    # Launch TUI with a specific provider (shorthand)
-    export CHARON_PROVIDER="${1:-}"
-    if [[ "$1" =~ ^(claude-code|codex|lmstudio|opencode|api)$ ]]; then
-      shift
-    fi
-    ;& # fall through to TUI launch
-  --tmux)
-    # Force tmux wrapping
-    export CHARON_USE_TMUX=1
-    shift
-    ;& # fall through
-  --no-tmux)
-    # Force direct launch (no tmux wrapping)
-    export CHARON_NO_TMUX=1
-    shift
-    ;& # fall through
-  "")
-    # Default: launch Rust TUI
-    if ! command -v cargo &>/dev/null; then
-      echo "Error: cargo is required to build/run the Rust TUI."
-      echo "Install Rust: https://rustup.rs"
-      echo ""
-      echo "Alternatively, use CLI mode: charon chat"
-      exit 1
-    fi
-
-    # Check Python deps used by the backend pieces the Rust TUI relies on.
-    if ! python3 -c "import httpx" 2>/dev/null; then
-      echo "Installing Python dependencies..."
-      if command -v uv &>/dev/null; then
-        uv pip install -r "${CHARON_ROOT}/requirements.txt"
-      else
-        python3 -m pip install -r "${CHARON_ROOT}/requirements.txt" 2>/dev/null || true
-      fi
-    fi
-
-    # Build Rust TUI if needed
-    if [ ! -x "${RUST_TUI_BIN}" ]; then
-      echo "Building Rust TUI..."
-      cargo build --release --manifest-path "${RUST_TUI_MANIFEST}"
-    fi
-
-    if [ ! -x "${RUST_TUI_BIN}" ]; then
-      echo "Error: Rust TUI binary not found after build: ${RUST_TUI_BIN}"
-      exit 1
-    fi
-
-    exec "${RUST_TUI_BIN}" "$@"
-    ;;
-  *)
-    # Pass through to charon_agents.py
-    exec python3 "${CHARON_ROOT}/scripts/charon_agents.py" "$@"
-    ;;
 esac
+
+# Parse TUI flags (all fall through to TUI launch)
+LAUNCH_TUI=1
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --resume=*)
+      export CHARON_RESUME="${1#--resume=}"
+      shift
+      ;;
+    --resume)
+      export CHARON_RESUME="${2:-latest}"
+      shift; shift
+      ;;
+    --agent=*)
+      export CHARON_AGENT="${1#--agent=}"
+      shift
+      ;;
+    --agent)
+      export CHARON_AGENT="${2:-}"
+      shift; shift
+      ;;
+    --provider=*)
+      export CHARON_PROVIDER="${1#--provider=}"
+      shift
+      ;;
+    --provider)
+      export CHARON_PROVIDER="${2:-}"
+      shift; shift
+      ;;
+    claude-code|codex|lmstudio|opencode|api)
+      export CHARON_PROVIDER="$1"
+      shift
+      ;;
+    --tmux)
+      export CHARON_USE_TMUX=1
+      shift
+      ;;
+    --no-tmux)
+      export CHARON_NO_TMUX=1
+      shift
+      ;;
+    *)
+      # Unknown flag — pass through to charon_agents.py
+      exec python3 "${CHARON_ROOT}/scripts/charon_agents.py" "$@"
+      ;;
+  esac
+done
+
+# Launch Rust TUI
+if ! command -v cargo &>/dev/null; then
+  echo "Error: cargo is required to build/run the Rust TUI."
+  echo "Install Rust: https://rustup.rs"
+  echo ""
+  echo "Alternatively, use CLI mode: charon chat"
+  exit 1
+fi
+
+# Check Python deps used by the backend pieces the Rust TUI relies on.
+if ! python3 -c "import httpx" 2>/dev/null; then
+  echo "Python dependencies missing. Run: ./scripts/install-dev.sh"
+  exit 1
+fi
+
+# Build Rust TUI if needed
+if [ ! -x "${RUST_TUI_BIN}" ]; then
+  echo "Building Rust TUI..."
+  cargo build --release --manifest-path "${RUST_TUI_MANIFEST}"
+fi
+
+if [ ! -x "${RUST_TUI_BIN}" ]; then
+  echo "Error: Rust TUI binary not found after build: ${RUST_TUI_BIN}"
+  exit 1
+fi
+
+exec "${RUST_TUI_BIN}" "$@"
