@@ -9,6 +9,7 @@ package-lock.json
 __pycache__/
 *.pyc
 .pytest_cache/
+.venv/
 
 # Runtime state
 .charon_state/
@@ -29,6 +30,24 @@ results/
 
 # Top-level npm (local dev tool, not a project dep)
 package.json
+
+# Secrets / local config
+.env
+.env.*
+
+# Editor swap files
+*.swp
+*.swo
+*~
+
+# Large build tools / archives
+*.tar.xz
+*.tar.gz
+zig-*
+
+# Personal drafts
+charon_agent_harness_explanation.txt
+charon_job_application_answer.md
 
 # OS
 .DS_Store
