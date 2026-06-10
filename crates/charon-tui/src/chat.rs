@@ -1,6 +1,4 @@
 use serde_json::{json, Map, Value};
-use base64::Engine;
-use std::fs::OpenOptions;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -909,6 +907,10 @@ impl ChatState {
             "error" => {
                 let msg = v.get("error").and_then(|x| x.as_str()).unwrap_or("unknown error");
                 self.streaming = false;
+                // Dismiss auth dialog if open — auth failures should not leave the UI stuck
+                if self.auth_open() {
+                    self.auth_dismiss();
+                }
                 self.push_error(msg);
             }
             "follow_up_queued" => {
@@ -1242,6 +1244,16 @@ impl ChatState {
             item("/shade stats", "Show shade stats"),
             item("/1", "Provider switch: continue with context transfer"),
             item("/2", "Provider switch: start a new session"),
+            item("/voyage dispatch", "Dispatch a task to a remote agent worker"),
+            item("/voyage status", "Check status of a voyage"),
+            item("/voyage list", "List recent voyages"),
+            item("/harvest_souls", "Scan sibling agent repos for abilities to assimilate"),
+            item("/harvest_souls list", "Show numbered findings from last scan"),
+            item("/harvest_souls plan", "Show implementation path for an ability"),
+            item("/harvest_souls adopt", "Mark abilities for adoption"),
+            item("/harvest_souls adopt all", "Adopt all discovered abilities"),
+            item("/harvest_souls roadmap", "Show adoption roadmap and progress"),
+            item("/harvest_souls status", "Show last scan summary"),
         ];
 
         if input == "/hotkeys" || input.starts_with("/hotkeys") {
@@ -1481,44 +1493,5 @@ fn open_url(url: &str) -> bool {
 }
 
 fn copy_to_clipboard(text: &str) -> bool {
-    let attempts: &[(&str, &[&str])] = &[
-        ("wl-copy", &[]),
-        ("xclip", &["-selection", "clipboard"]),
-        ("xsel", &["--clipboard", "--input"]),
-        ("pbcopy", &[]),
-    ];
-    for (cmd, args) in attempts {
-        let mut child = match Command::new(cmd)
-            .args(*args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn() {
-                Ok(child) => child,
-                Err(_) => continue,
-            };
-        if let Some(mut stdin) = child.stdin.take() {
-            if stdin.write_all(text.as_bytes()).is_ok() && child.wait().map(|s| s.success()).unwrap_or(false) {
-                return true;
-            }
-        }
-    }
-
-    let term = std::env::var("TERM").unwrap_or_default();
-    if term.is_empty() || term == "dumb" {
-        return false;
-    }
-    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-    let inner = format!("\x1b]52;c;{}\x07", encoded);
-    let seq = if std::env::var_os("TMUX").is_some() {
-        format!("\x1bPtmux;\x1b{}\x1b\\", inner.replace("\x1b", "\x1b\x1b"))
-    } else {
-        inner
-    };
-    if let Ok(mut tty) = OpenOptions::new().write(true).open("/dev/tty") {
-        if tty.write_all(seq.as_bytes()).is_ok() && tty.flush().is_ok() {
-            return true;
-        }
-    }
-    false
+    crate::clipboard::copy_to_clipboard_bool(text)
 }

@@ -57,13 +57,46 @@ need_cmd() {
   fi
 }
 
-need_cmd python3
 need_cmd cargo
 
 mkdir -p "$BIN_DIR"
 
+VENV_DIR="${ROOT}/.venv"
+
+# Pick a working Python: prefer 3.13, fall back to 3.12, then generic python3
+pick_python() {
+  for candidate in python3.13 python3.12 python3; do
+    local p
+    p="$(command -v "$candidate" 2>/dev/null)" || continue
+    if "$p" -c "import platform; assert platform.mac_ver()[0]" 2>/dev/null || \
+       "$p" -c "import sys; sys.platform != 'darwin'" 2>/dev/null; then
+      echo "$p"
+      return
+    fi
+  done
+  # Last resort
+  command -v python3
+}
+
+PYTHON="$(pick_python)"
+echo "Using Python: $PYTHON ($("$PYTHON" --version 2>&1))"
+
+# Create venv if missing or forced
+if [[ ! -d "$VENV_DIR" || "$FORCE" -eq 1 ]]; then
+  echo "Creating virtual environment..."
+  if command -v uv >/dev/null 2>&1; then
+    uv venv "$VENV_DIR" --python "$PYTHON"
+  else
+    "$PYTHON" -m venv "$VENV_DIR"
+  fi
+fi
+
+# Activate venv for the rest of this script
+export VIRTUAL_ENV="$VENV_DIR"
+export PATH="${VENV_DIR}/bin:${PATH}"
+
 PYTHON_OK=0
-if python3 -c "import httpx" >/dev/null 2>&1 && [[ "$FORCE" -eq 0 ]]; then
+if "${VENV_DIR}/bin/python3" -c "import httpx" >/dev/null 2>&1 && [[ "$FORCE" -eq 0 ]]; then
   PYTHON_OK=1
 fi
 
@@ -72,7 +105,7 @@ if [[ "$PYTHON_OK" -eq 0 ]]; then
   if command -v uv >/dev/null 2>&1; then
     uv pip install -r "$ROOT/requirements.txt"
   else
-    python3 -m pip install -r "$ROOT/requirements.txt"
+    "${VENV_DIR}/bin/python3" -m pip install -r "$ROOT/requirements.txt"
   fi
 else
   echo "Python dependencies already available."
@@ -83,9 +116,9 @@ if [[ "$INSTALL_PLAYWRIGHT" -eq 1 ]]; then
   if command -v uv >/dev/null 2>&1; then
     uv pip install playwright
   else
-    python3 -m pip install playwright
+    "${VENV_DIR}/bin/python3" -m pip install playwright
   fi
-  python3 -m playwright install chromium
+  "${VENV_DIR}/bin/python3" -m playwright install chromium
 fi
 
 if [[ ! -x "$RUST_BIN" || "$FORCE" -eq 1 ]]; then

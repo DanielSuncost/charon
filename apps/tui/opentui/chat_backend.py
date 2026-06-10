@@ -3351,6 +3351,17 @@ class ChatBackend:
             {'cmd': '/automate browser-workflow every <n> <unit> steps <json>', 'desc': 'Create a multi-step browser workflow automation'},
             {'cmd': '/automate browser-workflow every <n> <unit> from <file>', 'desc': 'Create a multi-step browser workflow automation from a JSON file'},
             {'cmd': '/automate webhook <automation_id> <url>', 'desc': 'Set a webhook for automation failure/recovery alerts'},
+            {'cmd': '/harvest_souls', 'desc': 'Scan sibling agent repos for abilities to assimilate'},
+            {'cmd': '/harvest_souls list', 'desc': 'Show numbered findings from last scan'},
+            {'cmd': '/harvest_souls plan', 'desc': 'Show implementation path for an ability'},
+            {'cmd': '/harvest_souls adopt', 'desc': 'Mark abilities for adoption (by number)'},
+            {'cmd': '/harvest_souls adopt all', 'desc': 'Adopt all discovered abilities'},
+            {'cmd': '/harvest_souls roadmap', 'desc': 'Show adoption roadmap and progress'},
+            {'cmd': '/harvest_souls status', 'desc': 'Show last scan summary'},
+            {'cmd': '/harvest_souls hermes-agent', 'desc': 'Scan only hermes-agent'},
+            {'cmd': '/voyage dispatch', 'desc': 'Dispatch a task to a remote agent worker'},
+            {'cmd': '/voyage status', 'desc': 'Check status of a voyage'},
+            {'cmd': '/voyage list', 'desc': 'List recent voyages'},
         ]
 
     def _get_suggestions(self, prefix: str) -> list[dict]:
@@ -5309,6 +5320,144 @@ class ChatBackend:
                     self._run_setup_command(f'provider {provider_name}', request_id)
                 return
 
+            # /voyage — Harbor protocol: dispatch tasks to remote agent workers
+            if command == '/voyage' or command.startswith('/voyage '):
+                rest = command[8:].strip() if command.startswith('/voyage ') else ''
+
+                if rest == 'list' or not rest:
+                    from harbor import list_voyages
+                    voyages = list_voyages(STATE_DIR)
+                    if not voyages:
+                        emit({'type': 'status', 'message': 'No voyages. Use /voyage dispatch <server> <agent> <instruction>', 'request_id': request_id})
+                    else:
+                        emit({'type': 'status', 'message': '', 'request_id': request_id})
+                        emit({'type': 'status', 'message': '═══ Voyages ═══', 'request_id': request_id})
+                        for v in voyages:
+                            status = v.get('status', '?')
+                            marker = '[~]' if status in ('started', 'running', 'dispatching') else '[x]' if status == 'completed' else '[!]' if status == 'failed' else '[ ]'
+                            line = f'  {marker} {v["voyage_id"]}  {v["server"]}:{v["agent"]}  {v["instruction"][:50]}'
+                            emit({'type': 'status', 'message': line, 'request_id': request_id})
+                    return
+
+                if rest.startswith('status '):
+                    vid = rest[7:].strip()
+                    from harbor import get_voyage_status
+                    v = get_voyage_status(vid, STATE_DIR)
+                    if not v:
+                        emit({'type': 'error', 'error': f'Voyage not found: {vid}', 'request_id': request_id})
+                    else:
+                        emit({'type': 'status', 'message': f'Voyage: {v.get("voyage_id")}', 'request_id': request_id})
+                        emit({'type': 'status', 'message': f'Status: {v.get("status")}', 'request_id': request_id})
+                        emit({'type': 'status', 'message': f'Server: {v.get("manifest", {}).get("server_id", "?")}:{v.get("manifest", {}).get("agent_name", "?")}', 'request_id': request_id})
+                        emit({'type': 'status', 'message': f'Instruction: {v.get("manifest", {}).get("instruction", "")[:100]}', 'request_id': request_id})
+                        for p in v.get('progress', [])[-5:]:
+                            emit({'type': 'status', 'message': f'  {p.get("step", "")}: {p.get("summary", "")}', 'request_id': request_id})
+                        result = v.get('result', {})
+                        if result:
+                            emit({'type': 'status', 'message': f'Return code: {result.get("returncode", "?")}', 'request_id': request_id})
+                            stdout = result.get('stdout', '').strip()
+                            if stdout:
+                                for line in stdout.split('\n')[:20]:
+                                    emit({'type': 'status', 'message': f'  {line}', 'request_id': request_id})
+                    return
+
+                if rest.startswith('dispatch '):
+                    parts = rest[9:].strip().split(None, 2)
+                    if len(parts) < 3:
+                        emit({'type': 'error', 'error': 'Usage: /voyage dispatch <server_id> <agent_name> <instruction>', 'request_id': request_id})
+                        return
+                    server_id, agent_name, instruction = parts[0], parts[1], parts[2]
+
+                    import threading
+                    def _run_dispatch():
+                        from harbor import dispatch_voyage
+                        vid = dispatch_voyage(
+                            instruction=instruction,
+                            server_id=server_id,
+                            agent_name=agent_name,
+                            project_root=ROOT,
+                            state_dir=STATE_DIR,
+                            on_status=lambda msg: emit({'type': 'status', 'message': msg, 'request_id': request_id}),
+                        )
+                        if not vid:
+                            emit({'type': 'error', 'error': 'Dispatch failed', 'request_id': request_id})
+
+                    threading.Thread(target=_run_dispatch, daemon=True).start()
+                    return
+
+                emit({'type': 'error', 'error': 'Usage: /voyage dispatch|status|list', 'request_id': request_id})
+                return
+
+            # /harvest_souls — scan sibling agent repos and interactively adopt abilities
+            if command == '/harvest_souls' or command.startswith('/harvest_souls '):
+                rest = command[16:].strip() if command.startswith('/harvest_souls ') else ''
+
+                if rest == 'status':
+                    from assimilation import load_last_scan
+                    scan = load_last_scan(STATE_DIR)
+                    if not scan:
+                        emit({'type': 'status', 'message': 'No scan found. Run /harvest_souls to scan agent repos.', 'request_id': request_id})
+                    else:
+                        emit({'type': 'status', 'message': f'Last scan: {scan.get("timestamp", "?")}', 'request_id': request_id})
+                        emit({'type': 'status', 'message': f'Repos: {", ".join(scan.get("repos_scanned", []))} | Unavailable: {", ".join(scan.get("repos_unavailable", []))}', 'request_id': request_id})
+                        emit({'type': 'status', 'message': f'Tools: {scan.get("total_tools", 0)} | Skills: {scan.get("total_skills", 0)} | Commands: {scan.get("total_commands", 0)}', 'request_id': request_id})
+                        emit({'type': 'status', 'message': f'New abilities: {scan.get("new_abilities", 0)}', 'request_id': request_id})
+                        adopted_file = STATE_DIR / 'assimilation' / 'adopted.json'
+                        if adopted_file.exists():
+                            try:
+                                adopted = json.loads(adopted_file.read_text())
+                                emit({'type': 'status', 'message': f'Adopted: {len(adopted)} abilities', 'request_id': request_id})
+                            except Exception:
+                                pass
+                    return
+
+                # /harvest_souls list — show numbered findings from last scan
+                if rest == 'list':
+                    self._harvest_souls_show_findings(request_id)
+                    return
+
+                # /harvest_souls plan <N> — show implementation path for ability #N
+                if rest.startswith('plan '):
+                    idx_str = rest[5:].strip()
+                    self._harvest_souls_plan(idx_str, request_id)
+                    return
+
+                # /harvest_souls adopt <N|N,N,N|all> — mark abilities for adoption
+                if rest.startswith('adopt '):
+                    selection = rest[6:].strip()
+                    self._harvest_souls_adopt(selection, request_id)
+                    return
+
+                # /harvest_souls roadmap — show the full adoption roadmap
+                if rest == 'roadmap':
+                    self._harvest_souls_roadmap(request_id)
+                    return
+
+                # Default: run the scan, then show findings
+                agent_filter = rest if rest and rest not in ('list', 'status', 'roadmap') else None
+
+                import threading
+                def _run_assimilation():
+                    try:
+                        from assimilation import run_full_assimilation, PRIORITY_ORDER
+                        result = run_full_assimilation(
+                            state_dir=STATE_DIR,
+                            docs_dir=ROOT / 'docs',
+                            charon_root=ROOT,
+                            agent_filter=agent_filter,
+                            on_status=lambda msg: emit({'type': 'status', 'message': msg, 'request_id': request_id}),
+                        )
+                        emit({'type': 'status', 'message': '', 'request_id': request_id})
+                        emit({'type': 'status', 'message': f'Scan complete — {result.get("new_abilities", 0)} new abilities found.', 'request_id': request_id})
+                        # Show findings inline
+                        self._harvest_souls_show_findings(request_id)
+                    except Exception as e:
+                        emit({'type': 'error', 'error': f'Harvest failed: {e}', 'request_id': request_id})
+
+                emit({'type': 'status', 'message': f'Scanning agent repos{f" ({agent_filter})" if agent_filter else ""}...', 'request_id': request_id})
+                threading.Thread(target=_run_assimilation, daemon=True).start()
+                return
+
             # Unknown command — show suggestions
             suggestions = self._get_suggestions(command)
             if suggestions:
@@ -5322,6 +5471,257 @@ class ChatBackend:
                 emit({'type': 'error', 'error': f'Unknown command: {command}', 'request_id': request_id})
         except Exception as e:
             emit({'type': 'error', 'error': str(e), 'request_id': request_id})
+
+    # ── /harvest_souls helpers ─────────────────────────────────────────
+
+    def _harvest_souls_load_findings(self) -> list[dict]:
+        """Load and sort the new abilities from the last scan."""
+        from assimilation import PRIORITY_ORDER
+        abilities_dir = STATE_DIR / 'assimilation' / 'abilities'
+        if not abilities_dir.is_dir():
+            return []
+        all_new = []
+        for f in abilities_dir.glob('*.json'):
+            try:
+                data = json.loads(f.read_text())
+                agent = f.stem
+                for a in data.get('analysis', []):
+                    if not a.get('charon_has') and a.get('priority', 'skip') != 'skip':
+                        all_new.append({**a, 'source': agent})
+            except Exception:
+                pass
+        all_new.sort(key=lambda a: PRIORITY_ORDER.get(a.get('priority', 'low'), 3))
+        return all_new
+
+    def _harvest_souls_show_findings(self, request_id: str | None):
+        """Display numbered findings with next-step instructions."""
+        findings = self._harvest_souls_load_findings()
+        if not findings:
+            emit({'type': 'status', 'message': 'No new abilities found. Run /harvest_souls to scan.', 'request_id': request_id})
+            return
+
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': '═══ Souls harvested ═══', 'request_id': request_id})
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+
+        current_tier = None
+        for i, a in enumerate(findings):
+            tier = a.get('priority', 'medium').upper()
+            if tier != current_tier:
+                current_tier = tier
+                count = sum(1 for x in findings if x.get('priority', 'medium').upper() == tier)
+                emit({'type': 'status', 'message': f'  [{tier}] — {count} abilities', 'request_id': request_id})
+
+            name = a.get('name', '?')
+            desc = a.get('description', '')[:70]
+            source = a.get('source', '?')
+            atype = a.get('type', '?')
+            rationale = a.get('rationale', '')
+
+            line = f'    {i + 1:>3}. {name}'
+            if atype != '?':
+                line += f' ({atype})'
+            emit({'type': 'status', 'message': line, 'request_id': request_id})
+            detail = rationale if rationale not in ('', '(needs manual review)', 'Heuristic match') else desc
+            if detail:
+                emit({'type': 'status', 'message': f'         {detail}', 'request_id': request_id})
+
+        # Check what's already adopted
+        adopted_file = STATE_DIR / 'assimilation' / 'adopted.json'
+        adopted_count = 0
+        if adopted_file.exists():
+            try:
+                adopted_count = len(json.loads(adopted_file.read_text()))
+            except Exception:
+                pass
+
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'{len(findings)} abilities available | {adopted_count} already adopted', 'request_id': request_id})
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': 'Next steps:', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  /harvest_souls plan <N>         — see implementation path for ability #N', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  /harvest_souls adopt <N>        — mark ability #N for adoption', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  /harvest_souls adopt 1,3,7      — adopt multiple abilities', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  /harvest_souls adopt all        — adopt everything', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  /harvest_souls roadmap          — show adoption roadmap', 'request_id': request_id})
+
+    def _harvest_souls_plan(self, idx_str: str, request_id: str | None):
+        """Show the implementation path for a specific ability."""
+        findings = self._harvest_souls_load_findings()
+        if not findings:
+            emit({'type': 'status', 'message': 'No findings. Run /harvest_souls first.', 'request_id': request_id})
+            return
+
+        try:
+            idx = int(idx_str) - 1
+            if idx < 0 or idx >= len(findings):
+                raise ValueError()
+        except ValueError:
+            emit({'type': 'error', 'error': f'Invalid ability number. Use 1-{len(findings)}.', 'request_id': request_id})
+            return
+
+        a = findings[idx]
+        name = a.get('name', '?')
+        atype = a.get('type', '?')
+        source = a.get('source', '?')
+        desc = a.get('description', '')
+        priority = a.get('priority', 'medium').upper()
+        rationale = a.get('rationale', '')
+
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'═══ Implementation Plan: {name} ═══', 'request_id': request_id})
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'  Source:    {source}', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'  Type:      {atype}', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'  Priority:  {priority}', 'request_id': request_id})
+        if desc:
+            emit({'type': 'status', 'message': f'  What:      {desc}', 'request_id': request_id})
+        if rationale and rationale not in ('(needs manual review)', 'Heuristic match'):
+            emit({'type': 'status', 'message': f'  Why:       {rationale}', 'request_id': request_id})
+
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+
+        # Generate implementation steps based on type
+        if atype == 'tool':
+            emit({'type': 'status', 'message': '  Onboarding path:', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    1. Study reference: ~/{source}/{a.get("source_file", "tools/")}'
+                  if a.get('source_file') else f'    1. Study reference in {source} repo', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    2. Create apps/core-daemon/tools/{name.replace("-", "_")}_tool.py', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    3. Define {name.upper()}_TOOL_DEF schema + execute_{name.replace("-", "_")}() handler', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    4. Register in apps/core-daemon/tools/__init__.py (ALL_TOOL_DEFS + TOOL_EXECUTORS)', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    5. Test: /tools should list the new tool', 'request_id': request_id})
+        elif atype == 'skill':
+            emit({'type': 'status', 'message': '  Onboarding path:', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    1. Study reference: ~/{source}/skills/{name}/SKILL.md', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    2. Adapt skill content for Charon\'s context', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    3. Add to Charon\'s skills registry or system prompt', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    4. Test: verify skill is available and functional', 'request_id': request_id})
+        elif atype == 'command':
+            emit({'type': 'status', 'message': '  Onboarding path:', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    1. Study reference: ~/{source}/hermes_cli/commands.py', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    2. Add handler in apps/tui/opentui/chat_backend.py handle_command()', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    3. Register in _command_catalog() and chat.rs command_suggestions()', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    4. Rebuild TUI: cargo build --release', 'request_id': request_id})
+        else:
+            emit({'type': 'status', 'message': '  Onboarding path:', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    1. Study the reference implementation in {source}', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    2. Design Charon-native equivalent', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'    3. Implement and test', 'request_id': request_id})
+
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'  /harvest_souls adopt {idx + 1}  — adopt this ability', 'request_id': request_id})
+
+    def _harvest_souls_adopt(self, selection: str, request_id: str | None):
+        """Mark abilities for adoption."""
+        findings = self._harvest_souls_load_findings()
+        if not findings:
+            emit({'type': 'status', 'message': 'No findings. Run /harvest_souls first.', 'request_id': request_id})
+            return
+
+        # Parse selection: "all", "3", "1,3,7", "1-5"
+        indices = set()
+        if selection.lower() == 'all':
+            indices = set(range(len(findings)))
+        else:
+            for part in selection.split(','):
+                part = part.strip()
+                if '-' in part:
+                    try:
+                        a, b = part.split('-', 1)
+                        for i in range(int(a) - 1, int(b)):
+                            if 0 <= i < len(findings):
+                                indices.add(i)
+                    except ValueError:
+                        pass
+                elif part.isdigit():
+                    idx = int(part) - 1
+                    if 0 <= idx < len(findings):
+                        indices.add(idx)
+
+        if not indices:
+            emit({'type': 'error', 'error': f'Invalid selection. Use a number (1-{len(findings)}), comma-separated, range (1-5), or "all".', 'request_id': request_id})
+            return
+
+        # Load existing adopted list
+        adopted_file = STATE_DIR / 'assimilation' / 'adopted.json'
+        adopted = []
+        if adopted_file.exists():
+            try:
+                adopted = json.loads(adopted_file.read_text())
+            except Exception:
+                pass
+        existing_names = {a['name'] for a in adopted}
+
+        new_adoptions = []
+        for i in sorted(indices):
+            a = findings[i]
+            if a['name'] not in existing_names:
+                new_adoptions.append(a)
+                adopted.append(a)
+
+        adopted_file.parent.mkdir(parents=True, exist_ok=True)
+        adopted_file.write_text(json.dumps(adopted, indent=2, ensure_ascii=False))
+
+        if new_adoptions:
+            emit({'type': 'status', 'message': '', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'Adopted {len(new_adoptions)} new abilities:', 'request_id': request_id})
+            for a in new_adoptions:
+                emit({'type': 'status', 'message': f'  + {a["name"]} ({a.get("type", "?")}, from {a.get("source", "?")})', 'request_id': request_id})
+            skipped = len(indices) - len(new_adoptions)
+            if skipped:
+                emit({'type': 'status', 'message': f'  ({skipped} already adopted)', 'request_id': request_id})
+        else:
+            emit({'type': 'status', 'message': 'All selected abilities were already adopted.', 'request_id': request_id})
+
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'Total adopted: {len(adopted)} | /harvest_souls roadmap to see the plan', 'request_id': request_id})
+
+    def _harvest_souls_roadmap(self, request_id: str | None):
+        """Show the adoption roadmap — what's been adopted and implementation status."""
+        adopted_file = STATE_DIR / 'assimilation' / 'adopted.json'
+        if not adopted_file.exists():
+            emit({'type': 'status', 'message': 'No abilities adopted yet. Run /harvest_souls, then /harvest_souls adopt <N>.', 'request_id': request_id})
+            return
+
+        try:
+            adopted = json.loads(adopted_file.read_text())
+        except Exception:
+            emit({'type': 'error', 'error': 'Failed to load adopted abilities.', 'request_id': request_id})
+            return
+
+        if not adopted:
+            emit({'type': 'status', 'message': 'No abilities adopted yet.', 'request_id': request_id})
+            return
+
+        from assimilation import PRIORITY_ORDER
+        adopted.sort(key=lambda a: PRIORITY_ORDER.get(a.get('priority', 'low'), 3))
+
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': '═══ Adoption Roadmap ═══', 'request_id': request_id})
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+
+        current_tier = None
+        for i, a in enumerate(adopted):
+            tier = a.get('priority', 'medium').upper()
+            if tier != current_tier:
+                current_tier = tier
+                emit({'type': 'status', 'message': f'  [{tier}]', 'request_id': request_id})
+
+            name = a.get('name', '?')
+            atype = a.get('type', '?')
+            source = a.get('source', '?')
+            status = a.get('impl_status', 'pending')
+            marker = '[ ]' if status == 'pending' else '[~]' if status == 'in_progress' else '[x]'
+            emit({'type': 'status', 'message': f'    {marker} {name} ({atype}, from {source})', 'request_id': request_id})
+
+        pending = sum(1 for a in adopted if a.get('impl_status', 'pending') == 'pending')
+        in_prog = sum(1 for a in adopted if a.get('impl_status') == 'in_progress')
+        done = sum(1 for a in adopted if a.get('impl_status') == 'done')
+
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'Pending: {pending} | In progress: {in_prog} | Done: {done}', 'request_id': request_id})
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  /harvest_souls plan <N>  — implementation steps for any ability', 'request_id': request_id})
 
     def _detect_lmstudio_models(self) -> list[str]:
         models: list[str] = []
@@ -5440,27 +5840,25 @@ class ChatBackend:
                 provider_map = {'claude-code': 'anthropic', 'codex': 'openai-codex'}
                 provider_id = provider_map[arg]
 
-                # Try to find existing Claude credentials
-                # First check our own auth store, then Claude's credentials file
-                # Use /setup provider claude-code --force to skip and do fresh OAuth
+                # Try to find existing credentials before running full OAuth.
+                # Use /setup provider <name> --force to skip and do fresh OAuth.
                 existing_token = None
-                if arg == 'claude-code' and not force_oauth:
-                    # Check Charon's own auth store first
-                    existing_token = self._find_charon_auth_token('anthropic')
-                    # Then try Claude Code's credentials file
-                    if not existing_token:
+                if not force_oauth:
+                    # Check Charon's own auth store for this provider
+                    existing_token = self._find_charon_auth_token(provider_id)
+                    # For claude-code, also check Claude Code's credentials file
+                    if not existing_token and arg == 'claude-code':
                         existing_token = self._find_claude_credentials()
                     if existing_token:
-                        # Save existing token to charon auth store
                         try:
                             import charon_auth
                             store = charon_auth._load_auth()
-                            store['active_provider'] = 'anthropic'
+                            store['active_provider'] = provider_id
                             store.setdefault('providers', {})
-                            store['providers']['anthropic'] = {
+                            store['providers'][provider_id] = {
                                 'tokens': {'access_token': existing_token},
                                 'last_login': charon_auth._now(),
-                                'auth_type': 'existing_claude',
+                                'auth_type': 'existing',
                             }
                             charon_auth._save_auth(store)
 
@@ -5468,8 +5866,7 @@ class ChatBackend:
                             target_state['step'] = 'model'
                             _persist_target_state()
 
-                            emit({'type': 'status', 'message': '✓ Found existing Claude credentials! Token imported.', 'request_id': request_id})
-                            # Auto-trigger model picker
+                            emit({'type': 'status', 'message': f'✓ Found existing {arg} credentials! Token imported.', 'request_id': request_id})
                             self._run_setup_command('model', request_id)
                             return
                         except Exception as e:
@@ -5571,7 +5968,8 @@ class ChatBackend:
                     {'id': 'claude-3-5-haiku-20241022', 'desc': 'Haiku 3.5'},
                 ],
                 'codex': [
-                    {'id': 'gpt-5.4', 'desc': 'GPT 5.4 — most capable (recommended)'},
+                    {'id': 'gpt-5.5', 'desc': 'GPT 5.5 — latest, most capable'},
+                    {'id': 'gpt-5.4', 'desc': 'GPT 5.4'},
                     {'id': 'gpt-5', 'desc': 'GPT 5'},
                     # Note: o3, o4-mini, gpt-4.1, gpt-4o, codex-mini etc. are NOT supported
                     # with Codex OAuth (ChatGPT subscription). Only gpt-5 family works.

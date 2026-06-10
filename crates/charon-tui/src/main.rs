@@ -1,16 +1,20 @@
-/// charon-tui — Full Rust TUI shell (Milestone 1).
+// Suppress dead-code warnings for the legacy chat rendering path (retained for
+// the planned workspace/transcript split view) and in-progress features.
+#![allow(dead_code, unused_imports, unused_variables, unused_assignments, unused_mut)]
+
+/// charon-tui — Rust TUI for the Charon agent operating system.
 ///
-/// Current status:
-/// - F1 Chat: placeholder native chat view
-/// - F2 Dashboard: placeholder native dashboard
-/// - F3 Sessions: live VTE session grid
-///
-/// This is the clean foundation for replacing the current Bun/OpenTUI frontend.
+/// Views:
+/// - F1 Chat: streaming conversation with tool use, selection, and context panel
+/// - F2 Dashboard: agent status overview
+/// - F3 Sessions: live VTE session grid with embedded terminal emulators
+/// - F4 Inter-agent: conversation rooms and team coordination
 
 mod app;
 mod backend;
 mod chat;
 mod chat_view;
+pub mod clipboard;
 mod f1_mono;
 mod grid;
 mod native_session;
@@ -20,14 +24,11 @@ mod screen;
 mod session;
 mod terminal;
 
-use std::fs::OpenOptions;
 use std::io::{self, Write};
-use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use app::{App, SessionsSection, TextPoint, View};
-use base64::Engine;
 use crossterm::{
     cursor,
     event::{
@@ -35,7 +36,7 @@ use crossterm::{
         Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind,
     },
     style::{self},
-    terminal::{self as ct},
+    terminal::{self as ct, EnterAlternateScreen, LeaveAlternateScreen},
     QueueableCommand,
 };
 
@@ -67,80 +68,7 @@ struct CliOptions {
     agent: Option<String>,
 }
 
-fn osc52_clipboard_sequence(text: &str) -> Result<String, String> {
-    let term = std::env::var("TERM").unwrap_or_default();
-    if term.is_empty() || term == "dumb" {
-        return Err("clipboard unavailable in dumb terminal".to_string());
-    }
-
-    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-    let inner = format!("\x1b]52;c;{}\x07", encoded);
-    if std::env::var_os("TMUX").is_some() {
-        Ok(format!("\x1bPtmux;\x1b{}\x1b\\", inner.replace("\x1b", "\x1b\x1b")))
-    } else if std::env::var_os("STY").is_some() {
-        Ok(format!("\x1bP{}\x1b\\", inner.replace("\x1b", "\x1b\x1b")))
-    } else {
-        Ok(inner)
-    }
-}
-
-fn copy_to_clipboard(text: &str) -> Result<&'static str, String> {
-    let attempts: &[(&str, &[&str], &str)] = &[
-        ("wl-copy", &[], "system clipboard"),
-        ("xclip", &["-selection", "clipboard"], "xclip"),
-        ("xsel", &["--clipboard", "--input"], "xsel"),
-        ("pbcopy", &[], "pbcopy"),
-    ];
-    for (cmd, args, label) in attempts {
-        let mut child = match Command::new(cmd)
-            .args(*args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn() {
-                Ok(child) => child,
-                Err(_) => continue,
-            };
-        if let Some(mut stdin) = child.stdin.take() {
-            if stdin.write_all(text.as_bytes()).is_ok() && child.wait().map(|s| s.success()).unwrap_or(false) {
-                return Ok(label);
-            }
-        }
-    }
-
-    let seq = osc52_clipboard_sequence(text)?;
-    let mut tty = OpenOptions::new()
-        .write(true)
-        .open("/dev/tty")
-        .map_err(|e| format!("clipboard failed: {}", e))?;
-    tty.write_all(seq.as_bytes())
-        .and_then(|_| tty.flush())
-        .map_err(|e| format!("clipboard write failed: {}", e))?;
-    Ok(if std::env::var_os("TMUX").is_some() { "OSC52 via tmux" } else { "OSC52" })
-}
-
-fn read_from_clipboard() -> Option<String> {
-    let attempts: &[(&str, &[&str])] = &[
-        ("wl-paste", &["--no-newline"]),
-        ("xclip", &["-selection", "clipboard", "-o"]),
-        ("xsel", &["--clipboard", "--output"]),
-        ("pbpaste", &[]),
-    ];
-    for (cmd, args) in attempts {
-        if let Ok(output) = Command::new(cmd)
-            .args(*args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
-        {
-            if output.status.success() {
-                return String::from_utf8(output.stdout).ok();
-            }
-        }
-    }
-    None
-}
+use clipboard::{copy_to_clipboard, read_from_clipboard};
 
 fn parse_args() -> CliOptions {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -4335,8 +4263,11 @@ fn main() -> io::Result<()> {
     let mut session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
     let mut native_transcript_state = NativeTranscriptRenderState::default();
 
+    clipboard::configure_tmux_clipboard();
+
     ct::enable_raw_mode()?;
     let mut stdout = io::stdout();
+    stdout.queue(EnterAlternateScreen)?;
     stdout.queue(EnableBracketedPaste)?;
     let mut mouse_capture_enabled = false;
     if app.active_view == View::Chat || app.active_view == View::Sessions {
@@ -5478,6 +5409,7 @@ fn main() -> io::Result<()> {
     stdout.queue(cursor::Show)?;
     stdout.queue(DisableMouseCapture)?;
     stdout.queue(DisableBracketedPaste)?;
+    stdout.queue(LeaveAlternateScreen)?;
     stdout.flush()?;
     ct::disable_raw_mode()?;
     println!("charon-tui exited.");
