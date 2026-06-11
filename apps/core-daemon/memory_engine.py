@@ -145,9 +145,13 @@ class MemoryEngine:
         import sqlite_vec
         db_path = self.state_dir / "memory.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        db = sqlite3.connect(str(db_path))
+        # check_same_thread=False + busy_timeout mirror libs/store.py: the
+        # engine is constructed ad-hoc across threads, and concurrent writers
+        # to memory.db must wait rather than raise "database is locked".
+        db = sqlite3.connect(str(db_path), check_same_thread=False)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA busy_timeout=5000")
         db.execute("PRAGMA synchronous=NORMAL")
         db.enable_load_extension(True)
         sqlite_vec.load(db)
