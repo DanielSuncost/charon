@@ -3353,9 +3353,14 @@ class ChatBackend:
             {'cmd': '/automate webhook <automation_id> <url>', 'desc': 'Set a webhook for automation failure/recovery alerts'},
             {'cmd': '/harvest_souls', 'desc': 'Scan sibling agent repos for abilities to assimilate'},
             {'cmd': '/harvest_souls list', 'desc': 'Show numbered findings from last scan'},
-            {'cmd': '/harvest_souls plan', 'desc': 'Show implementation path for an ability'},
-            {'cmd': '/harvest_souls adopt', 'desc': 'Mark abilities for adoption (by number)'},
-            {'cmd': '/harvest_souls adopt all', 'desc': 'Adopt all discovered abilities'},
+            {'cmd': '/harvest_souls evaluate', 'desc': 'Evaluate real capability gaps from the last scan'},
+            {'cmd': '/harvest_souls review', 'desc': 'Show capability-level harvest decisions'},
+            {'cmd': '/harvest_souls decide', 'desc': 'Inspect one capability harvest decision'},
+            {'cmd': '/harvest_souls harvest', 'desc': 'Queue capability clusters for assimilation'},
+            {'cmd': '/harvest_souls harvest all', 'desc': 'Queue all recommended capability clusters'},
+            {'cmd': '/harvest_souls plan', 'desc': 'Show implementation path for a raw ability'},
+            {'cmd': '/harvest_souls adopt', 'desc': 'Legacy: mark raw abilities for adoption'},
+            {'cmd': '/harvest_souls adopt all', 'desc': 'Legacy: adopt all raw discovered abilities'},
             {'cmd': '/harvest_souls roadmap', 'desc': 'Show adoption roadmap and progress'},
             {'cmd': '/harvest_souls status', 'desc': 'Show last scan summary'},
             {'cmd': '/harvest_souls hermes-agent', 'desc': 'Scan only hermes-agent'},
@@ -5416,6 +5421,46 @@ class ChatBackend:
                     self._harvest_souls_show_findings(request_id)
                     return
 
+                # /harvest_souls evaluate — run capability-level gap evaluation from last scan
+                if rest == 'evaluate':
+                    import threading
+                    def _run_gap_eval():
+                        try:
+                            from assimilation import run_gap_evaluation_from_saved_scan
+                            clusters = run_gap_evaluation_from_saved_scan(
+                                state_dir=STATE_DIR,
+                                docs_dir=ROOT / 'docs',
+                                charon_root=ROOT,
+                                on_status=lambda msg: emit({'type': 'status', 'message': msg, 'request_id': request_id}),
+                            )
+                            if not clusters:
+                                emit({'type': 'status', 'message': 'No saved scan found. Run /harvest_souls first.', 'request_id': request_id})
+                            else:
+                                emit({'type': 'status', 'message': f'Gap evaluation complete — {len(clusters)} capability clusters.', 'request_id': request_id})
+                                self._harvest_souls_review(request_id)
+                        except Exception as e:
+                            emit({'type': 'error', 'error': f'Gap evaluation failed: {e}', 'request_id': request_id})
+                    emit({'type': 'status', 'message': 'Evaluating capability gaps from last harvest scan...', 'request_id': request_id})
+                    threading.Thread(target=_run_gap_eval, daemon=True).start()
+                    return
+
+                # /harvest_souls review — show capability-level harvest menu
+                if rest == 'review':
+                    self._harvest_souls_review(request_id)
+                    return
+
+                # /harvest_souls decide <N> — inspect capability-level decision
+                if rest.startswith('decide '):
+                    idx_str = rest[7:].strip()
+                    self._harvest_souls_decide(idx_str, request_id)
+                    return
+
+                # /harvest_souls harvest <N|N,N,N|all> — queue capability clusters for assimilation
+                if rest.startswith('harvest '):
+                    selection = rest[8:].strip()
+                    self._harvest_souls_harvest(selection, request_id)
+                    return
+
                 # /harvest_souls plan <N> — show implementation path for ability #N
                 if rest.startswith('plan '):
                     idx_str = rest[5:].strip()
@@ -5448,9 +5493,9 @@ class ChatBackend:
                             on_status=lambda msg: emit({'type': 'status', 'message': msg, 'request_id': request_id}),
                         )
                         emit({'type': 'status', 'message': '', 'request_id': request_id})
-                        emit({'type': 'status', 'message': f'Scan complete — {result.get("new_abilities", 0)} new abilities found.', 'request_id': request_id})
-                        # Show findings inline
-                        self._harvest_souls_show_findings(request_id)
+                        emit({'type': 'status', 'message': f'Scan complete — {result.get("new_abilities", 0)} new abilities, {result.get("real_gaps", 0)} real capability gaps.', 'request_id': request_id})
+                        # Show capability review inline when available; fall back to raw findings
+                        self._harvest_souls_review(request_id)
                     except Exception as e:
                         emit({'type': 'error', 'error': f'Harvest failed: {e}', 'request_id': request_id})
 
@@ -5544,6 +5589,163 @@ class ChatBackend:
         emit({'type': 'status', 'message': '  /harvest_souls adopt 1,3,7      — adopt multiple abilities', 'request_id': request_id})
         emit({'type': 'status', 'message': '  /harvest_souls adopt all        — adopt everything', 'request_id': request_id})
         emit({'type': 'status', 'message': '  /harvest_souls roadmap          — show adoption roadmap', 'request_id': request_id})
+
+    def _harvest_souls_load_gap_review(self) -> list[dict]:
+        """Load capability-level gap review clusters."""
+        try:
+            from assimilation import load_gap_review, PRIORITY_ORDER
+            clusters = load_gap_review(STATE_DIR)
+            clusters.sort(key=lambda c: (PRIORITY_ORDER.get(c.get('priority', 'low'), 3), -int(c.get('value', 0) or 0)))
+            return clusters
+        except Exception:
+            return []
+
+    def _harvest_souls_review(self, request_id: str | None):
+        """Display capability-level harvest decisions for the user."""
+        clusters = self._harvest_souls_load_gap_review()
+        if not clusters:
+            emit({'type': 'status', 'message': 'No capability gap review found. Run /harvest_souls first, or /harvest_souls evaluate after a scan.', 'request_id': request_id})
+            return
+
+        actionable = [c for c in clusters if c.get('recommendation') in ('assimilate', 'adapt') and c.get('priority') != 'skip']
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': '═══ Harvest Souls: Capability Gap Review ═══', 'request_id': request_id})
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+
+        current_tier = None
+        for i, c in enumerate(clusters):
+            tier = c.get('priority', 'medium').upper()
+            if tier != current_tier:
+                current_tier = tier
+                count = sum(1 for x in clusters if x.get('priority', 'medium').upper() == tier)
+                emit({'type': 'status', 'message': f'  [{tier}] — {count} capability clusters', 'request_id': request_id})
+
+            cap = c.get('capability', '?')
+            rec = c.get('recommendation', '?')
+            coverage = c.get('charon_coverage', '?')
+            real_gap = 'gap' if c.get('real_gap') else 'no gap'
+            scores = f'V{c.get("value", "?")}/E{c.get("effort", "?")}/R{c.get("risk", "?")}'
+            emit({'type': 'status', 'message': f'    {i + 1:>3}. {cap} — {rec} ({coverage}, {real_gap}, {scores})', 'request_id': request_id})
+            rationale = c.get('rationale', '')
+            if rationale:
+                emit({'type': 'status', 'message': f'         {rationale[:160]}', 'request_id': request_id})
+            src = c.get('source_items', [])[:5]
+            if src:
+                names = ', '.join(f'{x.get("source_agent", "?")}:{x.get("name", "?")}' for x in src)
+                suffix = '…' if len(c.get('source_items', [])) > 5 else ''
+                emit({'type': 'status', 'message': f'         Sources: {names}{suffix}', 'request_id': request_id})
+
+        adopted_file = STATE_DIR / 'assimilation' / 'adopted_capabilities.json'
+        adopted_count = 0
+        if adopted_file.exists():
+            try:
+                adopted_count = len(json.loads(adopted_file.read_text()))
+            except Exception:
+                pass
+
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'{len(actionable)} actionable candidates | {adopted_count} capability clusters adopted', 'request_id': request_id})
+        emit({'type': 'status', 'message': 'Review doc: docs/agent-capability-gap-review.md', 'request_id': request_id})
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': 'Next steps:', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  /harvest_souls decide <N>       — inspect one capability decision', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  /harvest_souls harvest <N>      — add one capability cluster to adoption queue', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  /harvest_souls harvest 1,3,7    — harvest multiple clusters', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  /harvest_souls harvest all      — harvest all assimilate/adapt recommendations', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  /harvest_souls roadmap          — show adoption roadmap', 'request_id': request_id})
+
+    def _harvest_souls_decide(self, idx_str: str, request_id: str | None):
+        """Show a detailed capability-cluster harvest decision."""
+        clusters = self._harvest_souls_load_gap_review()
+        if not clusters:
+            emit({'type': 'status', 'message': 'No capability review. Run /harvest_souls first.', 'request_id': request_id})
+            return
+        try:
+            idx = int(idx_str) - 1
+            if idx < 0 or idx >= len(clusters):
+                raise ValueError()
+        except ValueError:
+            emit({'type': 'error', 'error': f'Invalid capability number. Use 1-{len(clusters)}.', 'request_id': request_id})
+            return
+        c = clusters[idx]
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'═══ Harvest Decision: {c.get("capability", "?")} ═══', 'request_id': request_id})
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'  Recommendation: {c.get("recommendation", "?")} / {c.get("priority", "medium").upper()}', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'  Coverage:       {c.get("charon_coverage", "?")}', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'  Real gap:       {bool(c.get("real_gap"))}', 'request_id': request_id})
+        if c.get('existing_charon_equivalent'):
+            emit({'type': 'status', 'message': f'  Equivalent:     {c.get("existing_charon_equivalent")}', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'  Scores:         value {c.get("value", "?")}/10, effort {c.get("effort", "?")}/10, risk {c.get("risk", "?")}/10', 'request_id': request_id})
+        if c.get('rationale'):
+            emit({'type': 'status', 'message': f'  Why:            {c.get("rationale")}', 'request_id': request_id})
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  Source items:', 'request_id': request_id})
+        for item in c.get('source_items', [])[:20]:
+            emit({'type': 'status', 'message': f'    - {item.get("source_agent", "?")}:{item.get("name", "?")} ({item.get("type", "?")})', 'request_id': request_id})
+        plan = c.get('assimilation_plan') or []
+        if plan:
+            emit({'type': 'status', 'message': '', 'request_id': request_id})
+            emit({'type': 'status', 'message': '  Assimilation plan:', 'request_id': request_id})
+            for n, step in enumerate(plan, 1):
+                emit({'type': 'status', 'message': f'    {n}. {step}', 'request_id': request_id})
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'  /harvest_souls harvest {idx + 1}  — add this capability to the adoption queue', 'request_id': request_id})
+
+    def _harvest_souls_harvest(self, selection: str, request_id: str | None):
+        """Adopt capability clusters selected by the user."""
+        clusters = self._harvest_souls_load_gap_review()
+        if not clusters:
+            emit({'type': 'status', 'message': 'No capability review. Run /harvest_souls first.', 'request_id': request_id})
+            return
+        indices = set()
+        if selection.lower() == 'all':
+            indices = {i for i, c in enumerate(clusters) if c.get('recommendation') in ('assimilate', 'adapt') and c.get('priority') != 'skip'}
+        else:
+            for part in selection.split(','):
+                part = part.strip()
+                if '-' in part:
+                    try:
+                        a, b = part.split('-', 1)
+                        for i in range(int(a) - 1, int(b)):
+                            if 0 <= i < len(clusters):
+                                indices.add(i)
+                    except ValueError:
+                        pass
+                elif part.isdigit():
+                    idx = int(part) - 1
+                    if 0 <= idx < len(clusters):
+                        indices.add(idx)
+        if not indices:
+            emit({'type': 'error', 'error': f'Invalid selection. Use 1-{len(clusters)}, comma-separated, range, or all.', 'request_id': request_id})
+            return
+        adopted_file = STATE_DIR / 'assimilation' / 'adopted_capabilities.json'
+        adopted = []
+        if adopted_file.exists():
+            try:
+                adopted = json.loads(adopted_file.read_text())
+            except Exception:
+                pass
+        existing = {c.get('id') or c.get('capability') for c in adopted}
+        new_adoptions = []
+        for i in sorted(indices):
+            c = clusters[i]
+            key = c.get('id') or c.get('capability')
+            if key not in existing:
+                c = {**c, 'impl_status': c.get('impl_status', 'pending')}
+                new_adoptions.append(c)
+                adopted.append(c)
+        adopted_file.parent.mkdir(parents=True, exist_ok=True)
+        adopted_file.write_text(json.dumps(adopted, indent=2, ensure_ascii=False))
+        if new_adoptions:
+            emit({'type': 'status', 'message': '', 'request_id': request_id})
+            emit({'type': 'status', 'message': f'Queued {len(new_adoptions)} capability cluster(s) for assimilation:', 'request_id': request_id})
+            for c in new_adoptions:
+                emit({'type': 'status', 'message': f'  + {c.get("capability", "?")} ({c.get("recommendation", "?")}, {c.get("priority", "medium")})', 'request_id': request_id})
+        else:
+            emit({'type': 'status', 'message': 'All selected capability clusters were already queued.', 'request_id': request_id})
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'Total queued clusters: {len(adopted)} | /harvest_souls roadmap to see the plan', 'request_id': request_id})
 
     def _harvest_souls_plan(self, idx_str: str, request_id: str | None):
         """Show the implementation path for a specific ability."""
@@ -5678,9 +5880,12 @@ class ChatBackend:
 
     def _harvest_souls_roadmap(self, request_id: str | None):
         """Show the adoption roadmap — what's been adopted and implementation status."""
-        adopted_file = STATE_DIR / 'assimilation' / 'adopted.json'
+        adopted_file = STATE_DIR / 'assimilation' / 'adopted_capabilities.json'
+        legacy_adopted_file = STATE_DIR / 'assimilation' / 'adopted.json'
+        if not adopted_file.exists() and legacy_adopted_file.exists():
+            adopted_file = legacy_adopted_file
         if not adopted_file.exists():
-            emit({'type': 'status', 'message': 'No abilities adopted yet. Run /harvest_souls, then /harvest_souls adopt <N>.', 'request_id': request_id})
+            emit({'type': 'status', 'message': 'No abilities adopted yet. Run /harvest_souls, then /harvest_souls harvest <N>.', 'request_id': request_id})
             return
 
         try:
@@ -5707,9 +5912,9 @@ class ChatBackend:
                 current_tier = tier
                 emit({'type': 'status', 'message': f'  [{tier}]', 'request_id': request_id})
 
-            name = a.get('name', '?')
-            atype = a.get('type', '?')
-            source = a.get('source', '?')
+            name = a.get('capability') or a.get('name', '?')
+            atype = a.get('type') or a.get('recommendation', '?')
+            source = a.get('source') or ','.join(a.get('source_agents', [])[:2]) or '?'
             status = a.get('impl_status', 'pending')
             marker = '[ ]' if status == 'pending' else '[~]' if status == 'in_progress' else '[x]'
             emit({'type': 'status', 'message': f'    {marker} {name} ({atype}, from {source})', 'request_id': request_id})
@@ -5833,6 +6038,13 @@ class ChatBackend:
                 else:
                     self._save_onboarding(onboarding)
 
+            def _continue_provider_setup_after_auth() -> None:
+                existing_model = str(target_state.get('model') or target_state.get('provider_model') or '').strip()
+                if existing_model:
+                    self._run_setup_command(f'model {existing_model}', request_id)
+                else:
+                    self._run_setup_command('model', request_id)
+
             # For OAuth providers, try to find existing credentials first
             if arg in ('claude-code', 'codex'):
                 target_state['step'] = 'provider-auth'
@@ -5843,20 +6055,30 @@ class ChatBackend:
                 # Try to find existing credentials before running full OAuth.
                 # Use /setup provider <name> --force to skip and do fresh OAuth.
                 existing_token = None
+                existing_tokens = {}
                 if not force_oauth:
                     # Check Charon's own auth store for this provider
-                    existing_token = self._find_charon_auth_token(provider_id)
+                    existing_tokens = self._find_charon_auth_tokens(provider_id)
+                    existing_token = str(existing_tokens.get('access_token') or '').strip()
+                    if existing_token and self._is_jwt_expired(existing_token) and not str(existing_tokens.get('refresh_token') or '').strip():
+                        emit({'type': 'status', 'message': f'Existing {arg} token is expired and has no refresh token. Starting fresh OAuth.', 'request_id': request_id})
+                        existing_token = None
+                        existing_tokens = {}
                     # For claude-code, also check Claude Code's credentials file
                     if not existing_token and arg == 'claude-code':
                         existing_token = self._find_claude_credentials()
+                        if existing_token:
+                            existing_tokens = {'access_token': existing_token}
                     if existing_token:
                         try:
                             import charon_auth
                             store = charon_auth._load_auth()
                             store['active_provider'] = provider_id
                             store.setdefault('providers', {})
+                            if not existing_tokens:
+                                existing_tokens = {'access_token': existing_token}
                             store['providers'][provider_id] = {
-                                'tokens': {'access_token': existing_token},
+                                'tokens': existing_tokens,
                                 'last_login': charon_auth._now(),
                                 'auth_type': 'existing',
                             }
@@ -5867,7 +6089,7 @@ class ChatBackend:
                             _persist_target_state()
 
                             emit({'type': 'status', 'message': f'✓ Found existing {arg} credentials! Token imported.', 'request_id': request_id})
-                            self._run_setup_command('model', request_id)
+                            _continue_provider_setup_after_auth()
                             return
                         except Exception as e:
                             emit({'type': 'status', 'message': f'Found credentials but import failed: {e}. Falling back to OAuth.', 'request_id': request_id})
@@ -5897,8 +6119,7 @@ class ChatBackend:
                             _persist_target_state()
 
                             emit({'type': 'status', 'message': f'✓ Authentication successful!', 'request_id': request_id})
-                            # Auto-trigger model picker
-                            self._run_setup_command('model', request_id)
+                            _continue_provider_setup_after_auth()
                         except Exception as e:
                             _revert_target_state()
                             emit({'type': 'error', 'error': f'Auth failed: {e}', 'request_id': request_id})
@@ -6240,19 +6461,42 @@ class ChatBackend:
 
     def _find_charon_auth_token(self, provider_id: str) -> str | None:
         """Check Charon's own auth store for a valid token."""
+        tokens = self._find_charon_auth_tokens(provider_id)
+        access_token = str(tokens.get('access_token') or '').strip()
+        if not access_token:
+            return None
+        if self._is_jwt_expired(access_token) and not str(tokens.get('refresh_token') or '').strip():
+            return None
+        return access_token
+
+    def _find_charon_auth_tokens(self, provider_id: str) -> dict:
+        """Return Charon's stored OAuth token bundle when it is reusable."""
         auth_file = STATE_DIR / 'auth' / 'auth.json'
         if not auth_file.exists():
-            return None
+            return {}
         try:
             store = json.loads(auth_file.read_text())
             provider_auth = store.get('providers', {}).get(provider_id, {})
             tokens = provider_auth.get('tokens', {})
-            access_token = tokens.get('access_token', '').strip()
-            if access_token:
-                return access_token
+            if isinstance(tokens, dict) and str(tokens.get('access_token') or '').strip():
+                return dict(tokens)
         except Exception:
             pass
-        return None
+        return {}
+
+    def _is_jwt_expired(self, token: str, *, skew_seconds: int = 60) -> bool:
+        """Best-effort JWT expiry check. Non-JWT tokens are treated as not expired."""
+        try:
+            import base64
+            parts = str(token or '').split('.')
+            if len(parts) != 3:
+                return False
+            payload = parts[1] + '=' * (-len(parts[1]) % 4)
+            data = json.loads(base64.urlsafe_b64decode(payload.encode('utf-8')))
+            exp = int(data.get('exp') or 0)
+            return bool(exp and exp <= int(time.time()) + skew_seconds)
+        except Exception:
+            return False
 
     def _find_claude_credentials(self) -> str | None:
         """Look for existing Claude Code credentials on this machine.
