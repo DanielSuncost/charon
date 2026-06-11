@@ -252,12 +252,12 @@ full list.
 | Document | Description |
 |----------|-------------|
 | [Install](docs/install.md) | Setup on macOS and Ubuntu |
-| [Semantic Memory](docs/plans/semantic-memory-engine.md) | Hybrid retrieval, benchmarks |
-| [Three-Tier Memory](docs/three-tier-memory.md) | Context hierarchy |
-| [Judge Loops](docs/plans/procedure-learning-and-optimization-loops.md) | Iterative optimization |
-| [Autonomous Work](docs/plans/autonomous-goal-driven-work.md) | Goal states, self-assignment |
-| [Capability Roadmap](docs/plans/capability-roadmap.md) | Prioritized feature plan |
-| [Master Plan](docs/plans/MASTER_PLAN.md) | Build phases |
+| [Semantic Memory Engine](docs/plans/semantic-memory-engine.md) | Hybrid retrieval, LongMemEval benchmarks |
+| [Three-Tier Memory](docs/three-tier-memory.md) | User / project / agent context hierarchy |
+| [Procedures & Judge Loops](docs/plans/procedure-learning-and-optimization-loops.md) | Iterative optimization with pluggable scoring |
+| [Autonomous Work](docs/plans/autonomous-goal-driven-work.md) | Goal-driven self-assignment |
+| [Capability Roadmap](docs/plans/capability-roadmap.md) | Prioritized feature plan (P0–P3) |
+| [Master Plan](docs/plans/MASTER_PLAN.md) | Architecture and build phases |
 
 ---
 

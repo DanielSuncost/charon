@@ -1,10 +1,10 @@
-# Semantic Memory Engine — Beat LongMemEval_S
+# Semantic Memory Engine
 
 ## Goal
 
-Build a local-first semantic memory engine that surpasses Supermemory's
-81.6% on LongMemEval_S. No cloud, no API keys, no vector DB — SQLite +
-local embeddings only.
+Build a local-first semantic memory engine that scores competitively on
+LongMemEval_S (cloud-hosted SOTA: 81.6%). No cloud, no API keys, no
+vector DB — SQLite + local embeddings only.
 
 ## What LongMemEval_S Tests
 
