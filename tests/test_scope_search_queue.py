@@ -65,6 +65,23 @@ def test_scope_multiple_prefixes(tmp_path):
     assert _check_scope('Read', {'path': 'docs/readme.md'}, ctx) is not None
 
 
+def test_scope_blocks_sibling_prefix(tmp_path):
+    """Scope 'src' must NOT allow a sibling dir like 'src-evil' that merely
+    shares a string prefix (path-component boundary required)."""
+    ctx = ToolContext(project_root=tmp_path, scope=['src'])
+    assert _check_scope('Read', {'path': 'src/main.py'}, ctx) is None
+    blocked = _check_scope('Write', {'path': 'src-evil/payload.py'}, ctx)
+    assert blocked is not None
+    assert 'Scope violation' in blocked
+
+
+def test_scope_allows_exact_scope_file(tmp_path):
+    """A scope entry naming a single file allows exactly that file."""
+    ctx = ToolContext(project_root=tmp_path, scope=['src/main.py'])
+    assert _check_scope('Edit', {'path': 'src/main.py'}, ctx) is None
+    assert _check_scope('Edit', {'path': 'src/main.py.bak'}, ctx) is not None
+
+
 def test_scope_enforced_in_execute_tool(tmp_path):
     """execute_tool should block scoped writes."""
     (tmp_path / 'src' / 'auth').mkdir(parents=True)
