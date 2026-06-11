@@ -221,6 +221,9 @@ def _run_shade(
             state_dir=state_dir,
             max_tokens=16384,
         )
+        # Enforce the contract's file scope on Read/Write/Edit (not just advise
+        # it via the prompt). Empty scope means "entire project" (no restriction).
+        engine.scope = list(scope) if scope else None
 
         # Process each phase
         contract = get_contract(state_dir, contract_id)
