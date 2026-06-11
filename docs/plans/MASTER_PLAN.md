@@ -1,4 +1,4 @@
-# Charon Master Plan: From Scattered Stubs to Publishable System
+# Charon Master Plan
 
 > Date: 2026-03-18
 > Status: Active — the single source of truth for what to build and in what order.

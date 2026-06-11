@@ -1,7 +1,6 @@
 # Procedure Learning & Optimization Loops
 
-> Unified system for procedural memory and autonomous optimization, inspired by
-> Hermes Agent's skills system and Karpathy's Autoresearch.
+> Unified system for procedural memory and autonomous optimization.
 
 **Status**: Draft  
 **Author**: charon-01  

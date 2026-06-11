@@ -2,7 +2,7 @@
 
 > Unified, prioritized list of capabilities to build.
 > Consolidated from gap analysis across Hermes, Pi, OpenClaw, and OpenCode.
-> Updated: 2026-05-06
+> Updated: 2026-06-11
 
 ---
 
@@ -127,9 +127,9 @@ These extend what makes Charon unique: multi-agent coordination, shades, and the
 ## P3 — Strategic: Multi-System Interoperability
 
 - [ ] **Deep agent bridge plugins** — structured APIs for Hermes, Pi, Claude Code, Codex, OpenCode
-- [ ] **Structured task dispatch** — send work to external agents, collect results
-- [ ] **Result normalization** — common format across agent types
-- [ ] **Capability maps per agent type** — registry of what each agent can do
+- [x] **Structured task dispatch (Harbor)** — dispatch tasks to remote agents over SSH with voyage manifests
+- [x] **Result normalization** — structured results with memory ingestion from remote workers
+- [x] **Capability maps per agent type** — `/harvest_souls` scans peer repos and catalogs abilities
 - [ ] **Memory bridging** — convert external agent work into Charon's memory model
 - [ ] **Mixed-agent search** — unified search across all agent systems
 - [ ] **Cross-agent provenance** — track which system performed each piece of work
@@ -148,3 +148,9 @@ Items marked [x] above, plus:
 - [x] Dynamic tool loader
 - [x] Agent coordination with boundary detection
 - [x] SQLite persistence with conversation search and resume
+- [x] Harbor protocol — remote task dispatch with mid-task recall and memory ingestion
+- [x] `/harvest_souls` — scan peer agent repos, LLM-ranked gap analysis, interactive adoption workflow
+- [x] Shared clipboard module — platform-aware (pbcopy/OSC52), tmux passthrough
+- [x] Alternate screen buffer — proper mouse capture in terminal emulators
+- [x] Auth error resilience — dismiss auth dialog on failure, reuse existing OAuth tokens
+- [x] Conversation rooms — multi-agent structured discussions with turn orchestration
