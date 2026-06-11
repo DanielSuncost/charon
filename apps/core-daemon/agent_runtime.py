@@ -340,51 +340,6 @@ def execute_action(action: dict, task: dict, agent: dict) -> tuple[bool, dict]:
     return False, {'error': f'unsupported action: {action_name}'}
 
 
-def run_task_tick(state_dir: Path, task: dict, *, agent: dict, llm_adapter=None) -> tuple[bool, dict]:
-    ensure_agent_runtime_state(state_dir, agent)
-    agent_id = agent.get('id')
-    task_id = task.get('id') or f"task-{uuid.uuid4().hex[:8]}"
-    attempt_id = f"att-{uuid.uuid4().hex[:10]}"
-
-    task.setdefault('attempts', [])
-    task['attempts'].append({'attempt_id': attempt_id, 'started_at': utc_now_iso(), 'status': 'running'})
-    record_attempt_event(state_dir, agent_id, task_id, attempt_id, 'attempt_started', {'task_type': task.get('task_type')})
-    append_inbox_event(state_dir, agent_id, 'task_received', {'task_id': task_id, 'instruction': task.get('instruction')})
-
-    memory = _read_json(_agent_dir(state_dir, agent_id) / 'working_memory.json', {'notes': []})
-    planner_mode = _resolve_planner_mode(state_dir)
-    action = decide_action(task, agent=agent, memory=memory, llm_adapter=llm_adapter, planner_mode=planner_mode)
-    record_attempt_event(state_dir, agent_id, task_id, attempt_id, 'action_planned', {'action': action.get('action'), 'planner_mode': planner_mode})
-
-    ok, payload = execute_action(action, task=task, agent=agent)
-    if ok:
-        summary = str(payload.get('summary') or '').strip()[:1200]
-        update_working_memory(state_dir, agent_id, task_id=task_id, summary=summary)
-        append_inbox_event(state_dir, agent_id, 'task_succeeded', {'task_id': task_id, 'summary': summary})
-        record_attempt_event(state_dir, agent_id, task_id, attempt_id, 'attempt_succeeded', {'summary': summary})
-        task['attempts'][-1]['status'] = 'succeeded'
-        task['attempts'][-1]['completed_at'] = utc_now_iso()
-        return True, {
-            'status': 'task_succeeded',
-            'summary': summary,
-            'attempt_id': attempt_id,
-            'tool_result': payload.get('tool_result'),
-        }
-
-    error = str(payload.get('error') or 'task execution failed')
-    append_inbox_event(state_dir, agent_id, 'task_failed', {'task_id': task_id, 'error': error})
-    record_attempt_event(state_dir, agent_id, task_id, attempt_id, 'attempt_failed', {'error': error})
-    task['attempts'][-1]['status'] = 'failed'
-    task['attempts'][-1]['completed_at'] = utc_now_iso()
-    task['attempts'][-1]['error'] = error
-    return False, {
-        'status': 'task_failed',
-        'error': error,
-        'attempt_id': attempt_id,
-        'tool_result': payload.get('tool_result'),
-    }
-
-
 # ============================================================================
 # Unified execution via ConversationEngine
 # ============================================================================
