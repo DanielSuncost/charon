@@ -1173,10 +1173,9 @@ def _check_scope(name: str, params: dict, ctx: ToolContext) -> str | None:
             continue
         # Scope can be relative to project root
         allowed = str((ctx.project_root / scope_path).resolve())
-        if target_str.startswith(allowed):
-            return None
-        # Also check if target is the scope dir itself
-        if target_str == allowed:
+        # Match the scope dir itself or anything beneath it, but require a
+        # path-component boundary so scope "src" does not allow "src-evil/".
+        if target_str == allowed or target_str.startswith(allowed + os.sep):
             return None
 
     scope_list = ', '.join(ctx.scope)
