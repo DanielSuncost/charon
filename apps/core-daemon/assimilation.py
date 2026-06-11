@@ -561,6 +561,297 @@ def _heuristic_analyze(ability_lines: list[str], charon_caps: dict) -> list[dict
     return results
 
 
+
+
+# ── Capability gap evaluation ───────────────────────────────────────
+
+GAP_REVIEW_SYSTEM = (
+    'You are a senior product/engineering strategist for Charon, a persistent agent OS. '
+    'Evaluate peer-agent abilities as capability clusters, not isolated function names. '
+    'Decide whether each cluster is a real Charon gap, partial overlap, redundant, or not worth harvesting. '
+    'Prefer Charon-native adaptations over blindly copying peer APIs. Respond ONLY with valid JSON.'
+)
+
+
+def _flatten_ability_records(scan_results: dict[str, dict]) -> list[dict]:
+    """Flatten scan results into source-linked ability records for gap review."""
+    records: list[dict] = []
+    for agent_name, data in scan_results.items():
+        by_key = {(a.get('type'), a.get('name')): a for a in data.get('analysis', [])}
+        for t in data.get('tools', []):
+            a = by_key.get(('tool', t.get('name')), {})
+            records.append({
+                'name': t.get('name', ''),
+                'type': 'tool',
+                'source_agent': agent_name,
+                'source_file': t.get('source_file', ''),
+                'category': t.get('toolset', ''),
+                'description': a.get('description') or t.get('description', ''),
+                'charon_has': bool(a.get('charon_has', False)),
+                'priority': a.get('priority', 'medium'),
+                'rationale': a.get('rationale', ''),
+            })
+        for sk in data.get('skills', []):
+            a = by_key.get(('skill', sk.get('name')), {})
+            records.append({
+                'name': sk.get('name', ''),
+                'type': 'skill',
+                'source_agent': agent_name,
+                'source_file': sk.get('source', ''),
+                'category': ', '.join(sk.get('tags', [])[:3]),
+                'description': a.get('description') or sk.get('description', ''),
+                'charon_has': bool(a.get('charon_has', False)),
+                'priority': a.get('priority', 'medium'),
+                'rationale': a.get('rationale', ''),
+            })
+        for c in data.get('commands', []):
+            a = by_key.get(('command', c.get('name')), {})
+            records.append({
+                'name': c.get('name', ''),
+                'type': 'command',
+                'source_agent': agent_name,
+                'source_file': 'commands',
+                'category': c.get('category', ''),
+                'description': a.get('description') or c.get('description', ''),
+                'charon_has': bool(a.get('charon_has', False)),
+                'priority': a.get('priority', 'medium'),
+                'rationale': a.get('rationale', ''),
+            })
+    return records
+
+
+def _heuristic_capability_clusters(records: list[dict]) -> list[dict]:
+    """Fallback clusterer when LLM evaluation is unavailable."""
+    buckets: dict[tuple[str, str], list[dict]] = {}
+    for r in records:
+        if r.get('charon_has') and r.get('priority') == 'skip':
+            continue
+        category = (r.get('category') or '').lower().strip()
+        name = (r.get('name') or '').lower()
+        if category:
+            key = category.split(',')[0].replace('_', '-').replace(' ', '-')
+        elif '_' in name:
+            key = name.split('_')[0]
+        elif '-' in name:
+            key = name.split('-')[0]
+        else:
+            key = name
+        buckets[(r.get('source_agent', '?'), key)].append(r)
+
+    clusters = []
+    for i, ((source, key), items) in enumerate(sorted(buckets.items()), 1):
+        priorities = [x.get('priority', 'medium') for x in items]
+        priority = sorted(priorities, key=lambda p: PRIORITY_ORDER.get(p, 2))[0] if priorities else 'medium'
+        charon_has_count = sum(1 for x in items if x.get('charon_has'))
+        if charon_has_count == len(items):
+            coverage = 'equivalent'
+            real_gap = False
+            recommendation = 'ignore'
+        elif charon_has_count:
+            coverage = 'partial'
+            real_gap = True
+            recommendation = 'adapt'
+        else:
+            coverage = 'missing'
+            real_gap = priority != 'skip'
+            recommendation = 'assimilate' if priority in ('critical', 'high', 'medium') else 'defer'
+        clusters.append({
+            'id': f'cap-{i:03d}',
+            'capability': key.replace('-', ' ').title(),
+            'source_agents': [source],
+            'source_items': [{'name': x.get('name'), 'type': x.get('type'), 'source_agent': x.get('source_agent')} for x in items],
+            'charon_coverage': coverage,
+            'real_gap': real_gap,
+            'priority': priority,
+            'value': {'critical': 10, 'high': 8, 'medium': 6, 'low': 3, 'skip': 0}.get(priority, 5),
+            'effort': 5,
+            'risk': 4,
+            'recommendation': recommendation,
+            'rationale': 'Heuristic cluster from peer abilities; needs user review.' if real_gap else 'Appears covered or not worth importing.',
+            'assimilation_plan': [
+                'Inspect peer implementation and license constraints.',
+                'Design a Charon-native capability surface rather than copying APIs verbatim.',
+                'Implement behind tests and approval gates where needed.',
+                'Update docs and command/tool registries.',
+            ],
+            'user_prompt': f'Harvest {key.replace("-", " ")} from {source}?',
+        })
+    clusters.sort(key=lambda c: (PRIORITY_ORDER.get(c.get('priority', 'low'), 3), -int(c.get('value', 0))))
+    return clusters
+
+
+def evaluate_capability_gaps(
+    scan_results: dict[str, dict],
+    charon_caps: dict,
+    state_dir: Path,
+    on_status: Callable[[str], None] | None = None,
+) -> list[dict]:
+    """Cluster peer abilities and judge real capability gaps vs Charon."""
+    emit = on_status or (lambda msg: None)
+    records = _flatten_ability_records(scan_results)
+    if not records:
+        return []
+
+    compact_records = []
+    for r in records:
+        compact_records.append({
+            'name': r.get('name'), 'type': r.get('type'), 'source': r.get('source_agent'),
+            'category': r.get('category'), 'description': (r.get('description') or '')[:180],
+            'charon_has': r.get('charon_has'), 'item_priority': r.get('priority'),
+            'item_rationale': (r.get('rationale') or '')[:160],
+        })
+
+    charon_summary = {
+        'tools': charon_caps.get('tools', []),
+        'commands': charon_caps.get('commands', [])[:80],
+        'features': charon_caps.get('features', [])[:40],
+    }
+
+    prompt = f"""Create an end-to-end harvest review for Charon.
+
+Group these peer-agent items into capability clusters. Judge real gaps, not name differences.
+
+Charon current capabilities:
+{json.dumps(charon_summary, indent=2)}
+
+Peer items:
+{json.dumps(compact_records, indent=2)}
+
+Return a JSON array. Each object must have:
+- id: stable short id like cap-001
+- capability: human-readable capability name
+- source_agents: array of repo names
+- source_items: array of objects with name,type,source_agent
+- charon_coverage: one of missing, partial, equivalent, charon_better, irrelevant
+- real_gap: boolean
+- existing_charon_equivalent: string or null
+- priority: critical, high, medium, low, skip
+- value: integer 0-10 user/workflow impact
+- effort: integer 1-10 implementation effort
+- risk: integer 1-10 safety/maintenance/secrets risk
+- recommendation: assimilate, adapt, defer, ignore
+- rationale: concise explanation
+- assimilation_plan: 3-6 concrete Charon-native implementation steps
+- user_prompt: one-line prompt to help the user decide
+
+Rules:
+- Cluster tool families together, e.g. kanban_* as one Kanban capability.
+- Mark redundant terminal/file/browser/web/memory basics as skip/equivalent if Charon already covers them.
+- Prefer adapt when Charon has partial infrastructure but peer UX/workflow is better.
+- Prioritize real workflow unlocks over niche integrations.
+- Return ONLY valid JSON."""
+
+    emit('Evaluating capability gaps across peer systems...')
+    try:
+        ok, resp = asyncio.run(_provider_query(prompt, GAP_REVIEW_SYSTEM, state_dir, max_tokens=8192))
+    except Exception as e:
+        ok, resp = False, str(e)
+
+    if ok:
+        parsed = _extract_json(resp)
+        if isinstance(parsed, list):
+            for i, c in enumerate(parsed, 1):
+                c.setdefault('id', f'cap-{i:03d}')
+                c.setdefault('source_items', [])
+                c.setdefault('priority', 'medium')
+                c.setdefault('recommendation', 'defer')
+            parsed.sort(key=lambda c: (PRIORITY_ORDER.get(c.get('priority', 'low'), 3), -int(c.get('value', 0) or 0)))
+            emit(f'Capability review complete — {sum(1 for c in parsed if c.get("real_gap"))} real gaps identified.')
+            return parsed
+        emit('Capability review LLM response was not parseable; using heuristic clusters.')
+    else:
+        emit(f'Capability review LLM unavailable ({resp[:100]}); using heuristic clusters.')
+    return _heuristic_capability_clusters(records)
+
+
+def generate_gap_review_doc(clusters: list[dict], output_path: Path) -> str:
+    """Generate docs/agent-capability-gap-review.md."""
+    timestamp = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+    lines = [
+        '# Agent Capability Gap Review', '',
+        f'> Auto-generated by `/harvest_souls evaluate`. Last review: {timestamp}', '',
+        'This document clusters peer-agent abilities into real capability gaps, so the user can decide what Charon should harvest and assimilate.', '',
+    ]
+    actionable = [c for c in clusters if c.get('recommendation') in ('assimilate', 'adapt') and c.get('priority') != 'skip']
+    lines.append(f'Actionable harvest candidates: **{len(actionable)}** / {len(clusters)} clusters')
+    lines.append('')
+    for tier in ('critical', 'high', 'medium', 'low', 'skip'):
+        items = [c for c in clusters if c.get('priority') == tier]
+        if not items:
+            continue
+        lines.append(f'## {tier.capitalize()}')
+        lines.append('')
+        for c in items:
+            lines.append(f'### {c.get("id", "?")} — {c.get("capability", "?")}')
+            lines.append('')
+            lines.append(f'- Coverage: **{c.get("charon_coverage", "?")}**')
+            lines.append(f'- Real gap: **{bool(c.get("real_gap"))}**')
+            if c.get('existing_charon_equivalent'):
+                lines.append(f'- Existing Charon equivalent: {c.get("existing_charon_equivalent")}')
+            lines.append(f'- Recommendation: **{c.get("recommendation", "?")}**')
+            lines.append(f'- Scores: value {c.get("value", "?")}/10, effort {c.get("effort", "?")}/10, risk {c.get("risk", "?")}/10')
+            lines.append(f'- Rationale: {c.get("rationale", "")}')
+            src = c.get('source_items', [])[:12]
+            if src:
+                lines.append(f'- Source items: {", ".join(f"{x.get('source_agent','?')}:{x.get('name','?')}" for x in src)}')
+            plan = c.get('assimilation_plan') or []
+            if plan:
+                lines.append('- Assimilation plan:')
+                for step in plan:
+                    lines.append(f'  - {step}')
+            lines.append('')
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text('\n'.join(lines))
+    return str(output_path)
+
+
+def save_gap_review(state_dir: Path, clusters: list[dict]) -> None:
+    assim_dir = state_dir / 'assimilation'
+    assim_dir.mkdir(parents=True, exist_ok=True)
+    (assim_dir / 'gap_review.json').write_text(json.dumps(clusters, indent=2, ensure_ascii=False))
+
+
+def load_gap_review(state_dir: Path) -> list[dict]:
+    f = state_dir / 'assimilation' / 'gap_review.json'
+    if not f.exists():
+        return []
+    try:
+        data = json.loads(f.read_text())
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def load_saved_scan_results(state_dir: Path) -> dict[str, dict]:
+    abilities_dir = state_dir / 'assimilation' / 'abilities'
+    if not abilities_dir.is_dir():
+        return {}
+    results: dict[str, dict] = {}
+    for f in abilities_dir.glob('*.json'):
+        try:
+            results[f.stem] = json.loads(f.read_text())
+        except Exception:
+            pass
+    return results
+
+
+def run_gap_evaluation_from_saved_scan(
+    state_dir: Path,
+    docs_dir: Path,
+    charon_root: Path,
+    on_status: Callable[[str], None] | None = None,
+) -> list[dict]:
+    """Evaluate capability gaps from the latest persisted scan."""
+    results = load_saved_scan_results(state_dir)
+    if not results:
+        return []
+    charon_caps = get_charon_capabilities(charon_root)
+    clusters = evaluate_capability_gaps(results, charon_caps, state_dir, on_status=on_status)
+    save_gap_review(state_dir, clusters)
+    generate_gap_review_doc(clusters, docs_dir / 'agent-capability-gap-review.md')
+    return clusters
+
+
 # ── Document generation ──────────────────────────────────────────────
 
 PRIORITY_ORDER = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'skip': 4}
@@ -832,13 +1123,20 @@ def run_full_assimilation(
         new_count = sum(1 for a in analysis if not a.get('charon_has') and a.get('priority', 'skip') != 'skip')
         emit(f'  {len(analysis)} abilities analyzed, {new_count} new to Charon')
 
-    # 5. Generate document
+    # 5. Generate registry document
     emit('Generating registry document...')
     output_path = docs_dir / 'agent-abilities-registry.md'
     generate_registry_doc(results, unavailable, output_path)
     emit(f'Registry written to {output_path.relative_to(charon_root)}')
 
-    # 6. Save state
+    # 6. Evaluate capability clusters/gaps for user review
+    clusters = evaluate_capability_gaps(results, charon_caps, state_dir, on_status=on_status)
+    save_gap_review(state_dir, clusters)
+    gap_doc = docs_dir / 'agent-capability-gap-review.md'
+    generate_gap_review_doc(clusters, gap_doc)
+    emit(f'Gap review written to {gap_doc.relative_to(charon_root)}')
+
+    # 7. Save state
     save_scan_state(state_dir, results, unavailable)
 
     total = sum(len(d.get('analysis', [])) for d in results.values())
@@ -852,4 +1150,6 @@ def run_full_assimilation(
         'repos_scanned': len(results),
         'total_abilities': total,
         'new_abilities': new_total,
+        'capability_clusters': len(clusters),
+        'real_gaps': sum(1 for c in clusters if c.get('real_gap')),
     }

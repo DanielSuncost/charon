@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import subprocess
+import sys
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'apps' / 'core-daemon' / 'charon_loop.py'
 
@@ -30,7 +31,7 @@ def test_loop_records_graph_message_event_when_task_has_conversation_fields(tmp_
     (state_dir / 'queue.json').write_text(json.dumps(queue, indent=2))
 
     cmd = [
-        'python3', str(SCRIPT),
+        sys.executable, str(SCRIPT),
         '--state-dir', str(state_dir),
         '--stop-file', str(stop_file),
         '--sleep-sec', '0.01',

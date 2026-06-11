@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import subprocess
+import sys
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'apps' / 'core-daemon' / 'charon_loop.py'
 
@@ -16,7 +17,7 @@ def test_loop_completes_bootstrap_tasks(tmp_path):
     stop_file = tmp_path / 'STOP'
 
     cmd = [
-        'python3', str(SCRIPT),
+        sys.executable, str(SCRIPT),
         '--state-dir', str(state_dir),
         '--stop-file', str(stop_file),
         '--sleep-sec', '0.01',
@@ -41,7 +42,7 @@ def test_stop_file_halts_loop(tmp_path):
     stop_file.write_text('stop')
 
     cmd = [
-        'python3', str(SCRIPT),
+        sys.executable, str(SCRIPT),
         '--state-dir', str(state_dir),
         '--stop-file', str(stop_file),
         '--sleep-sec', '0.01',
@@ -61,7 +62,7 @@ def test_debug_trace_writes_verbose_log(tmp_path):
     stop_file = tmp_path / 'STOP'
 
     cmd = [
-        'python3', str(SCRIPT),
+        sys.executable, str(SCRIPT),
         '--state-dir', str(state_dir),
         '--stop-file', str(stop_file),
         '--sleep-sec', '0.01',

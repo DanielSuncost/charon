@@ -53,7 +53,10 @@ def test_http_timeout(tmp_path):
 
 def _init_git_repo(tmp_path):
     """Create a git repo in tmp_path with an initial commit."""
-    subprocess.run(['git', 'init'], cwd=str(tmp_path), capture_output=True)
+    # Force the initial branch name so tests don't depend on the host's
+    # init.defaultBranch (which may be 'main' rather than 'master').
+    subprocess.run(['git', '-c', 'init.defaultBranch=master', 'init'],
+                   cwd=str(tmp_path), capture_output=True)
     subprocess.run(['git', 'config', 'user.email', 'test@test.com'], cwd=str(tmp_path), capture_output=True)
     subprocess.run(['git', 'config', 'user.name', 'Test'], cwd=str(tmp_path), capture_output=True)
     (tmp_path / 'README.md').write_text('# Test')
@@ -175,7 +178,7 @@ def test_recurring_task_re_enqueued(tmp_path):
     (state_dir / 'queue.json').write_text(json.dumps(queue))
 
     cmd = [
-        'python3', str(SCRIPT),
+        sys.executable, str(SCRIPT),
         '--state-dir', str(state_dir),
         '--stop-file', str(stop_file),
         '--sleep-sec', '0.01',
@@ -214,7 +217,7 @@ def test_not_before_prevents_early_pickup(tmp_path):
     (state_dir / 'queue.json').write_text(json.dumps(queue))
 
     cmd = [
-        'python3', str(SCRIPT),
+        sys.executable, str(SCRIPT),
         '--state-dir', str(state_dir),
         '--stop-file', str(stop_file),
         '--sleep-sec', '0.01',

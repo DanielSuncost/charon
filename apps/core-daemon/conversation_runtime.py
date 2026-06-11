@@ -67,6 +67,14 @@ def _save_queue(state_dir: Path, queue: list[dict]) -> None:
     path.write_text(json.dumps(queue, indent=2, ensure_ascii=False), encoding='utf-8')
 
 
+def load_queue(state_dir: Path) -> list[dict]:
+    return _load_queue(state_dir)
+
+
+def save_queue(state_dir: Path, queue: list[dict]) -> None:
+    _save_queue(state_dir, queue)
+
+
 def _enqueue_task(state_dir: Path, task: dict) -> dict:
     queue = _load_queue(state_dir)
     queue.append(task)
@@ -84,36 +92,211 @@ def enqueue_agent_task(
     *,
     owner_agent_id: str,
     instruction: str,
-    title: str,
+    title: str | None = None,
     project: str | None = None,
     priority: str = 'normal',
+    scope: list[str] | None = None,
+    deps: list[str] | None = None,
     correlation_id: str | None = None,
     interval_minutes: float | None = None,
     not_before: str | None = None,
     max_attempts: int = 3,
 ) -> dict:
     now = _utc_now_iso()
+    instruction_text = str(instruction or '').strip()
+    if title:
+        title_text = str(title).strip()[:120]
+    else:
+        title_text = (instruction_text[:117] + '...') if len(instruction_text) > 120 else instruction_text
+    owner = str(owner_agent_id or '').strip()
+    task_id = f"task-{uuid.uuid4().hex[:10]}"
     task = {
-        'id': f"task-{uuid.uuid4().hex[:10]}",
-        'title': str(title or '').strip()[:120],
-        'instruction': str(instruction or '').strip(),
+        'id': task_id,
+        'title': title_text,
+        'instruction': instruction_text,
         'status': 'pending',
         'task_type': 'agent_task',
-        'owner_agent_id': str(owner_agent_id or '').strip(),
+        'owner_agent_id': owner,
         'project': str(project or '').strip() or None,
         'priority': str(priority or 'normal').strip() or 'normal',
+        'scope': list(scope or []),
+        'deps': list(deps or []),
+        'correlation_id': str(correlation_id) if correlation_id else task_id,
         'created_at': now,
         'updated_at': now,
         'attempt_count': 0,
         'max_attempts': int(max_attempts or 3),
+        'boundary': {
+            'status': 'unclaimed',
+            'lease_owner': owner,
+            'lease_expires_at': None,
+            'overlap_with': [],
+        },
     }
-    if correlation_id:
-        task['correlation_id'] = str(correlation_id)
     if interval_minutes:
         task['interval_minutes'] = float(interval_minutes)
     if not_before:
         task['not_before'] = str(not_before)
     return _enqueue_task(state_dir, task)
+
+
+def enqueue_agent_message_task(
+    state_dir: Path,
+    *,
+    actor_agent_id: str,
+    conversation_id: str,
+    message: str,
+    parent_message_id: str | None = None,
+    branch_label: str | None = None,
+    correlation_id: str | None = None,
+) -> dict:
+    now = _utc_now_iso()
+    task_id = f"task-{uuid.uuid4().hex[:10]}"
+    task = {
+        'id': task_id,
+        'title': str(message or '').strip()[:120],
+        'instruction': str(message or '').strip(),
+        'message': str(message or '').strip(),
+        'status': 'pending',
+        'task_type': 'agent_message',
+        'actor_agent_id': str(actor_agent_id or '').strip(),
+        'conversation_id': str(conversation_id or '').strip(),
+        'correlation_id': str(correlation_id) if correlation_id else task_id,
+        'created_at': now,
+        'updated_at': now,
+        'attempt_count': 0,
+        'max_attempts': 3,
+    }
+    if parent_message_id:
+        task['parent_message_id'] = str(parent_message_id)
+    if branch_label:
+        task['branch_label'] = str(branch_label)
+    return _enqueue_task(state_dir, task)
+
+
+def enqueue_agent_intervention_task(
+    state_dir: Path,
+    *,
+    actor_agent_id: str,
+    conversation_id: str,
+    intervention_of_message_id: str,
+    message: str,
+    parent_message_id: str | None = None,
+    correlation_id: str | None = None,
+) -> dict:
+    now = _utc_now_iso()
+    task_id = f"task-{uuid.uuid4().hex[:10]}"
+    task = {
+        'id': task_id,
+        'title': str(message or '').strip()[:120],
+        'instruction': str(message or '').strip(),
+        'message': str(message or '').strip(),
+        'status': 'pending',
+        'task_type': 'agent_intervention',
+        'actor_agent_id': str(actor_agent_id or '').strip(),
+        'conversation_id': str(conversation_id or '').strip(),
+        'intervention_of_message_id': str(intervention_of_message_id or '').strip(),
+        'correlation_id': str(correlation_id) if correlation_id else task_id,
+        'created_at': now,
+        'updated_at': now,
+        'attempt_count': 0,
+        'max_attempts': 3,
+    }
+    if parent_message_id:
+        task['parent_message_id'] = str(parent_message_id)
+    return _enqueue_task(state_dir, task)
+
+
+def enqueue_boundary_proposal_task(
+    state_dir: Path,
+    *,
+    proposer_agent_id: str,
+    target_agent_id: str,
+    project: str | None = None,
+    scope: list[str] | None = None,
+    reason: str = '',
+    source_task_id: str | None = None,
+    conversation_id: str | None = None,
+    correlation_id: str | None = None,
+) -> dict:
+    now = _utc_now_iso()
+    task_id = f"task-{uuid.uuid4().hex[:10]}"
+    task = {
+        'id': task_id,
+        'title': f"boundary proposal -> {str(target_agent_id or '').strip()}"[:120],
+        'status': 'pending',
+        'task_type': 'boundary_proposal',
+        'actor_agent_id': str(proposer_agent_id or '').strip(),
+        'target_agent_id': str(target_agent_id or '').strip(),
+        'project': str(project or '').strip() or None,
+        'scope': list(scope or []),
+        'reason': str(reason or ''),
+        'correlation_id': str(correlation_id) if correlation_id else task_id,
+        'created_at': now,
+        'updated_at': now,
+        'attempt_count': 0,
+        'max_attempts': 3,
+    }
+    if source_task_id:
+        task['source_task_id'] = str(source_task_id)
+    if conversation_id:
+        task['conversation_id'] = str(conversation_id)
+    return _enqueue_task(state_dir, task)
+
+
+def enqueue_boundary_resolution_task(
+    state_dir: Path,
+    *,
+    resolver_agent_id: str,
+    proposal_id: str,
+    decision: str,
+    reason: str = '',
+    conversation_id: str | None = None,
+    correlation_id: str | None = None,
+) -> dict:
+    now = _utc_now_iso()
+    task_id = f"task-{uuid.uuid4().hex[:10]}"
+    task = {
+        'id': task_id,
+        'title': f"boundary {str(decision or '').strip()}: {str(proposal_id or '').strip()}"[:120],
+        'status': 'pending',
+        'task_type': 'boundary_resolution',
+        'actor_agent_id': str(resolver_agent_id or '').strip(),
+        'proposal_id': str(proposal_id or '').strip(),
+        'decision': str(decision or '').strip(),
+        'reason': str(reason or ''),
+        'correlation_id': str(correlation_id) if correlation_id else task_id,
+        'created_at': now,
+        'updated_at': now,
+        'attempt_count': 0,
+        'max_attempts': 3,
+    }
+    if conversation_id:
+        task['conversation_id'] = str(conversation_id)
+    return _enqueue_task(state_dir, task)
+
+
+def list_conversations(state_dir: Path) -> list[dict]:
+    """Read the conversation index file and return one row per conversation.
+
+    Rows preserve the index's insertion order and carry the conversation_id
+    alongside whatever metadata the index recorded (message_count, agents, ...).
+    """
+    index_file = Path(state_dir) / 'conversation_index.json'
+    try:
+        raw = json.loads(index_file.read_text(encoding='utf-8'))
+    except Exception:
+        return []
+    conversations = raw.get('conversations') if isinstance(raw, dict) else None
+    if not isinstance(conversations, dict):
+        return []
+    rows = []
+    for conv_id, meta in conversations.items():
+        row = {'conversation_id': conv_id}
+        if isinstance(meta, dict):
+            row.update(meta)
+        rows.append(row)
+    return rows
 
 
 def enqueue_user_intent_task(
@@ -124,17 +307,23 @@ def enqueue_user_intent_task(
     project: str | None = None,
     priority: str = 'normal',
     conversation_id: str | None = None,
+    session_id: str | None = None,
     max_attempts: int = 3,
 ) -> dict:
     now = _utc_now_iso()
     text = str(message or '').strip()
+    # Stored under 'owner_agent_id' to match how charon_loop consumes
+    # user_intent tasks (it reads owner_agent_id first, then actor_agent_id).
+    owner = str(actor_agent_id or '').strip()
     task = {
         'id': f"task-{uuid.uuid4().hex[:10]}",
         'title': (text[:117] + '...') if len(text) > 120 else text,
         'instruction': text,
+        'message': text,
         'status': 'pending',
         'task_type': 'user_intent',
-        'actor_agent_id': str(actor_agent_id or '').strip(),
+        'owner_agent_id': owner,
+        'actor_agent_id': owner,
         'project': str(project or '').strip() or None,
         'priority': str(priority or 'normal').strip() or 'normal',
         'created_at': now,
@@ -144,6 +333,8 @@ def enqueue_user_intent_task(
     }
     if conversation_id:
         task['conversation_id'] = str(conversation_id)
+    if session_id:
+        task['session_id'] = str(session_id)
     return _enqueue_task(state_dir, task)
 
 

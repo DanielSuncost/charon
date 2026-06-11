@@ -2,6 +2,7 @@ from pathlib import Path
 import json
 import os
 import subprocess
+import sys
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'apps' / 'core-daemon' / 'charon_loop.py'
 
@@ -11,7 +12,7 @@ def _run_loop(state_dir: Path, stop_file: Path, max_cycles: int = 40):
     env.setdefault('CHARON_STDOUT_EVENTS', '0')
     env.setdefault('CHARON_SHADE_REQUIRE_TMUX', '0')
     cmd = [
-        'python3', str(SCRIPT),
+        sys.executable, str(SCRIPT),
         '--state-dir', str(state_dir),
         '--stop-file', str(stop_file),
         '--sleep-sec', '0.01',

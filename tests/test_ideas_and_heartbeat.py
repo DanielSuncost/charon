@@ -131,7 +131,7 @@ def test_heartbeat_emitted_in_loop(tmp_path):
     }
 
     cmd = [
-        'python3', str(SCRIPT),
+        sys.executable, str(SCRIPT),
         '--state-dir', str(state_dir),
         '--stop-file', str(stop_file),
         '--sleep-sec', '0.01',

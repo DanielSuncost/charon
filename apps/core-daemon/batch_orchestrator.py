@@ -367,8 +367,8 @@ def run_batch_worker(
 
             asyncio.run(_exec())
 
-            # Retry once on transient errors
-            if errors and not response:
+            # Retry once on transient errors (no usable response text yet)
+            if errors and not ''.join(text_parts).strip():
                 transient = any(
                     'chunked read' in e or 'connection' in e.lower() or
                     '502' in e or '503' in e or '429' in e or 'timed out' in e.lower()
