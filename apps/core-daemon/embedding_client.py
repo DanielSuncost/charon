@@ -15,6 +15,30 @@ MODEL_NAME = os.environ.get('CHARON_EMBED_MODEL', 'BAAI/bge-base-en-v1.5')
 BACKEND = os.environ.get('CHARON_EMBED_BACKEND', 'worker').strip().lower()
 
 
+def _backend() -> str:
+    """Resolve the backend at call time so it can be overridden per-process
+    (e.g. tests set CHARON_EMBED_BACKEND=local to avoid the worker subprocess)."""
+    return os.environ.get('CHARON_EMBED_BACKEND', 'worker').strip().lower()
+
+
+_LOCAL_MODEL = None
+
+
+def _get_local_model():
+    """Load the in-process SentenceTransformer once and cache it.
+
+    The 'local' backend previously reloaded the model on every call, which made
+    it far too slow to use in practice. Caching makes it a viable alternative to
+    the worker subprocess (and removes per-call model-load latency in tests)."""
+    global _LOCAL_MODEL
+    if _LOCAL_MODEL is None:
+        from sentence_transformers import SentenceTransformer
+        _LOCAL_MODEL = SentenceTransformer(
+            MODEL_NAME, device=(os.environ.get('CHARON_EMBED_DEVICE') or None)
+        )
+    return _LOCAL_MODEL
+
+
 def _meta_path(state_dir: Path) -> Path:
     return state_dir / 'embedding_worker.json'
 
@@ -145,9 +169,8 @@ def ensure_worker(state_dir: Path) -> dict[str, Any]:
 
 
 def get_embedding_dim(state_dir: Path) -> int:
-    if BACKEND == 'local':
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer(MODEL_NAME, device=(os.environ.get('CHARON_EMBED_DEVICE') or None))
+    if _backend() == 'local':
+        model = _get_local_model()
         return len(model.encode('dim probe', normalize_embeddings=True))
     meta = ensure_worker(state_dir)
     host = str(meta.get('host') or '127.0.0.1')
@@ -157,9 +180,8 @@ def get_embedding_dim(state_dir: Path) -> int:
 
 
 def embed_texts(state_dir: Path, texts: list[str]) -> list[list[float]]:
-    if BACKEND == 'local':
-        from sentence_transformers import SentenceTransformer
-        model = SentenceTransformer(MODEL_NAME, device=(os.environ.get('CHARON_EMBED_DEVICE') or None))
+    if _backend() == 'local':
+        model = _get_local_model()
         arr = model.encode(texts, normalize_embeddings=True)
         return [e.tolist() for e in arr]
     meta = ensure_worker(state_dir)
