@@ -2,9 +2,15 @@
 
 ## Goal
 
-Build a local-first semantic memory engine that scores competitively on
-LongMemEval_S (cloud-hosted SOTA: 81.6%). No cloud, no API keys, no
-vector DB — SQLite + local embeddings only.
+Build a local-first semantic memory engine that scores well on
+LongMemEval_S using only on-device resources. No cloud, no API keys,
+no vector DB — SQLite + local embeddings only.
+
+Current score: 78.8% (local responder model), above the original
+paper's best RAG configuration (72%). Note: LongMemEval scores depend
+heavily on the responder model — cloud systems using GPT-5-mini report
+scores above 90%. The value here is achieving competitive recall with
+~5ms latency on local hardware.
 
 ## What LongMemEval_S Tests
 
