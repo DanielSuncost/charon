@@ -6,11 +6,12 @@ Build a local-first semantic memory engine that scores well on
 LongMemEval_S using only on-device resources. No cloud, no API keys,
 no vector DB — SQLite + local embeddings only.
 
-Current score: 78.8% (local responder model), above the original
-paper's best RAG configuration (72%). Note: LongMemEval scores depend
-heavily on the responder model — cloud systems using GPT-5-mini report
-scores above 90%. The value here is achieving competitive recall with
-~5ms latency on local hardware.
+Current score: 78.8% with GPT-4o as the responder model, above the
+original paper's best RAG configuration (72%). Note: LongMemEval
+scores depend heavily on the responder model — the same retrieval
+system can swing from ~84% to ~95% by switching from GPT-4o to
+GPT-5-mini. The value here is achieving competitive recall with ~5ms
+retrieval latency on local hardware and no cloud dependencies.
 
 ## What LongMemEval_S Tests
 
