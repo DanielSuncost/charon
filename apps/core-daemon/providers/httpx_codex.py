@@ -21,6 +21,8 @@ import httpx
 from . import Message, ModelInfo, StreamDelta, ToolCall, Usage
 
 CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex/responses'
+CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token'
+CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 MAX_RETRIES = 2
 BASE_DELAY_MS = 1500
 
@@ -33,7 +35,7 @@ def _extract_account_id(token: str) -> str:
             raise ValueError('Invalid JWT')
         # Add padding for base64
         payload_b64 = parts[1] + '=' * (4 - len(parts[1]) % 4)
-        payload = json.loads(base64.b64decode(payload_b64))
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
         account_id = payload.get('https://api.openai.com/auth', {}).get('chatgpt_account_id')
         if not account_id:
             raise ValueError('No account ID in token')
@@ -138,6 +140,78 @@ class HttpxCodexProvider:
             'OpenAI-Beta': 'responses=experimental',
         }
 
+    def _token_expires_soon(self, skew_seconds: int = 60) -> bool:
+        try:
+            parts = self._api_key.split('.')
+            if len(parts) != 3:
+                return False
+            payload_b64 = parts[1] + '=' * (-len(parts[1]) % 4)
+            payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+            exp = int(payload.get('exp') or 0)
+            return bool(exp and exp <= int(time.time()) + skew_seconds)
+        except Exception:
+            return False
+
+    def _save_token_data(self, token_data: dict[str, Any]) -> None:
+        if not self._auth_store_path:
+            return
+        try:
+            path = Path(self._auth_store_path)
+            store = json.loads(path.read_text()) if path.exists() else {'version': 1, 'providers': {}}
+            store.setdefault('providers', {})
+            auth = store['providers'].setdefault('openai-codex', {'tokens': {}, 'auth_type': 'oauth'})
+            tokens = auth.setdefault('tokens', {})
+            if token_data.get('access_token'):
+                tokens['access_token'] = token_data['access_token']
+            if token_data.get('refresh_token'):
+                tokens['refresh_token'] = token_data['refresh_token']
+            if token_data.get('expires_in'):
+                tokens['expires_in'] = token_data['expires_in']
+            auth['last_login'] = time.strftime('%Y-%m-%dT%H:%M:%S+00:00', time.gmtime())
+            auth['auth_type'] = auth.get('auth_type') or 'oauth'
+            store['active_provider'] = 'openai-codex'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(store, indent=2))
+            try:
+                os.chmod(path, 0o600)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    async def _refresh_access_token(self) -> bool:
+        if not self._refresh_token:
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(
+                    CODEX_TOKEN_URL,
+                    data={
+                        'grant_type': 'refresh_token',
+                        'client_id': CODEX_CLIENT_ID,
+                        'refresh_token': self._refresh_token,
+                    },
+                )
+            if resp.status_code != 200:
+                return False
+            token_data = resp.json()
+            access_token = str(token_data.get('access_token') or '').strip()
+            if not access_token:
+                return False
+            self._api_key = access_token
+            if token_data.get('refresh_token'):
+                self._refresh_token = str(token_data['refresh_token'])
+            self._account_id = None
+            self._save_token_data(token_data)
+            return True
+        except Exception:
+            return False
+
+    async def _ensure_fresh_token(self) -> bool:
+        if not self._token_expires_soon():
+            return True
+        return await self._refresh_access_token()
+
     async def stream(
         self,
         messages: list[Message],
@@ -149,6 +223,10 @@ class HttpxCodexProvider:
     ) -> AsyncIterator[StreamDelta]:
         if not self._api_key:
             yield StreamDelta(type='error', error='No Codex API key configured')
+            return
+
+        if not await self._ensure_fresh_token():
+            yield StreamDelta(type='error', error='Codex token expired and refresh failed. Run /setup provider codex --force.')
             return
 
         # Build request body in Responses API format
@@ -174,11 +252,10 @@ class HttpxCodexProvider:
             effort = effort_map.get(thinking_level, 'medium')
             body['reasoning'] = {'effort': effort, 'summary': 'auto'}
 
-        headers = self._build_headers()
-
         # Retry loop for transient errors
         for attempt in range(MAX_RETRIES + 1):
             try:
+                headers = self._build_headers()
                 async with httpx.AsyncClient(timeout=self._timeout) as client:
                     async with client.stream('POST', CODEX_BASE_URL, json=body, headers=headers) as response:
                         if response.status_code != 200:
@@ -195,6 +272,10 @@ class HttpxCodexProvider:
                                 import asyncio
                                 await asyncio.sleep(BASE_DELAY_MS / 1000 * (2 ** attempt))
                                 continue
+
+                            if response.status_code == 401 and self._refresh_token and attempt < MAX_RETRIES:
+                                if await self._refresh_access_token():
+                                    continue
 
                             yield StreamDelta(type='error', error=f'Codex HTTP {response.status_code}: {error_text[:200]}')
                             return

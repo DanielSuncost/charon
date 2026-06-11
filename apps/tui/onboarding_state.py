@@ -61,6 +61,6 @@ def onboarding_panel_text(state: dict) -> str:
         f'Model: {model}\n'
         f'{shade_line}'
         f'Project: {project}\n'
-        'Commands: /setup provider <name> | /setup model <name> | /setup shade-provider <name> | /setup shade-model <name> | /setup project <name> | /setup complete | /setup status | /setup reset\n'
+        'Commands: /setup provider <name> | /setup no-provider | /setup model <name> | /setup shade-provider <name> | /setup shade-model <name> | /setup project <name> | /setup complete | /setup status | /setup reset\n'
         'The shade model is also used for lightweight orchestration/NL command parsing.'
     )

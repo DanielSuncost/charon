@@ -116,17 +116,19 @@ def test_collect_signals_from_conversation(tmp_path):
     )
     db.commit()
 
-    signals = _collect_recent_signals(state_dir, '2000-01-01T00:00:00Z')
+    signals, user_refs = _collect_recent_signals(state_dir, '2000-01-01T00:00:00Z')
     assert 'auth bug' in signals
     assert '[user]' in signals
     assert '[agent]' in signals
+    assert any(ref.get('signal_index') == 0 for ref in user_refs)
 
 
 def test_collect_signals_empty(tmp_path):
     state_dir = tmp_path / 'state'
     store_adapter.get_db(state_dir)
-    signals = _collect_recent_signals(state_dir, '2000-01-01T00:00:00Z')
+    signals, user_refs = _collect_recent_signals(state_dir, '2000-01-01T00:00:00Z')
     assert signals == ''
+    assert user_refs == []
 
 
 # ── Apply changes ───────────────────────────────────────────────────
