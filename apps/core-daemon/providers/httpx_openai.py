@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from typing import Any, AsyncIterator
 
 
@@ -94,6 +95,9 @@ class HttpxOpenAIProvider:
         )).rstrip('/')
         self._api_key = api_key or os.environ.get('CHARON_LOCAL_API_KEY', 'not-needed')
         self._timeout = timeout
+        # Optional httpx handler for tests; when set, requests are served by
+        # an in-process MockTransport instead of a real network connection.
+        self._mock_handler = None
 
     async def stream(
         self,
@@ -130,8 +134,12 @@ class HttpxOpenAIProvider:
 
         url = f'{self._base_url}/chat/completions'
 
+        client_kwargs: dict[str, Any] = {'timeout': self._timeout}
+        if self._mock_handler is not None:
+            client_kwargs['transport'] = httpx.MockTransport(self._mock_handler)
+
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(**client_kwargs) as client:
                 async with client.stream(
                     'POST', url,
                     json=body,
@@ -247,16 +255,15 @@ class HttpxOpenAIProvider:
                         yield StreamDelta(
                             type='tool_call',
                             tool_call=ToolCall(
-                                id=tc_data['id'] or f'call_{id(tc_data)}',
+                                id=tc_data['id'] or f'call_{uuid.uuid4().hex[:24]}',
                                 name=tc_data['name'],
                                 arguments=args,
                             ),
                         )
 
-                    # Extract usage from final chunk if available
-                    usage_data = {}
-                    # Some providers put usage in the last chunk
-                    # We just report what we have
+                    # Report usage accumulated from the streamed chunks above
+                    # (OpenAI-style providers emit it on the final chunk when
+                    # stream_options.include_usage is set).
                     yield StreamDelta(
                         type='done',
                         text=json.dumps({

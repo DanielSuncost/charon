@@ -328,3 +328,66 @@ class TestSSEParsing:
         events = _run(run())
         assert len(events) >= 1
         assert events[0].type == 'error'
+
+
+# ============================================================================
+# End-to-end streaming via MockTransport
+# ============================================================================
+
+class TestStreamEndToEnd:
+    def _provider_serving(self, sse_lines: list[str], status: int = 200):
+        sse_body = '\n'.join(sse_lines) + '\n'
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                status_code=status,
+                content=sse_body.encode(),
+                headers={'content-type': 'text/event-stream'},
+            )
+
+        provider = HttpxOpenAIProvider(base_url='http://mock/v1', api_key='test')
+        provider._mock_handler = handler
+        return provider
+
+    def _collect(self, provider):
+        async def run():
+            return [d async for d in provider.stream(
+                messages=[Message(role='user', content='hi')],
+                model=MODEL,
+                system_prompt='test',
+            )]
+        return _run(run())
+
+    def test_usage_reported_in_done_delta(self):
+        """Regression: usage from the final chunk must reach the done delta
+        (previously it was reset to {} right before emit, always reporting 0)."""
+        sse = [
+            'data: {"choices":[{"delta":{"content":"Hi"},"finish_reason":null}]}',
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+            'data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}}',
+            'data: [DONE]',
+        ]
+        events = self._collect(self._provider_serving(sse))
+        done = [e for e in events if e.type == 'done']
+        assert len(done) == 1
+        usage = json.loads(done[0].text)['usage']
+        assert usage['input_tokens'] == 11
+        assert usage['output_tokens'] == 7
+        assert usage['total_tokens'] == 18
+
+    def test_tool_call_fallback_id_is_nonempty(self):
+        """When a provider omits the tool-call id, we must synthesize a stable
+        non-empty id (previously used id() of a dict)."""
+        sse = [
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+            '"function":{"name":"Read","arguments":"{\\"path\\":\\"x.py\\"}"}}]},'
+            '"finish_reason":null}]}',
+            'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+            'data: [DONE]',
+        ]
+        events = self._collect(self._provider_serving(sse))
+        calls = [e for e in events if e.type == 'tool_call']
+        assert len(calls) == 1
+        assert calls[0].tool_call.id and calls[0].tool_call.id.startswith('call_')
+        assert calls[0].tool_call.name == 'Read'
+        assert calls[0].tool_call.arguments == {'path': 'x.py'}
