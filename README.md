@@ -58,8 +58,8 @@ recall). Version chains detect when knowledge has been superseded.
 
 Scores 78.8% on
 [LongMemEval_S](https://github.com/xiaowu0162/LongMemEval)
-(with a local responder model), above the original paper's best RAG
-configuration (72%), running entirely on-device at ~5ms per recall.
+(GPT-4o responder), above the original paper's best RAG configuration
+(72%), with retrieval running entirely on-device at ~5ms per recall.
 
 [Architecture](docs/plans/semantic-memory-engine.md) /
 [Three-tier design](docs/three-tier-memory.md)
