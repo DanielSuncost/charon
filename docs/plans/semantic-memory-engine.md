@@ -232,14 +232,48 @@ The system prompt builder continues to use frozen snapshots from the
 structured model. The semantic engine adds a **recall tool** that agents
 use when they need deeper/broader memory access.
 
-## LongMemEval_S Benchmark Runner
+## LongMemEval_S Benchmark
 
-To benchmark:
-1. For each of the 500 questions, feed haystack sessions through the
-   extraction pipeline (facts → embeddings → memories table)
-2. Ask the question using the recall API + LLM reader
-3. Output hypothesis JSONL
-4. Evaluate with LongMemEval's evaluate_qa.py
+### Results
+
+| Responder model | Score | Date |
+|-----------------|-------|------|
+| GPT-4o (via OpenRouter) | 78.8% | 2026-03 |
+
+Retrieval accuracy: R@1 0.72, R@5 0.95, R@10 0.985 (500 questions).
+
+Note: LongMemEval scores depend heavily on the responder model. The
+same retrieval system can produce very different scores with different
+readers (e.g. Mastra reports 84.2% with GPT-4o vs 94.9% with
+GPT-5-mini on the same retrieval). Our retrieval runs entirely locally
+(bge-base-en-v1.5 embeddings, SQLite + sqlite-vec, ~5ms per recall).
+
+### Reproducing
+
+The benchmark has two stages: retrieval (local, slow) and reading
+(API, fast). Scripts are in `scripts/`.
+
+```bash
+# Stage 1: Retrieval only (slow — indexes all sessions per question)
+PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
+  python scripts/bench_longmemeval.py --retrieval-only
+
+# Stage 2: Reader with a specific model (fast — uses saved retrieval)
+OPENROUTER_API_KEY=sk-or-... PYTHONPATH=apps/core-daemon \
+  python scripts/bench_longmemeval.py \
+    --reader-provider openrouter \
+    --reader-model openai/gpt-4o \
+    --retrieval-file results/longmemeval/retrieval_*.json
+
+# Evaluate (uses GPT-4o as judge, matching LongMemEval's official eval)
+OPENROUTER_API_KEY=sk-or-... \
+  python scripts/eval_longmemeval.py \
+    results/longmemeval/hyp_*.jsonl
+```
+
+The retrieval stage downloads the LongMemEval_S dataset automatically
+on first run (~277MB). Results are saved incrementally so interrupted
+runs can resume.
 
 ## Implementation Order
 
