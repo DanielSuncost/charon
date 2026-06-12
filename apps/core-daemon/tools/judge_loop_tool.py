@@ -207,9 +207,13 @@ def _handle_create(params: dict, ctx: ToolContext) -> ToolResult:
             summary += f'\nConstraints: {len(config.constraint_commands)} check(s)'
 
         summary += (
-            f'\n\nThe loop will measure a baseline, then spawn implementation shades '
-            f'that iterate toward the target. Each iteration is scored by the judge, '
-            f'kept if improved, rolled back if not. Check progress with:\n'
+            f'\n\nThe Charon daemon advances this loop on its heartbeat — one step '
+            f'at a time so the daemon stays responsive: it measures a baseline, then '
+            f'each iteration spawns a scoped implementer to make one change, scores it '
+            f'with the judge, and keeps it if improved (rolling back via shadow git if '
+            f'not) until the target is met or the budget is exhausted. The implement '
+            f'step needs a provider configured; pause/resume/stop control the loop. '
+            f'Check progress with:\n'
             f'  SpawnJudgeLoop(action="status", loop_id="{config.id}")'
         )
 
