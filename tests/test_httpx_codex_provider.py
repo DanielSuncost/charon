@@ -71,3 +71,71 @@ def test_codex_save_token_data_preserves_refresh_token(tmp_path):
     assert tokens['access_token'] == 'new-access'
     assert tokens['refresh_token'] == 'old-refresh'
     assert tokens['expires_in'] == 3600
+
+
+def _write_auth_store(path, access_token, refresh_token):
+    path.write_text(json.dumps({
+        'providers': {
+            'openai-codex': {
+                'tokens': {'access_token': access_token, 'refresh_token': refresh_token},
+                'auth_type': 'oauth',
+            },
+        },
+    }))
+
+
+def test_codex_read_tokens_from_disk_picks_up_newer_token(tmp_path):
+    auth_path = tmp_path / 'auth.json'
+    fresh = _jwt_with_exp(int(time.time()) + 3600)
+    _write_auth_store(auth_path, fresh, 'refresh-disk')
+
+    provider = HttpxCodexProvider(api_key='old-access', refresh_token='refresh-old', auth_store_path=str(auth_path))
+    provider._read_tokens_from_disk()
+
+    assert provider._api_key == fresh
+    assert provider._refresh_token == 'refresh-disk'
+
+
+def test_codex_locked_refresh_uses_disk_token_without_refetch(tmp_path, monkeypatch):
+    """If another process already refreshed (fresh token on disk), the locked
+    path must use it and NOT spend our single-use refresh token on the network."""
+    auth_path = tmp_path / 'auth.json'
+    fresh = _jwt_with_exp(int(time.time()) + 3600)
+    _write_auth_store(auth_path, fresh, 'refresh-disk')
+
+    provider = HttpxCodexProvider(
+        api_key=_jwt_with_exp(int(time.time()) - 10),
+        refresh_token='refresh-old',
+        auth_store_path=str(auth_path),
+    )
+    calls = {'n': 0}
+
+    async def fake_refresh():
+        calls['n'] += 1
+        return True
+
+    monkeypatch.setattr(provider, '_refresh_access_token', fake_refresh)
+
+    assert asyncio.run(provider._ensure_fresh_token()) is True
+    assert calls['n'] == 0  # no network refresh — reused the disk token
+    assert provider._api_key == fresh
+
+
+def test_codex_locked_refresh_refreshes_when_disk_also_expired(tmp_path, monkeypatch):
+    auth_path = tmp_path / 'auth.json'
+    expired = _jwt_with_exp(int(time.time()) - 10)
+    _write_auth_store(auth_path, expired, 'refresh-disk')
+
+    provider = HttpxCodexProvider(api_key=expired, refresh_token='refresh-old', auth_store_path=str(auth_path))
+    calls = {'n': 0}
+
+    async def fake_refresh():
+        calls['n'] += 1
+        provider._api_key = _jwt_with_exp(int(time.time()) + 3600)
+        return True
+
+    monkeypatch.setattr(provider, '_refresh_access_token', fake_refresh)
+
+    assert asyncio.run(provider._ensure_fresh_token()) is True
+    assert calls['n'] == 1
+    assert not provider._token_expires_soon()
