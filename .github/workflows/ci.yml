@@ -21,14 +21,17 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pytest
 
-      - name: Run targeted Python tests
-        run: |
-          pytest -q \
-            tests/test_x_tool.py \
-            tests/test_conversation_runtime.py \
-            tests/test_tool_approval.py \
-            tests/test_conversation_engine.py \
-            tests/test_system_prompt_builder.py
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-bge-base-en-v1.5
+
+      - name: Run the full Python test suite
+        env:
+          # In-process embedding backend — no per-test worker subprocess.
+          CHARON_EMBED_BACKEND: local
+        run: pytest -q tests/
 
   rust-build:
     runs-on: ubuntu-latest
