@@ -483,6 +483,14 @@ def detect_foreground_persistent_command(command: str) -> tuple[bool, str]:
     if not cmd:
         return False, ''
 
+    # A command whose last element is backgrounded with '&' returns to the
+    # shell immediately, so it cannot make the UI appear hung — allow it even
+    # if it launches a monitor/server/etc. (This is checked before the
+    # gui_launch heuristics below, which otherwise flag e.g. `nohup
+    # python3 gpu_monitor.py >log 2>&1 &`.)
+    if re.search(r'(^|\s)&\s*$', cmd):
+        return False, ''
+
     # Detached/background launches of GUI-style apps are still a poor fit for
     # the synchronous Bash tool: they often appear hung while the shell waits,
     # especially when combined with follow-up sleep/ps/log inspection.
@@ -509,8 +517,6 @@ def detect_foreground_persistent_command(command: str) -> tuple[bool, str]:
                        'cat', 'head', 'tail', 'wc', 'ls', 'tree', 'stat',
                        'file', 'diff', 'jq', 'sed', 'awk', 'sort', 'uniq',
                        'cut', 'tr', 'xargs', 'ag', 'ack'):
-        return False, ''
-    if re.search(r'(^|\s)&\s*$', cmd):
         return False, ''
 
     persistent_patterns = [
