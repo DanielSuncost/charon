@@ -20,6 +20,12 @@ import httpx
 
 from . import Message, ModelInfo, StreamDelta, ToolCall, Usage
 
+try:
+    from diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex/responses'
 CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token'
 CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
@@ -193,10 +199,13 @@ class HttpxCodexProvider:
                     },
                 )
             if resp.status_code != 200:
+                _diag('httpx_codex', 'OAuth token refresh rejected',
+                      status=resp.status_code, body=resp.text[:200])
                 return False
             token_data = resp.json()
             access_token = str(token_data.get('access_token') or '').strip()
             if not access_token:
+                _diag('httpx_codex', 'OAuth refresh returned no access_token')
                 return False
             self._api_key = access_token
             if token_data.get('refresh_token'):
@@ -204,7 +213,8 @@ class HttpxCodexProvider:
             self._account_id = None
             self._save_token_data(token_data)
             return True
-        except Exception:
+        except Exception as e:
+            _diag('httpx_codex', 'OAuth token refresh raised', error=e)
             return False
 
     def _read_tokens_from_disk(self) -> None:
