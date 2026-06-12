@@ -960,6 +960,17 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
             except Exception:
                 pass  # Specialization is best-effort
 
+            # Judge-loop driver: advance running optimization loops one step
+            try:
+                from judge_loop_driver import tick_judge_loops
+                for ev in tick_judge_loops(state_dir, max_loops=1):
+                    if ev.get('action') in ('skipped',):
+                        continue
+                    log_event(log_file, 'judge_loop_tick', **ev)
+                    trace_event(trace_file, 'judge_loop_tick', cycle=cycles, **ev)
+            except Exception:
+                pass  # Judge loops are best-effort
+
         if stop_file.exists():
             log_event(log_file, 'loop_stop_file_detected', stop_file=str(stop_file))
             trace_event(trace_file, 'loop_stop_file_detected', stop_file=str(stop_file))
