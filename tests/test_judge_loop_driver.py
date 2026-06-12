@@ -134,6 +134,43 @@ def test_tick_picks_up_created_loop_and_runs_baseline(tmp_path):
     assert loaded.baseline == 100.0
 
 
+def test_rollback_removes_files_added_in_discarded_iteration(tmp_path):
+    """A file CREATED during a regressed iteration must not leak into the
+    best-known state after rollback."""
+    work = tmp_path / 'project'; work.mkdir()
+    state = tmp_path / 'state'; state.mkdir()
+    (work / 'score.txt').write_text('100\n')
+
+    config = _new_loop(state, work, target_score=10_000.0, max_iterations=5)
+    cp = CheckpointManager(state, work)
+
+    steps = iter([
+        (150, None),          # iter 1: improvement, kept
+        (120, 'junk.py'),     # iter 2: regression + creates a new file
+    ])
+
+    def implementer(c, wd):
+        try:
+            val, addfile = next(steps)
+        except StopIteration:
+            return None
+        (Path(wd) / 'score.txt').write_text(f'{val}\n')
+        if addfile:
+            (Path(wd) / addfile).write_text('# leaked from a discarded iteration\n')
+        return f'set {val}'
+
+    advance_loop(state, config, implementer=implementer, working_dir=work, checkpoint_mgr=cp)  # baseline
+    config, _ = advance_loop(state, config, implementer=implementer, working_dir=work, checkpoint_mgr=cp)  # iter1 kept
+    config, ev = advance_loop(state, config, implementer=implementer, working_dir=work, checkpoint_mgr=cp)  # iter2 discarded
+
+    assert ev['kept'] is False
+    assert config.best_score == 150.0
+    # Modified-file rollback (already works): score.txt reverts to the kept 150.
+    assert (work / 'score.txt').read_text().strip() == '150'
+    # Added-file rollback (the bug): junk.py from the discarded iteration must be gone.
+    assert not (work / 'junk.py').exists(), 'rollback leaked a file added during a discarded iteration'
+
+
 def test_tick_skips_paused_loops(tmp_path):
     work = tmp_path / 'project'; work.mkdir()
     state = tmp_path / 'state'; state.mkdir()

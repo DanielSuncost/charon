@@ -158,12 +158,16 @@ class CheckpointManager:
     def rollback(self, checkpoint_id: str) -> bool:
         """Restore working directory to a previous checkpoint.
 
-        Uses git checkout to restore files, not git reset — the
-        checkpoint history is preserved.
+        Uses `git reset --hard` rather than `git checkout -- .`: checkout only
+        restores paths present in the target tree, so files that a discarded
+        iteration *added* (and which were captured by that iteration's
+        snapshot) would survive and leak into the best-known state. reset --hard
+        also removes those, while still restoring modified/deleted files.
+        It only touches files tracked in the shadow repo — genuinely untracked
+        files (e.g. out-of-scope when a scope is set) are left alone.
         """
         try:
-            # Checkout the snapshot's tree onto the working directory
-            self._git('checkout', checkpoint_id, '--', '.', check=True)
+            self._git('reset', '--hard', checkpoint_id, check=True)
             return True
         except (RuntimeError, subprocess.TimeoutExpired):
             return False
