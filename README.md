@@ -60,6 +60,8 @@ Scores 78.8% on
 [LongMemEval_S](https://github.com/xiaowu0162/LongMemEval)
 (GPT-4o responder), above the original paper's best RAG configuration
 (72%), with retrieval running entirely on-device at ~5ms per recall.
+Benchmark scripts and methodology are in `scripts/bench_longmemeval.py`
+([details](docs/plans/semantic-memory-engine.md#longmemeval_s-benchmark)).
 
 [Architecture](docs/plans/semantic-memory-engine.md) /
 [Three-tier design](docs/three-tier-memory.md)
@@ -206,7 +208,7 @@ charon/
 
 ## Status
 
-Active development. 545 tests. Used daily as a primary working
+Active development. 729 tests. Used daily as a primary working
 environment.
 
 What works:
