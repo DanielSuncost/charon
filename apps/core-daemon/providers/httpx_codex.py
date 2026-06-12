@@ -207,10 +207,80 @@ class HttpxCodexProvider:
         except Exception:
             return False
 
+    def _read_tokens_from_disk(self) -> None:
+        """Pick up tokens another process may have just refreshed."""
+        if not self._auth_store_path:
+            return
+        try:
+            store = json.loads(Path(self._auth_store_path).read_text())
+            tokens = store.get('providers', {}).get('openai-codex', {}).get('tokens', {})
+            saved_access = str(tokens.get('access_token') or '').strip()
+            saved_refresh = str(tokens.get('refresh_token') or '').strip()
+            if saved_access and saved_access != self._api_key:
+                self._api_key = saved_access
+                self._account_id = None
+            if saved_refresh:
+                self._refresh_token = saved_refresh
+        except Exception:
+            pass
+
     async def _ensure_fresh_token(self) -> bool:
         if not self._token_expires_soon():
             return True
+        if not self._refresh_token:
+            return False
+        if self._auth_store_path:
+            return await self._locked_refresh()
         return await self._refresh_access_token()
+
+    async def _locked_refresh(self) -> bool:
+        """Refresh under a cross-process file lock.
+
+        Codex refresh tokens are single-use, so two Charon processes (or two
+        per-call provider instances) refreshing at once would invalidate each
+        other's token. The auth-store lockfile serializes refreshes; whoever
+        holds the lock refreshes once, the rest read the fresh token from disk.
+        Mirrors the anthropic provider's _locked_refresh.
+        """
+        import asyncio
+        import fcntl
+
+        lock_path = str(self._auth_store_path) + '.lock'
+        try:
+            Path(lock_path).parent.mkdir(parents=True, exist_ok=True)
+            lock_fd = open(lock_path, 'w')
+        except Exception:
+            # Can't create a lock — fall back to an unlocked refresh.
+            return await self._refresh_access_token()
+
+        try:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (IOError, OSError):
+                # Another process is refreshing — wait up to ~15s for it.
+                for _ in range(30):
+                    await asyncio.sleep(0.5)
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except (IOError, OSError):
+                        continue
+                else:
+                    # Timed out — use whatever the other process wrote.
+                    self._read_tokens_from_disk()
+                    return not self._token_expires_soon()
+
+            try:
+                # Holding the lock: another process may have refreshed while we
+                # waited, so re-read disk and re-check before spending the token.
+                self._read_tokens_from_disk()
+                if not self._token_expires_soon():
+                    return True
+                return await self._refresh_access_token()
+            finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        finally:
+            lock_fd.close()
 
     async def stream(
         self,
