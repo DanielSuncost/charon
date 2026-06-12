@@ -18,6 +18,12 @@ import httpx
 
 from . import Message, ModelInfo, StreamDelta, ToolCall, Usage
 
+try:
+    from diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 ANTHROPIC_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
@@ -177,8 +183,11 @@ class HttpxAnthropicProvider:
                     expires_in = data.get('expires_in', 3600)
                     self._token_expires = time.time() + expires_in - 300
                     self._save_tokens()
-        except Exception:
-            pass
+                else:
+                    _diag('httpx_anthropic', 'OAuth token refresh rejected',
+                          status=resp.status_code, body=resp.text[:200])
+        except Exception as e:
+            _diag('httpx_anthropic', 'OAuth token refresh raised', error=e)
 
     async def stream(
         self,

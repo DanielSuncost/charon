@@ -22,6 +22,12 @@ from typing import Any
 
 from embedding_client import embed_texts as _embed_texts_via_client, get_embedding_dim as _get_embedding_dim_via_client
 
+try:
+    from diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 # ── Constants ───────────────────────────────────────────────────────
 
@@ -217,8 +223,13 @@ class MemoryEngine:
         dim = get_embedding_dim(self.state_dir)
         try:
             db.execute(f"CREATE VIRTUAL TABLE IF NOT EXISTS memory_vec USING vec0(embedding float[{dim}])")
-        except Exception:
-            pass  # already exists
+        except Exception as e:
+            # "already exists" is fine, but a genuine failure here (e.g.
+            # sqlite-vec not loaded) silently degrades recall to FTS-only —
+            # surface it rather than swallow it blind.
+            if 'already exists' not in str(e).lower():
+                _diag('memory_engine', 'vec0 virtual table unavailable; recall degrades to FTS-only',
+                      state_dir=self.state_dir, error=e, dim=dim)
 
         # FTS5 for keyword search
         try:
@@ -231,8 +242,10 @@ class MemoryEngine:
                     tokenize='porter unicode61'
                 )
             """)
-        except Exception:
-            pass
+        except Exception as e:
+            if 'already exists' not in str(e).lower():
+                _diag('memory_engine', 'FTS5 table unavailable; keyword search disabled',
+                      state_dir=self.state_dir, error=e)
 
         db.commit()
 
