@@ -1906,8 +1906,11 @@ class ChatBackend:
         if provider not in lower:
             return None
 
-        action_requested = bool(re.search(r'\b(make|create|spawn|start|launch|open|begin|setup|set\s+up|orchestrate)\b', lower))
-        roomish_request = bool(re.search(r'\b(room|rooms|conversation|conversations|chat|chats|dialogue|discussion|discussions|team|teams|session|sessions|agent|agents|participant|participants|exchange)\b', lower))
+        action_requested = bool(re.search(r'\b(make|create|spawn|start|launch|open|begin|orchestrate)\b', lower))
+        # Only match terms that clearly signal a multi-agent conversation request.
+        # Avoid generic words like "agent", "session", "team", "set up" — they trigger
+        # false positives on normal requests about server agents, fleet setup, etc.
+        roomish_request = bool(re.search(r'\b(room|rooms|conversation|conversations|dialogue|discussion|discussions|participant|participants|exchange)\b', lower))
         roleish_request = bool(re.search(r'\b(teacher|student|tutor|learner|beginner|expert|mentor)\b', lower))
         if not action_requested or not (roomish_request or roleish_request):
             return None
