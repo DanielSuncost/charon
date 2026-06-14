@@ -53,14 +53,22 @@ recall past discussions by meaning, know when facts have changed, and
 learn your preferences once across all projects.
 
 Hybrid retrieval (vector similarity + FTS5 keywords, merged with
-reciprocal rank fusion). Local embeddings (bge-base-en-v1.5, ~5ms per
-recall). Version chains detect when knowledge has been superseded.
+reciprocal rank fusion). Local embeddings (bge-base-en-v1.5, ~10ms per
+recall, query-embedding dominated). Version chains detect when knowledge
+has been superseded.
 
-Scores 78.8% on
-[LongMemEval_S](https://github.com/xiaowu0162/LongMemEval)
-(GPT-4o responder), above the original paper's best RAG configuration
-(72%), with retrieval running entirely on-device at ~5ms per recall.
-Benchmark scripts and methodology are in `scripts/bench_longmemeval.py`
+Scored 78.8% on
+[LongMemEval_S](https://github.com/xiaowu0162/LongMemEval) with a GPT-4o
+reader, against the benchmark's oracle-retrieval ceiling of ~82.4% for the
+same reader (measured 2026-03). The notable part is the retrieval stack —
+bge-base embeddings, hybrid vector + FTS5, RRF — running **fully on-device
+with no network calls**, where most published results at or above this use
+substantially heavier machinery. (The GPT-4o reader is a cloud call;
+"on-device" refers to retrieval and embeddings.) Reader scores are sensitive
+to the model and judge prompt, so this is our own harness under stated
+conditions, not a leaderboard rank. Retrieval quality (recall@k) is
+reproducible with no API — `scripts/bench_longmemeval.py --retrieval-only`,
+sample in `results/longmemeval/`
 ([details](docs/plans/semantic-memory-engine.md#longmemeval_s-benchmark)).
 
 [Architecture](docs/plans/semantic-memory-engine.md) /
@@ -208,8 +216,8 @@ charon/
 
 ## Status
 
-Active development. 729 tests. Used daily as a primary working
-environment.
+Active development. 748 tests, full suite run in CI on every push. Used
+daily as a primary working environment.
 
 What works:
 - Memory, recall, version chains, user model consolidation
