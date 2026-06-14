@@ -1,0 +1,29 @@
+{
+  "recall@1_by_size": {
+    "20": {
+      "vector_only": 0.4,
+      "fts_only": 0.6,
+      "hybrid_rrf": 0.55
+    },
+    "50": {
+      "vector_only": 0.35,
+      "fts_only": 0.3,
+      "hybrid_rrf": 0.3
+    },
+    "100": {
+      "vector_only": 0.2,
+      "fts_only": 0.3,
+      "hybrid_rrf": 0.25
+    },
+    "250": {
+      "vector_only": 0.15,
+      "fts_only": 0.3,
+      "hybrid_rrf": 0.3
+    },
+    "500": {
+      "vector_only": 0.2,
+      "fts_only": 0.25,
+      "hybrid_rrf": 0.1
+    }
+  }
+}

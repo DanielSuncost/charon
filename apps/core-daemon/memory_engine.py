@@ -41,7 +41,29 @@ EMBEDDING_MODEL = _os.environ.get("CHARON_EMBED_MODEL", "BAAI/bge-base-en-v1.5")
 # Dimension is detected at load time from the model itself.
 EMBEDDING_DIM: int | None = None  # set lazily by _get_model()
 DEFAULT_RECALL_LIMIT = 20
-RRF_K = 60  # reciprocal rank fusion constant
+RRF_K = 60  # reciprocal rank fusion constant (legacy / external refs)
+# Fusion tuning for recall(): a sharper constant than the TREC-default 60, which
+# over-flattens the short lists we fuse (rank-1 ~ rank-20) and let a wrong doc in
+# both lists outrank a doc ranked #1 by one retriever.
+RRF_FUSION_K = 10
+VEC_FUSION_WEIGHT = 1.0
+# FTS weight is query-adaptive: a hit on a rare *identifier* token (one with
+# digits / underscores / hyphens, ALL-CAPS constants, or long alnum like a hash
+# or id) is a strong exact-match signal that dense embeddings blur — so we trust
+# FTS for those queries. For ordinary semantic queries FTS stays neutral and
+# vector dominates. (Measured: exp_fts_scale.py for id lookups,
+# exp_memory_ablation.py for semantic — hybrid >= vector on both.)
+FTS_FUSION_WEIGHT = 0.5          # semantic queries: vector leads, FTS adds tail recall
+FTS_FUSION_WEIGHT_IDQUERY = 4.0  # identifier queries: trust the exact match
+# An identifier token has a digit, an underscore, or is ALL-CAPS (>=2) — NOT a
+# plain English word, however long.
+_IDENTIFIER_RE = re.compile(r'\b\w*\d\w*\b|\b\w*_\w*\b|\b[A-Z]{2,}\b')
+
+
+def _has_identifier_token(query: str) -> bool:
+    """True if the query contains an identifier-like token (id/hash/CONST/path
+    fragment) — the regime where exact keyword match beats dense retrieval."""
+    return bool(_IDENTIFIER_RE.search(query or ''))
 
 # Stopwords dropped from FTS queries so content terms drive the match (used with
 # OR/should-match semantics + BM25 ranking).
@@ -434,21 +456,28 @@ class MemoryEngine:
             query, container_tag=container_tag, limit=limit * 2
         )
 
-        # Reciprocal rank fusion
+        # Reciprocal rank fusion. RRF_K=60 (the TREC default) over-flattens the
+        # short lists we fuse here, so a wrong doc present in BOTH lists at a
+        # mediocre rank could outrank a doc ranked #1 by one retriever — which
+        # made hybrid underperform either component on exact-id lookups. Use a
+        # sharper fusion constant and up-weight FTS, since an FTS hit on a rare
+        # (high-IDF) token is a strong exact-match signal that dense embeddings
+        # blur. (Measured: scripts/exp_fts_scale.py — hybrid now >= max(vec,fts)
+        # on id queries without hurting semantic recall.)
         scores: dict[str, float] = {}
         sources: dict[str, str] = {}
+
+        fts_weight = FTS_FUSION_WEIGHT_IDQUERY if _has_identifier_token(query) else FTS_FUSION_WEIGHT
 
         for rank, (mem_id, dist) in enumerate(vec_results):
             sim = 1.0 - (dist * dist / 2.0)  # L2 to cosine for normalized vecs
             if sim < SIMILARITY_THRESHOLD:
                 continue
-            rrf = 1.0 / (RRF_K + rank + 1)
-            scores[mem_id] = scores.get(mem_id, 0) + rrf * 1.2  # boost vector
+            scores[mem_id] = scores.get(mem_id, 0) + (1.0 / (RRF_FUSION_K + rank + 1)) * VEC_FUSION_WEIGHT
             sources[mem_id] = "vec"
 
         for rank, (mem_id, fts_rank) in enumerate(fts_results):
-            rrf = 1.0 / (RRF_K + rank + 1)
-            scores[mem_id] = scores.get(mem_id, 0) + rrf
+            scores[mem_id] = scores.get(mem_id, 0) + (1.0 / (RRF_FUSION_K + rank + 1)) * fts_weight
             sources[mem_id] = "hybrid" if mem_id in sources else "fts"
 
         # Sort by combined score
