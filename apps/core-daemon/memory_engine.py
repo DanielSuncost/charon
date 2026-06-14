@@ -65,6 +65,19 @@ def _has_identifier_token(query: str) -> bool:
     fragment) — the regime where exact keyword match beats dense retrieval."""
     return bool(_IDENTIFIER_RE.search(query or ''))
 
+
+def _extract_identifier_tokens(text: str) -> set[str]:
+    """Identifier-like tokens (lowercased) for the exact-key index/router."""
+    return {t.lower() for t in _IDENTIFIER_RE.findall(text or '') if len(t) >= 3}
+
+
+# Exact-key router: a discriminative identifier match is near-certain, so it
+# wins over ranked retrieval. The boost is scaled by rarity (document frequency)
+# — a token in one memory is a confident hit; one in many is not. Tokens above
+# MAX_EXACT_DF are treated as non-discriminative and ignored by the exact stage.
+EXACT_MATCH_BOOST = 1.0
+MAX_EXACT_DF = 8
+
 # Stopwords dropped from FTS queries so content terms drive the match (used with
 # OR/should-match semantics + BM25 ranking).
 _FTS_STOPWORDS = {
@@ -250,6 +263,12 @@ class MemoryEngine:
                 memory_id   TEXT NOT NULL UNIQUE
             );
             CREATE INDEX IF NOT EXISTS idx_vecmap_memid ON memory_vec_map(memory_id);
+            CREATE TABLE IF NOT EXISTS memory_keys (
+                key           TEXT NOT NULL,
+                memory_id     TEXT NOT NULL,
+                container_tag TEXT NOT NULL DEFAULT 'default'
+            );
+            CREATE INDEX IF NOT EXISTS idx_keys_lookup ON memory_keys(key, container_tag);
 
             CREATE INDEX IF NOT EXISTS idx_edges_type ON memory_edges(edge_type);
         """)
@@ -312,13 +331,20 @@ class MemoryEngine:
         mem_id = _uuid()
         vec = embed_one(content, self.state_dir)
 
-        # Check for near-duplicate
+        # Check for near-duplicate. Embedding similarity alone over-collapses
+        # records that share a template but differ by an identifier (two
+        # "task-X: did Y" records embed almost identically). If the new content
+        # carries an identifier token the match lacks, the identifier IS the
+        # distinguishing content — keep it as a separate memory.
         existing = self._find_similar(vec, container_tag=container_tag, threshold=DEDUP_THRESHOLD, limit=1)
         if existing:
-            # Exact or near-duplicate — skip
-            return self._row_to_memory(
-                db.execute("SELECT * FROM memories WHERE id = ?", (existing[0][0],)).fetchone()
-            )
+            ex_row = db.execute("SELECT * FROM memories WHERE id = ?", (existing[0][0],)).fetchone()
+            if ex_row is not None:
+                new_tokens = _extract_identifier_tokens(content)
+                ex_tokens = _extract_identifier_tokens(ex_row["content"])
+                if not (new_tokens - ex_tokens):
+                    return self._row_to_memory(ex_row)
+                # else: identifiers differ — fall through and store as new.
 
         # Check for knowledge update (same topic, different content)
         parent_id = None
@@ -389,6 +415,14 @@ class MemoryEngine:
             (mem.id, content, category, container_tag)
         )
 
+        # Index identifier tokens for the exact-key router.
+        id_tokens = _extract_identifier_tokens(content)
+        if id_tokens:
+            db.executemany(
+                "INSERT INTO memory_keys (key, memory_id, container_tag) VALUES (?, ?, ?)",
+                [(tok, mem.id, container_tag or 'default') for tok in id_tokens],
+            )
+
         db.commit()
         return mem
 
@@ -432,6 +466,35 @@ class MemoryEngine:
         return count
 
     # ── Recall (hybrid search) ──────────────────────────────────────
+
+    def _exact_lookup(self, query: str, container_tag: str | None = None) -> list[tuple[str, int]]:
+        """Exact-key router: memories whose content contains a DISCRIMINATIVE
+        identifier token from the query. Returns (memory_id, df) rarest-first;
+        df (document frequency) is the confidence — df=1 is a near-certain hit.
+        Common tokens (df > MAX_EXACT_DF) are ignored."""
+        tokens = _extract_identifier_tokens(query)
+        if not tokens:
+            return []
+        db = self._get_db()
+        best: dict[str, int] = {}
+        for tok in tokens:
+            try:
+                if container_tag:
+                    rows = db.execute(
+                        "SELECT DISTINCT memory_id FROM memory_keys WHERE key = ? AND container_tag = ?",
+                        (tok, container_tag)).fetchall()
+                else:
+                    rows = db.execute(
+                        "SELECT DISTINCT memory_id FROM memory_keys WHERE key = ?", (tok,)).fetchall()
+            except Exception:
+                return []
+            df = len(rows)
+            if df == 0 or df > MAX_EXACT_DF:
+                continue
+            for r in rows:
+                mid = r[0]
+                best[mid] = min(best.get(mid, 1 << 30), df)
+        return sorted(best.items(), key=lambda x: x[1])
 
     def recall(
         self,
@@ -479,6 +542,15 @@ class MemoryEngine:
         for rank, (mem_id, fts_rank) in enumerate(fts_results):
             scores[mem_id] = scores.get(mem_id, 0) + (1.0 / (RRF_FUSION_K + rank + 1)) * fts_weight
             sources[mem_id] = "hybrid" if mem_id in sources else "fts"
+
+        # Exact-key router: a discriminative identifier match is near-certain, so
+        # it outranks fuzzy retrieval. Boost is rarity-scaled (EXACT/df). This is
+        # the structurally-correct path for id/key lookups; fuzzy retrieval only
+        # backstops it. For purely semantic queries no identifier tokens are
+        # extracted, so this stage is a no-op and vector leads as before.
+        for mem_id, df in self._exact_lookup(query, container_tag=container_tag):
+            scores[mem_id] = scores.get(mem_id, 0) + (EXACT_MATCH_BOOST / df)
+            sources[mem_id] = "exact"
 
         # Sort by combined score
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
