@@ -3633,7 +3633,13 @@ fn main() -> io::Result<()> {
                                 local_view_dirty = true;
                             }
                             MouseEventKind::Up(MouseButton::Right) => {}
-                            _ => {}
+                            _ => {
+                                // Dismiss context menu on any other mouse event
+                                if app.chat.context_menu.is_some() {
+                                    app.chat.context_menu = None;
+                                    local_view_dirty = true;
+                                }
+                            }
                         }
                     } else if app.active_view == View::Sessions && app.sessions.app_mouse_mode {
                         match mouse.kind {
