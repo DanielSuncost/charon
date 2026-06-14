@@ -5,6 +5,7 @@ use std::io;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // fleet state machine; not all variants reached yet
 pub enum FleetConnectionStatus {
     Connecting,
     Connected,
@@ -12,6 +13,7 @@ pub enum FleetConnectionStatus {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // mirrors fleet backend JSON; not all fields read in the TUI
 pub struct FleetServerState {
     pub status: FleetConnectionStatus,
     pub sessions: Vec<String>, // session IDs on this server
@@ -157,6 +159,7 @@ impl InterAgentState {
     }
 }
 
+#[allow(dead_code)] // some app state is written by the backend bridge but not read here
 pub struct App {
     pub active_view: View,
     pub chat: ChatState,

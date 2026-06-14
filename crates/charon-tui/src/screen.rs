@@ -54,6 +54,7 @@ impl ScreenBuf {
     }
 
     #[inline]
+    #[allow(dead_code)] // accessor kept for the type's interface
     pub fn get(&self, x: u16, y: u16) -> Cell {
         if x < self.width && y < self.height {
             self.cells[self.idx(x, y)]
