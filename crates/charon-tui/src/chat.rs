@@ -332,7 +332,7 @@ impl ChatState {
             info_pane_open: false,
             info_pane_tab: 0,
             copy_mode: false,
-            app_mouse_mode: true,
+            app_mouse_mode: false,
             selection_anchor: None,
             selection_focus: None,
             selection_dragging: false,
