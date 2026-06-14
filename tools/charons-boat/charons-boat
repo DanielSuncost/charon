@@ -136,7 +136,6 @@ cmd_deploy() {
     exit 1
   fi
 
-  local remote_bin="\$HOME/.local/bin"
   local files=(
     "${SCRIPT_DIR}/charons-boat"
     "${SCRIPT_DIR}/boat_session.py"
@@ -147,23 +146,21 @@ cmd_deploy() {
 
   echo "⛵ Deploying charons-boat to ${target}..."
 
-  # Create remote directory
-  ssh "$target" "mkdir -p ${remote_bin}" || { echo "Failed to create remote directory"; exit 1; }
+  # Create remote directory and add to PATH
+  ssh "$target" 'mkdir -p ~/.local/bin && grep -q "\.local/bin" ~/.bashrc 2>/dev/null || echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> ~/.bashrc' \
+    || { echo "Failed to create remote directory"; exit 1; }
 
-  # Copy files
-  scp "${files[@]}" "${target}:${remote_bin}/" || { echo "Failed to copy files"; exit 1; }
+  # Copy files (scp expands ~ on remote, unlike $HOME)
+  scp "${files[@]}" "${target}:~/.local/bin/" || { echo "Failed to copy files"; exit 1; }
 
   # Make executable
-  ssh "$target" "chmod +x ${remote_bin}/charons-boat" || { echo "Failed to set permissions"; exit 1; }
+  ssh "$target" 'chmod +x ~/.local/bin/charons-boat' || { echo "Failed to set permissions"; exit 1; }
 
   # Verify
   local version
-  version=$(ssh "$target" "${remote_bin}/charons-boat version 2>/dev/null || echo 'installed'")
+  version=$(ssh "$target" '~/.local/bin/charons-boat version 2>/dev/null || echo "installed"')
   echo "⛵ Deployed successfully: ${version}"
-  echo "  Remote path: ${remote_bin}/charons-boat"
-  echo ""
-  echo "  Ensure ${remote_bin} is in PATH on the remote host:"
-  echo "    ssh ${target} 'echo \"export PATH=\\\"\\\$HOME/.local/bin:\\\$PATH\\\"\" >> ~/.bashrc'"
+  echo "  Remote path: ~/.local/bin/charons-boat"
 }
 
 cmd_version() {
