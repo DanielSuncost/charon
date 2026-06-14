@@ -1,5 +1,3 @@
-#![allow(unused_imports, unused_variables, unused_assignments, unused_mut)]
-
 /// charon-tui — Rust TUI for the Charon agent operating system.
 ///
 /// Views:
@@ -23,7 +21,6 @@ mod session;
 mod terminal;
 
 use std::io::{self, Write};
-use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use app::{App, SessionsSection, TextPoint, View};
@@ -39,13 +36,12 @@ use crossterm::{
 };
 
 use backend::discover_sessions;
-use chat::{ChatMessage, ChatTextPoint, ChatViewMode, LaunchOptions};
+use chat::{ChatViewMode, LaunchOptions};
 use f1_mono::F1MonoCache;
 use grid::compute_grid;
 use native_session::{NativeCommand, NativeSessionServer};
 use parser::AnsiParser;
 use render::Rect;
-use serde::Deserialize;
 use serde_json::Value;
 use session::{BackendType, SessionCell};
 use terminal::TerminalState;
@@ -290,7 +286,7 @@ fn apply_native_input_bytes(app: &mut App, bytes: &[u8]) {
 
 fn build_initial_sessions(mode: &LaunchMode, outer_w: u16, outer_h: u16) -> io::Result<Vec<SessionCell>> {
     let mut sessions = Vec::new();
-    let mut next_id = 0u64;
+    let next_id = 0u64;
 
     match mode {
         LaunchMode::ListSessions => {}
@@ -570,14 +566,6 @@ fn wrap_plain_text(s: &str, width: usize) -> Vec<String> {
     out
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ChatLayoutVariant {
-    Full,
-    Mid,
-    Tiny,
-}
-
-
 fn copy_inter_agent_selection(app: &mut App, room: &Value, area: Rect) -> bool {
     let Some(bounds) = transcript_selection_bounds(app) else {
         app.inter_agent.set_clipboard_notice("Nothing selected", false);
@@ -599,13 +587,6 @@ fn copy_inter_agent_selection(app: &mut App, room: &Value, area: Rect) -> bool {
             false
         }
     }
-}
-
-#[derive(Default)]
-struct NativeTranscriptRenderState {
-    sealed_lines: Vec<String>,
-    live_lines: Vec<String>,
-    last_visible_rows: Vec<String>,
 }
 
 fn dashboard_sparkline(points: &[u64]) -> String {
@@ -1211,6 +1192,7 @@ struct GraphPoint {
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)] // layout anchors; left/right reserved for the split view
 struct GraphAnchors {
     center: GraphPoint,
     left: GraphPoint,
@@ -1458,7 +1440,7 @@ fn draw_libris_graph<W: Write>(stdout: &mut W, room: &Value, area: Rect, selecte
         // Draw connecting arrow between researcher and judge boxes
         let arrow_y = agent_y + 1; // middle of the agent boxes
         let arrow_x1 = cluster_rect.x + half_w + 1;
-        let arrow_x2 = cluster_rect.x + half_w + 4;
+        let _arrow_x2 = cluster_rect.x + half_w + 4;
         let arrow_color = if rj_active {
             style::Color::Rgb { r: 96, g: 165, b: 250 }
         } else {
@@ -1988,6 +1970,7 @@ fn draw_inter_agent<W: Write>(stdout: &mut W, app: &mut App, w: u16, h: u16) -> 
 }
 
 #[derive(Clone)]
+#[allow(dead_code)] // mirrors agent JSON; not all fields read
 struct SessionAgentMeta {
     id: String,
     agent_id: String,
@@ -2641,7 +2624,7 @@ fn main() -> io::Result<()> {
     app.sessions.backend_filter_pending = matches!(mode, &LaunchMode::AutoDiscover);
     let _ = ensure_native_self_pane(&mut app, native_session.as_ref(), outer_w, outer_h);
     let mut session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
-    let mut native_transcript_state = NativeTranscriptRenderState::default();
+    // (native transcript render state removed with the legacy renderer)
 
     clipboard::configure_tmux_clipboard();
 
@@ -2663,7 +2646,6 @@ fn main() -> io::Result<()> {
     let frame_duration = Duration::from_millis(16);
     let mut needs_full_redraw = true;
     let mut local_view_dirty = false;
-    let mut chat_transcript_dirty = true;
     let mut cached_chat = F1MonoCache::default();
     let mut last_rowing_tick = Instant::now();
     let mut last_session_poll = Instant::now() - Duration::from_secs(1);
@@ -2711,7 +2693,6 @@ fn main() -> io::Result<()> {
         }
         let chat_dirty = app.chat.poll();
         if chat_dirty {
-            chat_transcript_dirty = true;
         }
         let native_input_dirty = if let Some(server) = &native_session {
             let commands = server.drain_commands();
@@ -2724,7 +2705,6 @@ fn main() -> io::Result<()> {
             false
         };
         if native_input_dirty && app.active_view == View::Chat {
-            chat_transcript_dirty = true;
         }
         let mut session_structure_changed = false;
         if app.active_view == View::Sessions && (chat_dirty || native_input_dirty) && app.chat.refresh_payload.is_some() {
@@ -2924,7 +2904,6 @@ fn main() -> io::Result<()> {
                                 match key.code {
                                     KeyCode::Esc => {
                                         app.chat.context_menu = None;
-                                        chat_transcript_dirty = true;
                                         local_view_dirty = true;
                                     }
                                     KeyCode::Up => {
@@ -2952,7 +2931,6 @@ fn main() -> io::Result<()> {
                                                 }
                                             }
                                         }
-                                        chat_transcript_dirty = true;
                                         local_view_dirty = true;
                                     }
                                     _ => {}
@@ -2964,11 +2942,9 @@ fn main() -> io::Result<()> {
                                 app.chat.selection_anchor = None;
                                 app.chat.selection_focus = None;
                                 app.chat.selection_dragging = false;
-                                chat_transcript_dirty = true;
                                 local_view_dirty = true;
                             } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
                                 let _ = f1_mono::copy_selection(&mut app, &cached_chat);
-                                chat_transcript_dirty = true;
                                 local_view_dirty = true;
                             } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p') {
                                 if app.chat.view_mode == ChatViewMode::Transcript {
@@ -3114,12 +3090,10 @@ fn main() -> io::Result<()> {
                                     }
                                     KeyCode::Up if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                         app.chat.scroll = app.chat.scroll.saturating_add(1);
-                                        chat_transcript_dirty = true;
                                         local_view_dirty = true;
                                     }
                                     KeyCode::Down if key.modifiers.contains(KeyModifiers::CONTROL) => {
                                         app.chat.scroll = app.chat.scroll.saturating_sub(1);
-                                        chat_transcript_dirty = true;
                                         local_view_dirty = true;
                                     }
                                     KeyCode::Up => {
@@ -3134,12 +3108,10 @@ fn main() -> io::Result<()> {
                                     }
                                     KeyCode::PageUp => {
                                         app.chat.scroll = app.chat.scroll.saturating_add(10);
-                                        chat_transcript_dirty = true;
                                         local_view_dirty = true;
                                     }
                                     KeyCode::PageDown => {
                                         app.chat.scroll = app.chat.scroll.saturating_sub(10);
-                                        chat_transcript_dirty = true;
                                         local_view_dirty = true;
                                     }
                                     _ => {}
@@ -3565,7 +3537,6 @@ fn main() -> io::Result<()> {
                                 if point_in_rect(area, mouse.column, mouse.row) {
                                     let max_scroll = lines.len().saturating_sub(area.height as usize);
                                     app.chat.scroll = (app.chat.scroll + 3).min(max_scroll);
-                                    chat_transcript_dirty = true;
                                     local_view_dirty = true;
                                 }
                             }
@@ -3573,7 +3544,6 @@ fn main() -> io::Result<()> {
                                 app.chat.context_menu = None;
                                 if point_in_rect(area, mouse.column, mouse.row) {
                                     app.chat.scroll = app.chat.scroll.saturating_sub(3);
-                                    chat_transcript_dirty = true;
                                     local_view_dirty = true;
                                 }
                             }
@@ -3609,7 +3579,6 @@ fn main() -> io::Result<()> {
                                     } else {
                                         app.chat.context_menu = None;
                                     }
-                                    chat_transcript_dirty = true;
                                     local_view_dirty = true;
                                 } else {
                                     if let Some(point) = f1_mono::point_at_mouse(&cached_chat, &app, outer_w, outer_h, mouse.column, mouse.row) {
@@ -3621,7 +3590,6 @@ fn main() -> io::Result<()> {
                                         app.chat.selection_focus = None;
                                         app.chat.selection_dragging = false;
                                     }
-                                    chat_transcript_dirty = true;
                                     local_view_dirty = true;
                                 }
                             }
@@ -3636,7 +3604,6 @@ fn main() -> io::Result<()> {
                                     if let Some(point) = f1_mono::point_at_mouse(&cached_chat, &app, outer_w, outer_h, mouse.column, mouse.row) {
                                         app.chat.selection_focus = Some(point);
                                     }
-                                    chat_transcript_dirty = true;
                                     local_view_dirty = true;
                                 }
                             }
@@ -3646,7 +3613,6 @@ fn main() -> io::Result<()> {
                                     if let Some(point) = f1_mono::point_at_mouse(&cached_chat, &app, outer_w, outer_h, mouse.column, mouse.row) {
                                         app.chat.selection_focus = Some(point);
                                     }
-                                    chat_transcript_dirty = true;
                                     local_view_dirty = true;
                                 }
                             }

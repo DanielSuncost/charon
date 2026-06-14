@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 // ── Fleet config ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)] // mirrors backend JSON; not all fields read in the TUI
 pub struct FleetAgent {
     pub name: String,
     #[serde(rename = "type", default)]
@@ -189,6 +190,7 @@ impl ByteStream for PtyCapture {
 // This gives us full ANSI output (colors, cursor sequences) unlike the old
 // approach that stripped ANSI. The VTE parser handles the rest.
 
+#[allow(dead_code)] // transport retained for future tmux routing
 pub struct TmuxPane {
     session_name: String,
     rx: mpsc::Receiver<ReaderMsg>,
@@ -715,6 +717,7 @@ impl ByteStream for CharonPane {
 // ── Discovery — find tmux sessions to attach to ────────────────────────────
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // mirrors discovery JSON; not all fields read
 pub struct DiscoveredSession {
     pub session_name: String,
     pub display_name: String,

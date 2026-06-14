@@ -64,6 +64,7 @@ struct MascotTitleSource {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)] // mascot asset metadata; not all fields read
 struct MascotTinyTitle {
     path: String,
     fg: [u8; 3],
@@ -98,14 +99,6 @@ pub fn chat_layout_variant(w: u16, h: u16) -> ChatLayoutVariant {
     } else {
         ChatLayoutVariant::Tiny
     }
-}
-
-pub fn chat_is_terminal_native(_app: &App) -> bool {
-    false
-}
-
-pub fn chat_wants_mouse_capture(app: &App) -> bool {
-    app.chat.app_mouse_mode
 }
 
 pub fn chat_rowing_active(app: &App) -> bool {
@@ -181,29 +174,6 @@ pub fn chat_visual_window_len(total_rows: usize, area: Rect, scroll: usize) -> (
     let start = visible_count.saturating_sub(max_lines);
     let end = start + max_lines.min(visible_count);
     (start.min(total_rows), end.min(total_rows))
-}
-
-pub fn chat_point_at_mouse(lines: &[ChatRenderLine], area: Rect, scroll: usize, x: u16, y: u16) -> Option<ChatTextPoint> {
-    if lines.is_empty() || area.width == 0 || area.height == 0 {
-        return None;
-    }
-    let clamped_x = x.clamp(area.x, area.x.saturating_add(area.width).saturating_sub(1));
-    let clamped_y = y.clamp(area.y, area.y.saturating_add(area.height).saturating_sub(1));
-    let (start, end) = chat_visual_window_len(lines.len(), area, scroll);
-    let visible = &lines[start..end];
-    if visible.is_empty() {
-        return None;
-    }
-    let rel_y = clamped_y.saturating_sub(area.y) as usize;
-    let row_idx = start + rel_y.min(visible.len().saturating_sub(1));
-    let line = lines.get(row_idx)?;
-    if !line.selectable {
-        return None;
-    }
-    let text_len = line.copy_text.chars().count();
-    let rel_x = clamped_x.saturating_sub(area.x) as usize;
-    let col = rel_x.saturating_sub(line.copy_offset).min(text_len);
-    Some(ChatTextPoint { row: row_idx, col })
 }
 
 pub fn copy_chat_selection(app: &mut App, lines: &[ChatRenderLine]) -> bool {

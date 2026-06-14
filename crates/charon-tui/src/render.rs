@@ -106,6 +106,7 @@ fn scrolled_cell<'a>(
 }
 
 /// Blit the TerminalState grid into the outer terminal at the given area.
+#[allow(unused_assignments)] // last_* track the previous cell's style; the final write is intentionally unread
 pub fn render_terminal<W: Write>(
     out: &mut W,
     terminal: &TerminalState,

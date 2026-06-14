@@ -54,6 +54,7 @@ impl Default for Cell {
 // ── Cursor ──────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[allow(dead_code)] // full DECSCUSR cursor set; not all shapes emitted yet
 pub enum CursorShape {
     Block,
     Bar,
@@ -82,6 +83,7 @@ impl Default for Cursor {
 // ── Scrollback line ─────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // soft_wrapped reserved for reflow
 pub struct Line {
     pub cells: Vec<Cell>,
     pub soft_wrapped: bool, // true if this line was wrapped (not a hard newline)

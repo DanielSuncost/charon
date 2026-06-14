@@ -6,6 +6,7 @@ use crate::terminal::TerminalState;
 
 use std::io;
 
+#[allow(dead_code)] // session metadata; not all fields read in the TUI
 pub struct SessionCell {
     pub terminal: TerminalState,
     pub parser: AnsiParser,
@@ -17,6 +18,7 @@ pub struct SessionCell {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)] // backend kinds; not all are instantiated in every build
 pub enum BackendType {
     LocalPty,
     TmuxPane { session_name: String },
@@ -164,6 +166,7 @@ impl SessionCell {
         }
     }
 
+    #[allow(dead_code)] // accessor kept for the type's interface
     pub fn tmux_session_name(&self) -> Option<&str> {
         match &self.backend_type {
             BackendType::TmuxPane { session_name } => Some(session_name.as_str()),
