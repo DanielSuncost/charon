@@ -96,11 +96,32 @@ no API). Recall@k by retrieval mode:
 | hybrid + RRF | 0.657 | 0.839 | 0.922 | 0.964 |
 
 **hybrid + RRF equals vector-only exactly, at every k** — even at R@1 where there
-is ample headroom. FTS5 contributes nothing on LongMemEval's abstractive
-questions (its AND-semantics rarely match all query terms), so RRF is a no-op
-here. The marketed "hybrid retrieval (vector + FTS5 + RRF)" is, **on this
-benchmark, pure vector retrieval.** (FTS still helps keyword-exact queries — just
-not these.)
+is ample headroom. FTS5 contributed nothing on LongMemEval's abstractive
+questions: `_search_fts` joined terms with implicit **AND**, so every token
+(including stopwords) had to be present. The marketed "hybrid retrieval" was, on
+this benchmark, **pure vector retrieval, and the FTS half was a dead no-op bug.**
+
+### Fixing FTS exposed that the hybrid still isn't justified here
+
+We fixed `_search_fts` to drop stopwords and use **OR** semantics (BM25 ranking).
+Re-running (`results/exp_memory_ablation_ftsfix.json`):
+
+| Mode | R@1 | R@2 | R@3 | R@5 |
+|---|---|---|---|---|
+| vector-only | 0.657 | 0.839 | 0.922 | 0.964 |
+| FTS-only (before fix, AND) | 0.0 | 0.0 | 0.0 | 0.0 |
+| FTS-only (after fix, OR) | 0.608 | 0.763 | 0.843 | 0.875 |
+| hybrid+RRF (after fix) | 0.609 | 0.846 | 0.916 | 0.959 |
+
+The bug fix is real (FTS 0 → functional). **But hybrid+RRF still does not beat
+vector-only** — it's a wash and slightly *worse* at R@1 (0.609 vs 0.657). The
+per-category picture: hybrid edges vector on multi-session (+0.01) and
+temporal-reasoning (+0.03) — categories with more cross-session lexical signal —
+but hurts badly on preference (0.75 → 0.42), where naive equal-weight RRF lets
+weak sparse matches pollute the dense ranking. **Conclusion: on abstractive QA,
+dense retrieval dominates; equal-RRF fusion of a weaker sparse signal isn't a win
+and can degrade top-rank precision. The hybrid design would need
+confidence-weighted or query-routed fusion to justify itself — not equal RRF.**
 
 Per-category vector recall@1 shows the genuine difficulty frontier:
 
