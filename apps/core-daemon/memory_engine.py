@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import struct
 import time
@@ -41,6 +42,19 @@ EMBEDDING_MODEL = _os.environ.get("CHARON_EMBED_MODEL", "BAAI/bge-base-en-v1.5")
 EMBEDDING_DIM: int | None = None  # set lazily by _get_model()
 DEFAULT_RECALL_LIMIT = 20
 RRF_K = 60  # reciprocal rank fusion constant
+
+# Stopwords dropped from FTS queries so content terms drive the match (used with
+# OR/should-match semantics + BM25 ranking).
+_FTS_STOPWORDS = {
+    'a', 'an', 'the', 'and', 'or', 'but', 'if', 'of', 'to', 'in', 'on', 'at', 'by',
+    'for', 'with', 'about', 'as', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'do', 'does', 'did', 'have', 'has', 'had', 'i', 'me', 'my', 'we', 'you', 'your',
+    'it', 'its', 'this', 'that', 'these', 'those', 'what', 'which', 'who', 'whom',
+    'when', 'where', 'why', 'how', 'how_many', 'many', 'much', 'so', 'than', 'then',
+    'there', 'here', 'from', 'into', 'out', 'up', 'down', 'over', 'under', 'again',
+    'can', 'will', 'would', 'should', 'could', 'may', 'might', 'must', 'not', 'no',
+    'yes', 'all', 'any', 'some', 'me', 'mine', 'our', 'us', 'they', 'them', 'their',
+}
 SIMILARITY_THRESHOLD = 0.35  # minimum cosine similarity to include
 DEDUP_THRESHOLD = 0.95  # cosine similarity for dedup (exact/near-exact only)
 VERSION_MATCH_THRESHOLD = 0.80  # similarity to detect knowledge updates
@@ -696,11 +710,17 @@ class MemoryEngine:
         """FTS5 keyword search. Returns (memory_id, rank) pairs."""
         db = self._get_db()
 
-        # Sanitize query for FTS5
-        terms = query.replace('"', '').replace("'", '').strip().split()
+        # Sanitize query for FTS5. Space-separated terms are implicit AND in
+        # FTS5, which makes abstractive multi-term questions ("what did I buy
+        # for my sister's birthday?") match nothing — every token, including
+        # stopwords, would have to be present. Drop stopwords and use OR
+        # (should-match) semantics; FTS5's BM25 `rank` then orders by relevance.
+        raw = re.findall(r"[A-Za-z0-9]+", query.lower())
+        content = [t for t in raw if t not in _FTS_STOPWORDS and len(t) > 1]
+        terms = content or raw
         if not terms:
             return []
-        fts_match = " ".join(f'"{t}"' for t in terms[:15])
+        fts_match = " OR ".join(f'"{t}"' for t in terms[:20])
 
         try:
             if container_tag:
