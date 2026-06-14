@@ -3613,6 +3613,10 @@ fn main() -> io::Result<()> {
                                     if let Some(point) = f1_mono::point_at_mouse(&cached_chat, &app, outer_w, outer_h, mouse.column, mouse.row) {
                                         app.chat.selection_focus = Some(point);
                                     }
+                                    // Auto-copy on mouse-up if there's a real selection
+                                    if app.chat.selection_anchor != app.chat.selection_focus {
+                                        let _ = f1_mono::copy_selection(&mut app, &cached_chat);
+                                    }
                                     local_view_dirty = true;
                                 }
                             }
