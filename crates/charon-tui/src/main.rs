@@ -2900,41 +2900,6 @@ fn main() -> io::Result<()> {
                                 app.chat.selection_anchor = None;
                                 app.chat.selection_focus = None;
                                 needs_full_redraw = true;
-                            } else if app.chat.context_menu.is_some() {
-                                match key.code {
-                                    KeyCode::Up => {
-                                        if let Some(ref mut ctx) = app.chat.context_menu {
-                                            ctx.selected = ctx.selected.saturating_sub(1);
-                                        }
-                                        local_view_dirty = true;
-                                    }
-                                    KeyCode::Down => {
-                                        if let Some(ref mut ctx) = app.chat.context_menu {
-                                            let count = f1_mono::context_menu_item_count(ctx);
-                                            ctx.selected = (ctx.selected + 1).min(count.saturating_sub(1));
-                                        }
-                                        local_view_dirty = true;
-                                    }
-                                    KeyCode::Enter => {
-                                        if let Some(ctx) = app.chat.context_menu.take() {
-                                            let copy_idx = if ctx.has_selection { Some(0) } else { None };
-                                            let paste_idx = if ctx.has_selection { 1 } else { 0 };
-                                            if copy_idx == Some(ctx.selected) {
-                                                let _ = f1_mono::copy_selection(&mut app, &cached_chat);
-                                            } else if ctx.selected == paste_idx {
-                                                if let Some(text) = read_from_clipboard() {
-                                                    app.chat.input.push_str(&text);
-                                                }
-                                            }
-                                        }
-                                        local_view_dirty = true;
-                                    }
-                                    _ => {
-                                        // Dismiss context menu on any other key (Esc, Ctrl+C, etc.)
-                                        app.chat.context_menu = None;
-                                        local_view_dirty = true;
-                                    }
-                                }
                             } else if key.code == KeyCode::Esc {
                                 if app.chat.menu_open() {
                                     app.chat.close_menu();
@@ -3547,99 +3512,10 @@ fn main() -> io::Result<()> {
                                     local_view_dirty = true;
                                 }
                             }
-                            MouseEventKind::Down(MouseButton::Left) => {
-                                if let Some(ctx) = app.chat.context_menu.clone() {
-                                    // Match draw_context_menu geometry exactly:
-                                    // menu_w=10, borders add 2, top border row, items start at my+1
-                                    let menu_w: u16 = 10;
-                                    let item_count = f1_mono::context_menu_item_count(&ctx);
-                                    let menu_h = item_count as u16;
-                                    let my = if ctx.y + menu_h + 2 >= outer_h {
-                                        ctx.y.saturating_sub(menu_h + 2)
-                                    } else {
-                                        ctx.y + 1
-                                    };
-                                    let mx = ctx.x.min(outer_w.saturating_sub(menu_w + 2));
-                                    // Items are at rows my+1 .. my+1+item_count, columns mx+1 .. mx+1+menu_w
-                                    let item_y_start = my + 1;
-                                    if mouse.column > mx && mouse.column <= mx + menu_w
-                                        && mouse.row >= item_y_start && mouse.row < item_y_start + menu_h
-                                    {
-                                        let clicked = (mouse.row - item_y_start) as usize;
-                                        let copy_idx = if ctx.has_selection { Some(0) } else { None };
-                                        let paste_idx = if ctx.has_selection { 1 } else { 0 };
-                                        if copy_idx == Some(clicked) {
-                                            let _ = f1_mono::copy_selection(&mut app, &cached_chat);
-                                        } else if clicked == paste_idx {
-                                            if let Some(text) = read_from_clipboard() {
-                                                app.chat.input.push_str(&text);
-                                            }
-                                        }
-                                        app.chat.context_menu = None;
-                                    } else {
-                                        app.chat.context_menu = None;
-                                    }
-                                    local_view_dirty = true;
-                                } else {
-                                    if let Some(point) = f1_mono::point_at_mouse(&cached_chat, &app, outer_w, outer_h, mouse.column, mouse.row) {
-                                        app.chat.selection_anchor = Some(point);
-                                        app.chat.selection_focus = Some(point);
-                                        app.chat.selection_dragging = true;
-                                    } else {
-                                        app.chat.selection_anchor = None;
-                                        app.chat.selection_focus = None;
-                                        app.chat.selection_dragging = false;
-                                    }
-                                    local_view_dirty = true;
-                                }
-                            }
-                            MouseEventKind::Drag(MouseButton::Left) => {
-                                if app.chat.selection_dragging {
-                                    let max_scroll = lines.len().saturating_sub(area.height as usize);
-                                    if mouse.row < area.y {
-                                        app.chat.scroll = (app.chat.scroll + 1).min(max_scroll);
-                                    } else if mouse.row >= area.y.saturating_add(area.height) {
-                                        app.chat.scroll = app.chat.scroll.saturating_sub(1);
-                                    }
-                                    if let Some(point) = f1_mono::point_at_mouse(&cached_chat, &app, outer_w, outer_h, mouse.column, mouse.row) {
-                                        app.chat.selection_focus = Some(point);
-                                    }
-                                    local_view_dirty = true;
-                                }
-                            }
-                            MouseEventKind::Up(MouseButton::Left) => {
-                                if app.chat.selection_dragging {
-                                    app.chat.selection_dragging = false;
-                                    if let Some(point) = f1_mono::point_at_mouse(&cached_chat, &app, outer_w, outer_h, mouse.column, mouse.row) {
-                                        app.chat.selection_focus = Some(point);
-                                    }
-                                    // Auto-copy on mouse-up if there's a real selection
-                                    if app.chat.selection_anchor != app.chat.selection_focus {
-                                        let _ = f1_mono::copy_selection(&mut app, &cached_chat);
-                                    }
-                                    local_view_dirty = true;
-                                }
-                            }
-                            MouseEventKind::Down(MouseButton::Right) => {
-                                let has_sel = app.chat.selection_anchor.is_some()
-                                    && app.chat.selection_focus.is_some()
-                                    && app.chat.selection_anchor != app.chat.selection_focus;
-                                app.chat.context_menu = Some(crate::chat::ContextMenu {
-                                    x: mouse.column,
-                                    y: mouse.row,
-                                    selected: 0,
-                                    has_selection: has_sel,
-                                });
-                                local_view_dirty = true;
-                            }
-                            MouseEventKind::Up(MouseButton::Right) => {}
-                            _ => {
-                                // Dismiss context menu on any other mouse event
-                                if app.chat.context_menu.is_some() {
-                                    app.chat.context_menu = None;
-                                    local_view_dirty = true;
-                                }
-                            }
+                            // Mouse capture is on for scroll only.
+                            // Selection and copy are handled by the terminal natively.
+                            // Hold Shift to select text (bypasses mouse capture).
+                            _ => {}
                         }
                     } else if app.active_view == View::Sessions && app.sessions.app_mouse_mode {
                         match mouse.kind {
