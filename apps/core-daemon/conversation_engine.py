@@ -380,6 +380,7 @@ class ConversationEngine:
         self.runtime_role = runtime_role
         self.parent_agent_id = parent_agent_id
         self.scope: list[str] | None = None  # set for shade agents
+        self.frozen: list[str] | None = None  # paths that must not be modified
         self.max_turns = max_turns
         self.max_tool_calls_per_turn = max_tool_calls_per_turn
         self.max_tokens = max_tokens
@@ -625,6 +626,7 @@ class ConversationEngine:
             agent_id=self.agent_id,
             state_dir=self.state_dir,
             scope=self.scope,
+            frozen=self.frozen,
             operation_id=self.operation_id,
             operation_domain=self.operation_domain,
             work_unit_id=self.work_unit_id,

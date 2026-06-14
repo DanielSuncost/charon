@@ -82,6 +82,32 @@ def test_scope_allows_exact_scope_file(tmp_path):
     assert _check_scope('Edit', {'path': 'src/main.py.bak'}, ctx) is not None
 
 
+def test_frozen_blocks_writes_and_edits(tmp_path):
+    """Frozen paths must reject Write/Edit even when no scope is set."""
+    ctx = ToolContext(project_root=tmp_path, frozen=['src/core.py', 'config/'])
+    assert _check_scope('Write', {'path': 'src/core.py'}, ctx) is not None
+    assert 'Frozen-path violation' in _check_scope('Edit', {'path': 'src/core.py'}, ctx)
+    assert _check_scope('Edit', {'path': 'config/settings.yaml'}, ctx) is not None
+    # Non-frozen modifications are allowed.
+    assert _check_scope('Write', {'path': 'src/other.py'}, ctx) is None
+    # Reads of frozen files are allowed (frozen = must-not-MODIFY).
+    assert _check_scope('Read', {'path': 'src/core.py'}, ctx) is None
+
+
+def test_frozen_respects_path_boundary(tmp_path):
+    """Frozen 'config' must not match a sibling 'config-backup'."""
+    ctx = ToolContext(project_root=tmp_path, frozen=['config'])
+    assert _check_scope('Write', {'path': 'config/a.txt'}, ctx) is not None
+    assert _check_scope('Write', {'path': 'config-backup/a.txt'}, ctx) is None
+
+
+def test_frozen_overrides_scope(tmp_path):
+    """A file inside scope but also frozen must be blocked."""
+    ctx = ToolContext(project_root=tmp_path, scope=['src/'], frozen=['src/locked.py'])
+    assert _check_scope('Edit', {'path': 'src/free.py'}, ctx) is None
+    assert _check_scope('Edit', {'path': 'src/locked.py'}, ctx) is not None
+
+
 def test_scope_enforced_in_execute_tool(tmp_path):
     """execute_tool should block scoped writes."""
     (tmp_path / 'src' / 'auth').mkdir(parents=True)
