@@ -42,6 +42,13 @@ def _new_id(prefix: str = 'jl') -> str:
     return f'{prefix}-{uuid.uuid4().hex[:10]}'
 
 
+# Default min_delta for stochastic (LLM) judges, set from measured score noise:
+# AestheticJudge σ≈0.22 on a 1-10 scale (gpt-5.5; see results/judge_variance.json
+# and scripts/measure_judge_variance.py). Use ~2σ so a single noise spike does
+# not register as an improvement and get kept.
+STOCHASTIC_JUDGE_MIN_DELTA = 0.5
+
+
 @dataclass
 class JudgeVerdict:
     """Result of a single judge evaluation."""
@@ -60,7 +67,7 @@ class Iteration:
     feedback: str = ''
     change_summary: str = ''
     kept: bool = False
-    status: str = 'pending'  # pending | running | scored | kept | discarded | crashed | constraint_failed
+    status: str = 'pending'  # pending | running | scored | kept | discarded | crashed | constraint_failed | frozen_violation
     checkpoint_id: str | None = None
     implementer_contract_id: str | None = None
     judge_output: str = ''
@@ -644,9 +651,19 @@ def _call_llm_judge(prompt: str, provider=None, model=None) -> JudgeVerdict:
             return ''.join(full_text)
 
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # We're in an async context — use a thread
+            # asyncio.run() closes the loop it creates, so a cached
+            # get_event_loop() handle goes stale after the first call (every
+            # subsequent aesthetic scoring would fail with "no current event
+            # loop"). Detect a *running* loop instead: if one is running we're
+            # in async code and must offload to a thread; otherwise a fresh
+            # asyncio.run() is correct each time.
+            try:
+                asyncio.get_running_loop()
+                in_running_loop = True
+            except RuntimeError:
+                in_running_loop = False
+
+            if in_running_loop:
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as pool:
                     response = pool.submit(asyncio.run, _call()).result(timeout=60)
@@ -891,11 +908,18 @@ def create_loop(
     max_iterations: int = 20,
     max_wall_minutes: int = 0,
     max_consecutive_failures: int = 5,
-    min_delta: float = 0.0,
+    min_delta: float | None = None,
     plateau_window: int = 5,
     program: str = '',
 ) -> JudgeLoopConfig:
     """Create and persist a new judge loop."""
+    # Stochastic (LLM) judges have a measurable score-noise floor; if min_delta
+    # is below it, the loop hill-climbs noise. Measured AestheticJudge noise is
+    # σ≈0.22 (gpt-5.5, results/judge_variance.json); default min_delta to ≈2σ
+    # for aesthetic/composite so a single noise spike isn't "kept" as progress.
+    # Deterministic judges (quantitative/correctness) keep min_delta=0.
+    if min_delta is None:
+        min_delta = STOCHASTIC_JUDGE_MIN_DELTA if judge_type in ('aesthetic', 'composite') else 0.0
     config = JudgeLoopConfig(
         id=_new_id('jl'),
         goal=goal,
@@ -1021,6 +1045,24 @@ def run_iteration(
         implementer_contract_id=implementer_contract_id,
         timestamp=_now(),
     )
+
+    # Frozen-path gate: a hard anti-gaming check. If this iteration touched any
+    # frozen path (vs the best-known checkpoint) — by any means, including a
+    # shell command that the tool-layer scope check can't see — reject and roll
+    # back before scoring, so the optimizer cannot "win" by editing files it was
+    # told not to touch.
+    if config.frozen and checkpoint_mgr and config.best_checkpoint:
+        touched = checkpoint_mgr.changed_paths_under(config.best_checkpoint, config.frozen)
+        if touched:
+            iteration.status = 'frozen_violation'
+            iteration.feedback = f'Frozen-path violation: modified {", ".join(touched[:5])}'
+            iteration.kept = False
+            iteration.duration_seconds = time.time() - start_time
+            config.consecutive_failures += 1
+            config.iterations.append(iteration)
+            config.updated_at = _now()
+            checkpoint_mgr.rollback(config.best_checkpoint)
+            return config, iteration
 
     # Run constraint checks
     for cmd in config.constraint_commands:

@@ -47,3 +47,31 @@ Final solver.py BATCH (best kept): 20  (no .git in project: True)
 The orchestration (baseline → implement → score → keep/rollback → converge) is
 covered by `tests/test_judge_loop_driver.py` and `tests/test_judge_loop_integration.py`.
 The live path (implementer = real shade) additionally needs a configured provider.
+
+## Judge reliability (why `min_delta` matters)
+
+A stochastic judge can "improve" a score by pure noise. `scripts/measure_judge_variance.py`
+scores a fixed working-tree state N times per judge and records the spread in
+`results/judge_variance.json`:
+
+| Judge | Mean | Stdev | Range |
+|---|---|---|---|
+| Quantitative | 42.0 | **0.0** | deterministic |
+| Correctness | 0.80 | **0.0** | deterministic |
+| Aesthetic (gpt-5.5) | 5.05 | **0.22** | 5.0–6.0 (occasional +1 spike) |
+
+So the AestheticJudge has a real noise floor (~0.22 on a 1–10 scale). With the
+old default `min_delta = 0`, a single +1 noise spike would be "kept" as progress —
+the loop would hill-climb noise. `create_loop` now defaults `min_delta` for
+aesthetic/composite judges to **0.5 ≈ 2σ** (`STOCHASTIC_JUDGE_MIN_DELTA`),
+derived from this measurement rather than hand-picked; deterministic judges keep
+`min_delta = 0`. (Measuring this also surfaced and fixed a bug where the
+AestheticJudge failed on every iteration after the first — a stale event loop.)
+
+## Frozen paths are a real gate
+
+`config.frozen` is enforced, not advisory: `run_iteration` checkpoints the
+post-implementation state and, before scoring, rejects the iteration and rolls
+back if any frozen path changed vs the best checkpoint — *regardless of how* the
+change was made (Write/Edit or a shell command). See
+`tests/test_judge_loop_integration.py::TestFrozenGate`.

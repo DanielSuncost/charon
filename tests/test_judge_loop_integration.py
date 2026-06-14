@@ -249,6 +249,51 @@ class TestConstraintEnforcement:
         assert config.best_score == 100.0  # unchanged
 
 
+class TestFrozenGate:
+    """A frozen-path modification must be rejected and rolled back before scoring."""
+
+    def test_frozen_modification_rejected(self, tmp_path):
+        work = tmp_path / 'project'; work.mkdir()
+        state = tmp_path / 'state'; state.mkdir()
+        (work / 'score.txt').write_text('100\n')
+        (work / 'locked.py').write_text('ORIGINAL = 1\n')
+
+        cp = CheckpointManager(state, work)
+        config = create_loop(
+            state, goal='maximize', project=str(work), agent_id='AG',
+            judge_type='quantitative', direction='maximize',
+            eval_command='cat score.txt', frozen=['locked.py'], max_iterations=10,
+        )
+        judge = create_judge(config)
+        config = run_baseline(config, judge, work, checkpoint_mgr=cp)
+        assert config.baseline == 100.0
+
+        # A great score, but achieved while also editing a FROZEN file.
+        (work / 'score.txt').write_text('999\n')
+        (work / 'locked.py').write_text('ORIGINAL = 1\nHACKED = True\n')
+
+        config, it = run_iteration(config, judge, work, change_summary='touch frozen',
+                                   checkpoint_mgr=cp)
+        assert it.status == 'frozen_violation'
+        assert it.kept is False
+        assert config.best_score == 100.0  # not kept despite 999
+        # Frozen file restored to baseline by the rollback.
+        assert (work / 'locked.py').read_text() == 'ORIGINAL = 1\n'
+
+    def test_stochastic_judges_get_measured_min_delta(self, tmp_path):
+        state = tmp_path / 'state'; state.mkdir()
+        det = create_loop(state, goal='g', project=str(tmp_path), agent_id='a',
+                          judge_type='quantitative', eval_command='echo 1')
+        aes = create_loop(state, goal='g', project=str(tmp_path), agent_id='a',
+                          judge_type='aesthetic', rubric='rate it')
+        assert det.min_delta == 0.0
+        assert aes.min_delta > 0.0  # derived from measured AestheticJudge noise
+        # explicit value is still honored
+        ov = create_loop(state, goal='g', project=str(tmp_path), agent_id='a',
+                         judge_type='aesthetic', min_delta=0.05)
+        assert ov.min_delta == 0.05
+
+
 class TestToolIntegration:
     """Test the SpawnJudgeLoop tool creates loops correctly."""
 
