@@ -267,6 +267,7 @@ full list.
 | [Three-Tier Memory](docs/three-tier-memory.md) | User / project / agent context hierarchy |
 | [Procedures & Judge Loops](docs/plans/procedure-learning-and-optimization-loops.md) | Iterative optimization with pluggable scoring |
 | [Autonomous Work](docs/plans/autonomous-goal-driven-work.md) | Goal-driven self-assignment |
+| [Remote Agent Teams](docs/remote-agent-teams.md) | Fleet configuration, team roles, Harbor dispatch |
 | [Capability Roadmap](docs/plans/capability-roadmap.md) | Prioritized feature plan (P0–P3) |
 | [Master Plan](docs/plans/MASTER_PLAN.md) | Architecture and build phases |
 
