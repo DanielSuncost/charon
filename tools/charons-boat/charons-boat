@@ -142,6 +142,7 @@ cmd_deploy() {
     "${SCRIPT_DIR}/boat_session.py"
     "${SCRIPT_DIR}/boat_stream.py"
     "${SCRIPT_DIR}/boat_attach.py"
+    "${SCRIPT_DIR}/harbor_worker.py"
   )
 
   echo "⛵ Deploying charons-boat to ${target}..."
