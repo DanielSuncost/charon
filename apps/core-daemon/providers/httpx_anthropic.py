@@ -100,53 +100,23 @@ class HttpxAnthropicProvider:
         else:
             await self._do_refresh()
 
+    def _token_is_fresh(self) -> bool:
+        return self._token_expires > 0 and time.time() < self._token_expires
+
     async def _locked_refresh(self):
-        """Refresh with file lock — prevents multi-process races."""
-        import fcntl
+        """Refresh under the shared cross-process OAuth lock (prevents races)."""
+        from oauth_lock import locked_refresh
 
-        lock_path = self._auth_store_path + '.lock'
-        Path(lock_path).parent.mkdir(parents=True, exist_ok=True)
-
-        try:
-            lock_fd = open(lock_path, 'w')
-            # Non-blocking attempt first, then blocking with timeout
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except (IOError, OSError):
-                # Another process holds the lock — wait up to 15 seconds
-                import asyncio
-                for _ in range(30):
-                    await asyncio.sleep(0.5)
-                    try:
-                        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        break
-                    except (IOError, OSError):
-                        continue
-                else:
-                    lock_fd.close()
-                    # Timed out — just read whatever's on disk
-                    self._read_tokens_from_disk()
-                    return
-
-            try:
-                # We have the lock. Read the latest state from disk.
-                self._read_tokens_from_disk()
-
-                # Check again — maybe another process refreshed while we waited
-                if self._token_expires > 0 and time.time() < self._token_expires:
-                    return
-
-                # Still expired — do the actual refresh
-                await self._do_refresh()
-            finally:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                lock_fd.close()
-        except Exception:
-            # Lock failed entirely — try refreshing anyway
-            self._read_tokens_from_disk()
-            if self._token_expires > 0 and time.time() < self._token_expires:
-                return
+        async def _do() -> bool:
             await self._do_refresh()
+            return self._token_is_fresh()
+
+        await locked_refresh(
+            self._auth_store_path + '.lock',
+            read_from_disk=self._read_tokens_from_disk,
+            is_fresh=self._token_is_fresh,
+            do_refresh=_do,
+        )
 
     def _read_tokens_from_disk(self):
         """Read the latest tokens from the auth store file."""
