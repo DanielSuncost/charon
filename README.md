@@ -57,6 +57,10 @@ reciprocal rank fusion). Local embeddings (bge-base-en-v1.5, ~10ms per
 recall, query-embedding dominated). Version chains detect when knowledge
 has been superseded.
 
+Honest caveat, measured: on LongMemEval's abstractive questions the FTS5
+half contributes ~nothing, so hybrid+RRF there equals vector-only
+(`docs/experiments.md`). The hybrid helps keyword-exact queries, not those.
+
 Scored 78.8% on
 [LongMemEval_S](https://github.com/xiaowu0162/LongMemEval) with a GPT-4o
 reader, against the benchmark's oracle-retrieval ceiling of ~82.4% for the

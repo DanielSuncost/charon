@@ -1,0 +1,165 @@
+{
+  "per_type": 12,
+  "ks": [
+    1,
+    2,
+    3,
+    5
+  ],
+  "by_type": {
+    "single-session-user": {
+      "vector_only": {
+        "recall@1": 0.917,
+        "recall@2": 0.917,
+        "recall@3": 0.917,
+        "recall@5": 0.917
+      },
+      "fts_only": {
+        "recall@1": 0.0,
+        "recall@2": 0.0,
+        "recall@3": 0.0,
+        "recall@5": 0.0
+      },
+      "hybrid_rrf": {
+        "recall@1": 0.917,
+        "recall@2": 0.917,
+        "recall@3": 0.917,
+        "recall@5": 0.917
+      }
+    },
+    "multi-session": {
+      "vector_only": {
+        "recall@1": 0.271,
+        "recall@2": 0.556,
+        "recall@3": 0.792,
+        "recall@5": 0.958
+      },
+      "fts_only": {
+        "recall@1": 0.0,
+        "recall@2": 0.0,
+        "recall@3": 0.0,
+        "recall@5": 0.0
+      },
+      "hybrid_rrf": {
+        "recall@1": 0.271,
+        "recall@2": 0.556,
+        "recall@3": 0.792,
+        "recall@5": 0.958
+      }
+    },
+    "single-session-preference": {
+      "vector_only": {
+        "recall@1": 0.75,
+        "recall@2": 0.917,
+        "recall@3": 1.0,
+        "recall@5": 1.0
+      },
+      "fts_only": {
+        "recall@1": 0.0,
+        "recall@2": 0.0,
+        "recall@3": 0.0,
+        "recall@5": 0.0
+      },
+      "hybrid_rrf": {
+        "recall@1": 0.75,
+        "recall@2": 0.917,
+        "recall@3": 1.0,
+        "recall@5": 1.0
+      }
+    },
+    "temporal-reasoning": {
+      "vector_only": {
+        "recall@1": 0.507,
+        "recall@2": 0.729,
+        "recall@3": 0.826,
+        "recall@5": 0.91
+      },
+      "fts_only": {
+        "recall@1": 0.0,
+        "recall@2": 0.0,
+        "recall@3": 0.0,
+        "recall@5": 0.0
+      },
+      "hybrid_rrf": {
+        "recall@1": 0.507,
+        "recall@2": 0.729,
+        "recall@3": 0.826,
+        "recall@5": 0.91
+      }
+    },
+    "knowledge-update": {
+      "vector_only": {
+        "recall@1": 0.5,
+        "recall@2": 0.917,
+        "recall@3": 1.0,
+        "recall@5": 1.0
+      },
+      "fts_only": {
+        "recall@1": 0.0,
+        "recall@2": 0.0,
+        "recall@3": 0.0,
+        "recall@5": 0.0
+      },
+      "hybrid_rrf": {
+        "recall@1": 0.5,
+        "recall@2": 0.917,
+        "recall@3": 1.0,
+        "recall@5": 1.0
+      }
+    },
+    "single-session-assistant": {
+      "vector_only": {
+        "recall@1": 1.0,
+        "recall@2": 1.0,
+        "recall@3": 1.0,
+        "recall@5": 1.0
+      },
+      "fts_only": {
+        "recall@1": 0.0,
+        "recall@2": 0.0,
+        "recall@3": 0.0,
+        "recall@5": 0.0
+      },
+      "hybrid_rrf": {
+        "recall@1": 1.0,
+        "recall@2": 1.0,
+        "recall@3": 1.0,
+        "recall@5": 1.0
+      }
+    }
+  },
+  "overall": {
+    "vector_only": {
+      "recall@1": 0.657,
+      "recall@2": 0.839,
+      "recall@3": 0.922,
+      "recall@5": 0.964
+    },
+    "fts_only": {
+      "recall@1": 0.0,
+      "recall@2": 0.0,
+      "recall@3": 0.0,
+      "recall@5": 0.0
+    },
+    "hybrid_rrf": {
+      "recall@1": 0.657,
+      "recall@2": 0.839,
+      "recall@3": 0.922,
+      "recall@5": 0.964
+    }
+  },
+  "version_chain_on_knowledge_update": {
+    "updates_off": {
+      "recall@1": 0.5,
+      "recall@2": 0.917,
+      "recall@3": 1.0,
+      "recall@5": 1.0
+    },
+    "updates_on": {
+      "recall@1": 0.5,
+      "recall@2": 0.917,
+      "recall@3": 1.0,
+      "recall@5": 1.0
+    }
+  }
+}
