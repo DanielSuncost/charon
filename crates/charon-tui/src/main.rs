@@ -2902,10 +2902,6 @@ fn main() -> io::Result<()> {
                                 needs_full_redraw = true;
                             } else if app.chat.context_menu.is_some() {
                                 match key.code {
-                                    KeyCode::Esc => {
-                                        app.chat.context_menu = None;
-                                        local_view_dirty = true;
-                                    }
                                     KeyCode::Up => {
                                         if let Some(ref mut ctx) = app.chat.context_menu {
                                             ctx.selected = ctx.selected.saturating_sub(1);
@@ -2933,7 +2929,11 @@ fn main() -> io::Result<()> {
                                         }
                                         local_view_dirty = true;
                                     }
-                                    _ => {}
+                                    _ => {
+                                        // Dismiss context menu on any other key (Esc, Ctrl+C, etc.)
+                                        app.chat.context_menu = None;
+                                        local_view_dirty = true;
+                                    }
                                 }
                             } else if key.code == KeyCode::Esc {
                                 if app.chat.menu_open() {
