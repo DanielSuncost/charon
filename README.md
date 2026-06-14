@@ -90,24 +90,28 @@ independent tasks. Budget limits on tokens, time, and iterations.
 
 ### Judge Loops
 
-Define a quality signal and Charon iterates until it converges.
-The signal can be a benchmark, a test suite, an LLM rubric, or a
-composite of several.
+Define a quality signal and Charon iterates: snapshot → implement →
+judge → keep-if-better / rollback → repeat → converge. Checkpoints use
+a shadow git repo so your working tree stays clean, and rollback is
+byte-exact (it also removes files a discarded iteration added).
+
+A real, reproducible run (`scripts/judge_loop_example.py`) optimizing a
+program's printed metric, where the keep/rollback machinery is the point:
 
 ```
-You: "Optimize my RL trainer. Metric is mean episode reward.
-      Only touch train.py and model.py. 100 iterations max."
-
-Charon: [baseline]  142.7
-        [iter  1]   148.3  cosine LR schedule             KEPT
-        [iter  3]   162.8  GAE lambda 0.95 -> 0.98        KEPT
-        [iter 19]   194.2  wider net + above               KEPT
-        Converged — best: 194.2 (+36.1%)
+tick  action     score  kept   best
+1     baseline   10.0   -      10.0
+2     iterated   68.0   True   68.0     # improvement, kept
+3     iterated   38.0   False  68.0     # regression, rolled back via shadow git
+4     iterated   308.0  True   308.0    # hit target -> converged (1 rollback)
 ```
 
-Each iteration: snapshot, implement, judge, keep or rollback, feed
-critique to the next round. Checkpoints use shadow git so your repo
-stays clean.
+This run uses the deterministic Quantitative judge (the score is the
+program's output, no LLM), so it reproduces exactly. The LLM-implementer
+path — where a model proposes the change each iteration — exists but is
+lightly exercised; treat the loop as verified machinery, not a benchmarked
+agent capability. See [the case study](docs/judge-loop-case-study.md) and
+[reward-hacking demo](docs/reward-hacking-demo.md).
 
 | Judge type | Signal | Example |
 |------------|--------|---------|
