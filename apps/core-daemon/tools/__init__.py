@@ -38,6 +38,7 @@ class ToolContext:
     max_output_lines: int = 2000
     shell_timeout: int = 120
     scope: list[str] | None = None  # shade scope restriction (list of allowed path prefixes)
+    frozen: list[str] | None = None  # paths that must NOT be modified (Write/Edit denylist)
     on_tool_output: Callable[[str, str], None] | None = None  # (tool_name, chunk)
     operation_id: str = ''
     operation_domain: str = ''
@@ -1143,8 +1144,8 @@ def _check_scope(name: str, params: dict, ctx: ToolContext) -> str | None:
     Returns an error message if blocked, None if allowed.
     Only enforced when ctx.scope is set (shade agents).
     """
-    if not ctx.scope:
-        return None  # No scope restriction
+    if not ctx.scope and not ctx.frozen:
+        return None  # No restrictions
 
     # Tools that access paths
     path_param = None
@@ -1171,24 +1172,35 @@ def _check_scope(name: str, params: dict, ctx: ToolContext) -> str | None:
         pass
     target_str = str(target)
 
-    # Check if the path falls within any allowed scope prefix
-    project_root = str(ctx.project_root.resolve())
-    for scope_entry in ctx.scope:
-        scope_path = scope_entry.strip().strip('/')
-        if not scope_path:
-            continue
-        # Scope can be relative to project root
-        allowed = str((ctx.project_root / scope_path).resolve())
-        # Match the scope dir itself or anything beneath it, but require a
-        # path-component boundary so scope "src" does not allow "src-evil/".
-        if target_str == allowed or target_str.startswith(allowed + os.sep):
-            return None
+    def _within(entry: str) -> bool:
+        p = entry.strip().strip('/')
+        if not p:
+            return False
+        # Match the prefix dir itself or anything beneath it, but require a
+        # path-component boundary so "src" does not match a sibling "src-evil/".
+        base = str((ctx.project_root / p).resolve())
+        return target_str == base or target_str.startswith(base + os.sep)
 
-    scope_list = ', '.join(ctx.scope)
-    return (
-        f'Scope violation: {name} on "{path_param}" is outside allowed scope [{scope_list}]. '
-        f'This shade is restricted to files within its contract scope.'
-    )
+    # Frozen denylist — blocks modifications regardless of scope.
+    if ctx.frozen and name in ('Write', 'Edit'):
+        if any(_within(entry) for entry in ctx.frozen):
+            frozen_list = ', '.join(ctx.frozen)
+            return (
+                f'Frozen-path violation: {name} on "{path_param}" targets a frozen path '
+                f'[{frozen_list}] that must not be modified.'
+            )
+
+    # Scope allowlist (only when a scope is set).
+    if ctx.scope:
+        if any(_within(entry) for entry in ctx.scope):
+            return None
+        scope_list = ', '.join(ctx.scope)
+        return (
+            f'Scope violation: {name} on "{path_param}" is outside allowed scope [{scope_list}]. '
+            f'This shade is restricted to files within its contract scope.'
+        )
+
+    return None
 
 
 def execute_tool(name: str, params: dict, ctx: ToolContext) -> ToolResult:

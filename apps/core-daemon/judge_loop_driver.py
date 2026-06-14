@@ -155,8 +155,10 @@ def shade_implementer(state_dir: Path, config, working_dir: Path) -> "str | None
         state_dir=state_dir,
         max_tokens=16384,
     )
-    # Enforce the loop's scope on file edits (empty scope = whole project).
+    # Enforce the loop's scope on file edits (empty scope = whole project),
+    # and the frozen denylist (files that must not be modified).
     engine.scope = list(config.scope) if config.scope else None
+    engine.frozen = list(config.frozen) if config.frozen else None
 
     text_parts: list[str] = []
 
