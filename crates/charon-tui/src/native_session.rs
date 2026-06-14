@@ -9,6 +9,7 @@ use std::thread;
 use base64::Engine;
 use serde_json::json;
 
+#[allow(dead_code)] // protocol enum; not all commands sent by the TUI
 pub enum NativeCommand {
     Input(Vec<u8>),
     Resize { cols: u16, rows: u16 },
@@ -118,6 +119,7 @@ impl NativeSessionServer {
         Ok(server)
     }
 
+    #[allow(dead_code)] // accessor kept for the type's interface
     pub fn session_id(&self) -> &str { &self.session_id }
     pub fn name(&self) -> &str { &self.name }
     pub fn socket_path(&self) -> &std::path::Path { &self.sock_path }
