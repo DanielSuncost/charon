@@ -184,6 +184,22 @@ class CheckpointManager:
         result = self._git('diff', checkpoint_id, '--cached', '--stat', check=False)
         return result.stdout.strip()
 
+    def changed_paths_under(self, checkpoint_id: str, paths: list[str]) -> list[str]:
+        """Return which files under `paths` differ from `checkpoint_id`.
+
+        Used to enforce frozen paths: anything returned here was modified,
+        added, or deleted under a frozen path since the checkpoint — regardless
+        of whether the change came from Write/Edit or from a shell command.
+        Stages the working tree first so newly-created files are also seen.
+        """
+        clean = [p.strip().strip('/') for p in (paths or []) if p.strip()]
+        if not clean:
+            return []
+        self._git('add', '-A', check=False)
+        result = self._git('diff', checkpoint_id, '--cached', '--name-only', '--',
+                           *clean, check=False)
+        return [l.strip() for l in result.stdout.splitlines() if l.strip()]
+
     def diff_full(self, checkpoint_id: str) -> str:
         """Full diff (not just stat) between current state and a checkpoint."""
         if self.scope:
