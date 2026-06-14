@@ -1,29 +1,29 @@
 {
   "recall@1_by_size": {
     "20": {
-      "vector_only": 0.4,
-      "fts_only": 0.6,
-      "hybrid_rrf": 0.55
+      "vector_only": 0.55,
+      "fts_only": 1.0,
+      "hybrid_rrf": 1.0
     },
     "50": {
-      "vector_only": 0.35,
-      "fts_only": 0.3,
-      "hybrid_rrf": 0.3
+      "vector_only": 0.65,
+      "fts_only": 1.0,
+      "hybrid_rrf": 1.0
     },
     "100": {
-      "vector_only": 0.2,
-      "fts_only": 0.3,
-      "hybrid_rrf": 0.25
+      "vector_only": 0.45,
+      "fts_only": 1.0,
+      "hybrid_rrf": 1.0
     },
     "250": {
-      "vector_only": 0.15,
-      "fts_only": 0.3,
-      "hybrid_rrf": 0.3
+      "vector_only": 0.45,
+      "fts_only": 1.0,
+      "hybrid_rrf": 1.0
     },
     "500": {
-      "vector_only": 0.2,
-      "fts_only": 0.25,
-      "hybrid_rrf": 0.1
+      "vector_only": 0.55,
+      "fts_only": 1.0,
+      "hybrid_rrf": 1.0
     }
   }
 }
