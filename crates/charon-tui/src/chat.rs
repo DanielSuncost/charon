@@ -1160,6 +1160,8 @@ impl ChatState {
                 "/autonomous tokens",
                 "/consolidation model",
                 "/consolidation interval",
+                "/fleet setup",
+                "/voyage dispatch",
             ];
             let executable = cmd.starts_with('/') && !non_exec.contains(&cmd);
             MenuItem { cmd: cmd.to_string(), desc: desc.to_string(), age: String::new(), executable }

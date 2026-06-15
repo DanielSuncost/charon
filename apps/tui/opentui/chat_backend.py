@@ -5365,10 +5365,11 @@ class ChatBackend:
                         emit({'type': 'error', 'error': f'Fleet status failed: {e}', 'request_id': request_id})
                     return
 
-                if rest.startswith('setup '):
-                    target = rest[6:].strip()
+                if rest == 'setup' or rest.startswith('setup '):
+                    target = rest[6:].strip() if rest.startswith('setup ') else ''
                     if not target:
-                        emit({'type': 'error', 'error': 'Usage: /fleet setup user@host', 'request_id': request_id})
+                        emit({'type': 'status', 'message': 'Enter the server address (user@host):', 'request_id': request_id})
+                        self._pending_fleet_setup = {'step': 'enter_host', 'request_id': request_id}
                         return
                     # Parse user@host
                     if '@' in target:
@@ -6060,7 +6061,21 @@ class ChatBackend:
         if not setup:
             return
         step = setup.get('step', '')
-        response = response.strip().lower()
+        raw_response = response.strip()
+        response = raw_response.lower()
+
+        if step == 'enter_host':
+            target = raw_response
+            if not target:
+                emit({'type': 'error', 'error': 'Enter a server address like deploy@65.21.191.198', 'request_id': request_id})
+                return
+            if '@' in target:
+                user, host = target.rsplit('@', 1)
+            else:
+                user, host = '', target
+            self._pending_fleet_setup = None
+            self._start_fleet_setup(host, user, request_id)
+            return
 
         if step == 'confirm_install':
             if response in ('yes', 'y', '1'):
