@@ -788,6 +788,7 @@ class ChatBackend:
         self._pending_provider_switch: dict | None = None
         self._pending_libris_intake: dict | None = None
         self._pending_remote_onboard: dict | None = None
+        self._pending_fleet_setup: dict | None = None
         self.visible_thoughts: bool = bool(_load_ui_settings().get('visible_thoughts', False))
         self._goal_inference_token_estimate: int = 0
         self._room_runners: set[str] = set()
@@ -3370,6 +3371,8 @@ class ChatBackend:
             {'cmd': '/voyage dispatch', 'desc': 'Dispatch a task to a remote agent worker'},
             {'cmd': '/voyage status', 'desc': 'Check status of a voyage'},
             {'cmd': '/voyage list', 'desc': 'List recent voyages'},
+            {'cmd': '/fleet setup', 'desc': 'Set up a remote agent team (install, auth, start agents)'},
+            {'cmd': '/fleet status', 'desc': 'Show fleet status'},
         ]
 
     def _get_suggestions(self, prefix: str) -> list[dict]:
@@ -3536,6 +3539,11 @@ class ChatBackend:
                     self._switch_provider_with_transfer(str(pending.get('target_provider') or ''), request_id)
                 else:
                     self._switch_provider_fresh(str(pending.get('target_provider') or ''), request_id)
+                return
+
+            # /fleet setup interactive flow — handle pending responses
+            if self._pending_fleet_setup:
+                self._handle_fleet_setup_response(command, request_id)
                 return
 
             # Show suggestions for /help, /setup alone, or unknown commands
@@ -5328,6 +5336,50 @@ class ChatBackend:
                     self._run_setup_command(f'provider {provider_name}', request_id)
                 return
 
+            # /fleet — remote agent team management
+            if command == '/fleet' or command.startswith('/fleet '):
+                rest = command[7:].strip() if command.startswith('/fleet ') else ''
+
+                if rest == 'status' or not rest:
+                    try:
+                        from fleet_registry import load_fleet
+                        from fleet_sync import get_cached_fleet_status
+                        fleet = load_fleet()
+                        cache = get_cached_fleet_status()
+                        servers = fleet.get('servers', [])
+                        if not servers:
+                            emit({'type': 'status', 'message': 'No servers configured. Use /fleet setup <user@host> to add one.', 'request_id': request_id})
+                        else:
+                            for s in servers:
+                                sid = s.get('id', s.get('host', '?'))
+                                cached = cache.get(sid, {})
+                                online = cached.get('online', False)
+                                status_icon = '●' if online else '○'
+                                emit({'type': 'status', 'message': f'  {status_icon} {sid} ({s.get("user", "")}@{s.get("host", "")})', 'request_id': request_id})
+                                for a in s.get('agents', []):
+                                    sessions = cached.get('sessions', {})
+                                    agent_status = sessions.get(a['name'], {}).get('status', 'unknown')
+                                    emit({'type': 'status', 'message': f'      {a["name"]} [{a.get("specialization", "")}] — {agent_status}', 'request_id': request_id})
+                    except Exception as e:
+                        emit({'type': 'error', 'error': f'Fleet status failed: {e}', 'request_id': request_id})
+                    return
+
+                if rest.startswith('setup '):
+                    target = rest[6:].strip()
+                    if not target:
+                        emit({'type': 'error', 'error': 'Usage: /fleet setup user@host', 'request_id': request_id})
+                        return
+                    # Parse user@host
+                    if '@' in target:
+                        user, host = target.rsplit('@', 1)
+                    else:
+                        user, host = '', target
+                    self._start_fleet_setup(host, user, request_id)
+                    return
+
+                emit({'type': 'error', 'error': 'Usage: /fleet setup <user@host> or /fleet status', 'request_id': request_id})
+                return
+
             # /voyage — Harbor protocol: dispatch tasks to remote agent workers
             if command == '/voyage' or command.startswith('/voyage '):
                 rest = command[8:].strip() if command.startswith('/voyage ') else ''
@@ -5930,6 +5982,457 @@ class ChatBackend:
         emit({'type': 'status', 'message': f'Pending: {pending} | In progress: {in_prog} | Done: {done}', 'request_id': request_id})
         emit({'type': 'status', 'message': '', 'request_id': request_id})
         emit({'type': 'status', 'message': '  /harvest_souls plan <N>  — implementation steps for any ability', 'request_id': request_id})
+
+    # ── /fleet setup interactive flow ──────────────────────────────────
+
+    def _start_fleet_setup(self, host: str, user: str, request_id: str | None):
+        """Begin the interactive fleet setup flow."""
+        target = f'{user}@{host}' if user else host
+
+        self._pending_fleet_setup = {
+            'step': 'ssh_test',
+            'host': host,
+            'user': user,
+            'target': target,
+            'server_id': host.split('.')[0] if '.' in host else host,
+            'agents': [],
+            'request_id': request_id,
+        }
+
+        emit({'type': 'status', 'message': f'═══ Fleet Setup: {target} ═══', 'request_id': request_id})
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+
+        # Step 1: Test SSH (non-interactive, runs immediately)
+        import threading
+        def _test_and_continue():
+            try:
+                result = subprocess.run(
+                    ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', target, 'echo ok'],
+                    capture_output=True, text=True, timeout=15,
+                )
+                if result.returncode != 0:
+                    emit({'type': 'error', 'error': f'SSH connection failed: {result.stderr.strip()[:200]}', 'request_id': request_id})
+                    self._pending_fleet_setup = None
+                    return
+
+                emit({'type': 'status', 'message': '✓ SSH connected', 'request_id': request_id})
+
+                # Check if charon is installed
+                check = subprocess.run(
+                    ['ssh', '-o', 'BatchMode=yes', target, 'test -d ~/charon && echo installed || echo missing'],
+                    capture_output=True, text=True, timeout=15,
+                )
+                charon_installed = 'installed' in check.stdout
+
+                # Check if charons-boat is available
+                boat_check = subprocess.run(
+                    ['ssh', '-o', 'BatchMode=yes', target, 'export PATH="$HOME/.local/bin:$PATH" && charons-boat version 2>/dev/null || echo missing'],
+                    capture_output=True, text=True, timeout=15,
+                )
+                boat_installed = 'missing' not in boat_check.stdout
+
+                self._pending_fleet_setup['charon_installed'] = charon_installed
+                self._pending_fleet_setup['boat_installed'] = boat_installed
+
+                if not charon_installed:
+                    emit({'type': 'status', 'message': '', 'request_id': request_id})
+                    emit({'type': 'status', 'message': 'Charon is not installed on this server.', 'request_id': request_id})
+                    emit({'type': 'status', 'message': 'Install now? (yes/no)', 'request_id': request_id})
+                    self._pending_fleet_setup['step'] = 'confirm_install'
+                else:
+                    emit({'type': 'status', 'message': '✓ Charon already installed', 'request_id': request_id})
+                    if not boat_installed:
+                        emit({'type': 'status', 'message': 'Deploying charons-boat...', 'request_id': request_id})
+                        self._fleet_setup_deploy_boat(request_id)
+                    else:
+                        emit({'type': 'status', 'message': '✓ charons-boat available', 'request_id': request_id})
+                    self._fleet_setup_ask_agents(request_id)
+            except Exception as e:
+                emit({'type': 'error', 'error': f'Fleet setup failed: {e}', 'request_id': request_id})
+                self._pending_fleet_setup = None
+
+        threading.Thread(target=_test_and_continue, daemon=True).start()
+
+    def _handle_fleet_setup_response(self, response: str, request_id: str | None):
+        """Handle user responses during fleet setup flow."""
+        setup = self._pending_fleet_setup
+        if not setup:
+            return
+        step = setup.get('step', '')
+        response = response.strip().lower()
+
+        if step == 'confirm_install':
+            if response in ('yes', 'y', '1'):
+                emit({'type': 'status', 'message': 'Installing Charon on remote server... (this may take a minute)', 'request_id': request_id})
+                import threading
+                threading.Thread(target=self._fleet_setup_install_remote, args=(request_id,), daemon=True).start()
+            else:
+                emit({'type': 'status', 'message': 'Skipping install. charons-boat will be deployed for Harbor dispatch (bash commands only).', 'request_id': request_id})
+                self._fleet_setup_deploy_boat(request_id)
+                self._fleet_setup_ask_agents(request_id)
+
+        elif step == 'choose_agents':
+            # Parse agent selection: "ops,builder" or "1,2" or custom names
+            preset_agents = {
+                '1': {'name': 'ops', 'specialization': 'deployment, releases, docker, server management'},
+                '2': {'name': 'builder', 'specialization': 'feature implementation, code changes, testing'},
+                '3': {'name': 'watchdog', 'specialization': 'health monitoring, log analysis, alerting'},
+            }
+            agents = []
+            for part in response.replace(' ', ',').split(','):
+                part = part.strip()
+                if part in preset_agents:
+                    agents.append(preset_agents[part])
+                elif part in ('ops', 'builder', 'watchdog'):
+                    matching = [a for a in preset_agents.values() if a['name'] == part]
+                    if matching:
+                        agents.append(matching[0])
+                elif part:
+                    agents.append({'name': part, 'specialization': ''})
+
+            if not agents:
+                emit({'type': 'error', 'error': 'No agents selected. Pick from: 1 (ops), 2 (builder), 3 (watchdog), or custom names', 'request_id': request_id})
+                return
+
+            setup['agents'] = agents
+            agent_names = ', '.join(a['name'] for a in agents)
+            emit({'type': 'status', 'message': f'Agents: {agent_names}', 'request_id': request_id})
+            self._fleet_setup_ask_auth(request_id)
+
+        elif step == 'choose_auth':
+            if response in ('1', 'copy'):
+                emit({'type': 'status', 'message': 'Copying local credentials to remote...', 'request_id': request_id})
+                import threading
+                threading.Thread(target=self._fleet_setup_copy_auth, args=(request_id,), daemon=True).start()
+            elif response in ('2', 'oauth'):
+                emit({'type': 'status', 'message': 'Starting OAuth flow for remote...', 'request_id': request_id})
+                import threading
+                threading.Thread(target=self._fleet_setup_remote_oauth, args=(request_id,), daemon=True).start()
+            elif response in ('3', 'key', 'api'):
+                emit({'type': 'status', 'message': 'Paste your API key:', 'request_id': request_id})
+                setup['step'] = 'paste_api_key'
+            else:
+                emit({'type': 'error', 'error': 'Pick: 1 (copy local), 2 (OAuth), or 3 (API key)', 'request_id': request_id})
+
+        elif step == 'paste_api_key':
+            api_key = response.strip()
+            if not api_key or len(api_key) < 10:
+                emit({'type': 'error', 'error': 'That doesn\'t look like a valid API key. Try again:', 'request_id': request_id})
+                return
+            import threading
+            threading.Thread(target=self._fleet_setup_write_api_key, args=(api_key, request_id), daemon=True).start()
+
+        elif step == 'paste_oauth_code':
+            code = response.strip()
+            if not code:
+                emit({'type': 'error', 'error': 'Paste the authorization code from the browser:', 'request_id': request_id})
+                return
+            import threading
+            threading.Thread(target=self._fleet_setup_exchange_oauth_code, args=(code, request_id), daemon=True).start()
+
+        else:
+            emit({'type': 'error', 'error': f'Unexpected fleet setup state: {step}', 'request_id': request_id})
+            self._pending_fleet_setup = None
+
+    def _fleet_setup_deploy_boat(self, request_id: str | None):
+        """Deploy charons-boat to the remote server."""
+        setup = self._pending_fleet_setup
+        if not setup:
+            return
+        if setup.get('boat_installed'):
+            return
+        target = setup['target']
+        try:
+            script_dir = Path(__file__).resolve().parents[2] / 'tools' / 'charons-boat'
+            result = subprocess.run(
+                [str(script_dir / 'charons-boat'), 'deploy', target],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0:
+                emit({'type': 'status', 'message': '✓ charons-boat deployed', 'request_id': request_id})
+                setup['boat_installed'] = True
+            else:
+                emit({'type': 'status', 'message': f'Boat deploy issue: {result.stderr.strip()[:200]}', 'request_id': request_id})
+        except Exception as e:
+            emit({'type': 'status', 'message': f'Boat deploy error: {e}', 'request_id': request_id})
+
+    def _fleet_setup_install_remote(self, request_id: str | None):
+        """Install full Charon on remote server via SSH."""
+        setup = self._pending_fleet_setup
+        if not setup:
+            return
+        target = setup['target']
+        try:
+            # Clone and install
+            install_cmds = (
+                'export PATH="$HOME/.local/bin:$PATH" && '
+                'test -d ~/charon || git clone https://github.com/DanielSuncost/charon.git ~/charon && '
+                'cd ~/charon && ./scripts/install.sh --no-playwright --no-tmux -y'
+            )
+            result = subprocess.run(
+                ['ssh', '-o', 'BatchMode=yes', target, install_cmds],
+                capture_output=True, text=True, timeout=300,
+            )
+            if result.returncode == 0:
+                emit({'type': 'status', 'message': '✓ Charon installed on remote', 'request_id': request_id})
+                setup['charon_installed'] = True
+                setup['boat_installed'] = True  # install.sh includes boat
+            else:
+                stderr = result.stderr.strip()[-300:]
+                emit({'type': 'error', 'error': f'Install failed: {stderr}', 'request_id': request_id})
+                emit({'type': 'status', 'message': 'Continuing with charons-boat only (bash commands via Harbor).', 'request_id': request_id})
+                self._fleet_setup_deploy_boat(request_id)
+
+            self._fleet_setup_ask_agents(request_id)
+        except Exception as e:
+            emit({'type': 'error', 'error': f'Remote install failed: {e}', 'request_id': request_id})
+            self._pending_fleet_setup = None
+
+    def _fleet_setup_ask_agents(self, request_id: str | None):
+        """Prompt user to choose which agents to set up."""
+        setup = self._pending_fleet_setup
+        if not setup:
+            return
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': 'Which agents do you want on this server?', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  1. ops — deployment, releases, server management', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  2. builder — feature implementation, code changes', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  3. watchdog — health monitoring, alerting', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  Or type custom names (comma-separated)', 'request_id': request_id})
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': 'Example: 1,2 or ops,builder,custom-name', 'request_id': request_id})
+        setup['step'] = 'choose_agents'
+
+    def _fleet_setup_ask_auth(self, request_id: str | None):
+        """Prompt user for provider auth method."""
+        setup = self._pending_fleet_setup
+        if not setup:
+            return
+
+        # Detect local provider
+        local_onboarding = _load_json(STATE_DIR / 'onboarding.json', {})
+        local_provider = local_onboarding.get('provider', '')
+        local_model = local_onboarding.get('model', '')
+
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': 'Provider setup for remote agents:', 'request_id': request_id})
+        if local_provider:
+            emit({'type': 'status', 'message': f'  Your local Charon uses: {local_provider} ({local_model})', 'request_id': request_id})
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  1. Copy local credentials to remote (recommended)', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  2. Fresh OAuth login (opens browser link to paste code)', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  3. Paste an API key directly', 'request_id': request_id})
+        setup['step'] = 'choose_auth'
+
+    def _fleet_setup_copy_auth(self, request_id: str | None):
+        """Copy local auth + onboarding config to remote."""
+        setup = self._pending_fleet_setup
+        if not setup:
+            return
+        target = setup['target']
+        try:
+            # Copy auth.json
+            auth_file = STATE_DIR / 'auth' / 'auth.json'
+            if auth_file.exists():
+                subprocess.run(
+                    ['ssh', '-o', 'BatchMode=yes', target, 'mkdir -p ~/charon/.charon_state/auth'],
+                    capture_output=True, timeout=10,
+                )
+                subprocess.run(
+                    ['scp', str(auth_file), f'{target}:~/charon/.charon_state/auth/auth.json'],
+                    capture_output=True, timeout=15,
+                )
+
+            # Copy onboarding.json
+            onboarding_file = STATE_DIR / 'onboarding.json'
+            if onboarding_file.exists():
+                subprocess.run(
+                    ['scp', str(onboarding_file), f'{target}:~/charon/.charon_state/onboarding.json'],
+                    capture_output=True, timeout=15,
+                )
+
+            emit({'type': 'status', 'message': '✓ Credentials copied to remote', 'request_id': request_id})
+            self._fleet_setup_start_agents(request_id)
+        except Exception as e:
+            emit({'type': 'error', 'error': f'Failed to copy credentials: {e}', 'request_id': request_id})
+            self._pending_fleet_setup = None
+
+    def _fleet_setup_remote_oauth(self, request_id: str | None):
+        """Start OAuth flow on remote, present URL to user for code paste."""
+        setup = self._pending_fleet_setup
+        if not setup:
+            return
+        target = setup['target']
+        try:
+            # Run charon auth on remote — it will output AUTH_URL::
+            result = subprocess.run(
+                ['ssh', '-o', 'BatchMode=yes', target,
+                 'export PATH="$HOME/.local/bin:$HOME/charon:$PATH" && '
+                 'cd ~/charon && PYTHONPATH=apps/core-daemon python3 -c "'
+                 'import charon_auth; '
+                 'charon_auth.login_oauth(\\"openai-codex\\", status_cb=print)'
+                 '"'],
+                capture_output=True, text=True, timeout=60,
+            )
+
+            # Extract AUTH_URL from output
+            auth_url = ''
+            for line in result.stdout.splitlines():
+                if 'AUTH_URL::' in line:
+                    auth_url = line.split('AUTH_URL::', 1)[1].strip()
+                    break
+
+            if auth_url:
+                emit({'type': 'status', 'message': '', 'request_id': request_id})
+                emit({'type': 'status', 'message': 'Open this URL in your browser:', 'request_id': request_id})
+                emit({'type': 'status', 'message': f'  {auth_url}', 'request_id': request_id})
+                emit({'type': 'status', 'message': '', 'request_id': request_id})
+                emit({'type': 'status', 'message': 'After signing in, paste the authorization code:', 'request_id': request_id})
+                setup['step'] = 'paste_oauth_code'
+                setup['auth_url'] = auth_url
+            else:
+                # Maybe auth succeeded directly (tokens existed)
+                if 'Tokens stored' in result.stdout:
+                    emit({'type': 'status', 'message': '✓ Remote authenticated', 'request_id': request_id})
+                    self._fleet_setup_start_agents(request_id)
+                else:
+                    emit({'type': 'error', 'error': f'OAuth setup failed: {result.stderr.strip()[:200]}', 'request_id': request_id})
+                    self._pending_fleet_setup = None
+        except Exception as e:
+            emit({'type': 'error', 'error': f'Remote OAuth failed: {e}', 'request_id': request_id})
+            self._pending_fleet_setup = None
+
+    def _fleet_setup_exchange_oauth_code(self, code: str, request_id: str | None):
+        """Exchange OAuth code on remote server."""
+        setup = self._pending_fleet_setup
+        if not setup:
+            return
+        target = setup['target']
+        try:
+            result = subprocess.run(
+                ['ssh', '-o', 'BatchMode=yes', target,
+                 f'export PATH="$HOME/.local/bin:$HOME/charon:$PATH" && '
+                 f'cd ~/charon && PYTHONPATH=apps/core-daemon python3 -c "'
+                 f'import charon_auth; '
+                 f'charon_auth.login_oauth(\\"openai-codex\\", auth_code_cb=lambda p: \\"{code}\\")'
+                 f'"'],
+                capture_output=True, text=True, timeout=30,
+            )
+            if 'Tokens stored' in result.stdout or result.returncode == 0:
+                emit({'type': 'status', 'message': '✓ Remote authenticated', 'request_id': request_id})
+                self._fleet_setup_start_agents(request_id)
+            else:
+                emit({'type': 'error', 'error': f'Token exchange failed: {result.stderr.strip()[:200]}', 'request_id': request_id})
+                self._pending_fleet_setup = None
+        except Exception as e:
+            emit({'type': 'error', 'error': f'OAuth exchange failed: {e}', 'request_id': request_id})
+            self._pending_fleet_setup = None
+
+    def _fleet_setup_write_api_key(self, api_key: str, request_id: str | None):
+        """Write API key to remote server."""
+        setup = self._pending_fleet_setup
+        if not setup:
+            return
+        target = setup['target']
+        try:
+            # Write to remote onboarding
+            onboarding = {
+                'provider': 'api',
+                'provider_auth': 'api-key',
+                'model': '',
+                'complete': True,
+                'step': 'done',
+            }
+            auth = {'providers': {'api': {'tokens': {'access_token': api_key}, 'auth_type': 'api-key'}}}
+
+            subprocess.run(
+                ['ssh', '-o', 'BatchMode=yes', target,
+                 f'mkdir -p ~/charon/.charon_state/auth && '
+                 f'echo \'{json.dumps(onboarding)}\' > ~/charon/.charon_state/onboarding.json && '
+                 f'echo \'{json.dumps(auth)}\' > ~/charon/.charon_state/auth/auth.json'],
+                capture_output=True, timeout=15,
+            )
+            emit({'type': 'status', 'message': '✓ API key configured on remote', 'request_id': request_id})
+            self._fleet_setup_start_agents(request_id)
+        except Exception as e:
+            emit({'type': 'error', 'error': f'Failed to write API key: {e}', 'request_id': request_id})
+            self._pending_fleet_setup = None
+
+    def _fleet_setup_start_agents(self, request_id: str | None):
+        """Start the configured agents on the remote server and update fleet.json."""
+        setup = self._pending_fleet_setup
+        if not setup:
+            return
+        target = setup['target']
+        agents = setup.get('agents', [])
+        charon_installed = setup.get('charon_installed', False)
+
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': 'Starting agents...', 'request_id': request_id})
+
+        for agent in agents:
+            name = agent['name']
+            if charon_installed:
+                cmd = f'export PATH="$HOME/.local/bin:$HOME/charon:$PATH" && charons-boat wrap --name {name} -- ~/charon/charon chat'
+            else:
+                cmd = f'export PATH="$HOME/.local/bin:$PATH" && charons-boat wrap --name {name} -- bash'
+            try:
+                result = subprocess.run(
+                    ['ssh', '-o', 'BatchMode=yes', target, cmd],
+                    capture_output=True, text=True, timeout=30,
+                )
+                agent_type = 'charon' if charon_installed else 'bash'
+                if result.returncode == 0:
+                    emit({'type': 'status', 'message': f'  ✓ {name} started ({agent_type})', 'request_id': request_id})
+                else:
+                    emit({'type': 'status', 'message': f'  ✗ {name} failed: {result.stderr.strip()[:100]}', 'request_id': request_id})
+            except Exception as e:
+                emit({'type': 'status', 'message': f'  ✗ {name} failed: {e}', 'request_id': request_id})
+
+        # Update fleet.json
+        try:
+            from fleet_registry import load_fleet, save_fleet
+            fleet = load_fleet()
+            server_id = setup.get('server_id', setup['host'])
+
+            # Remove existing entry for this server if any
+            fleet['servers'] = [s for s in fleet.get('servers', []) if s.get('id') != server_id]
+
+            fleet['servers'].append({
+                'id': server_id,
+                'host': setup['host'],
+                'user': setup['user'],
+                'agents': [
+                    {
+                        'name': a['name'],
+                        'type': 'charon' if charon_installed else 'bash',
+                        'specialization': a.get('specialization', ''),
+                        'project': '',
+                        'auto_start': True,
+                    }
+                    for a in agents
+                ],
+            })
+            save_fleet(fleet)
+            emit({'type': 'status', 'message': '', 'request_id': request_id})
+            emit({'type': 'status', 'message': '✓ Fleet config updated', 'request_id': request_id})
+        except Exception as e:
+            emit({'type': 'status', 'message': f'Fleet config warning: {e}', 'request_id': request_id})
+
+        # Done
+        agent_names = ', '.join(a['name'] for a in agents)
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'═══ Setup complete ═══', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'Server: {target}', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'Agents: {agent_names}', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'Type: {"full Charon agents" if charon_installed else "bash (Harbor dispatch)"}', 'request_id': request_id})
+        emit({'type': 'status', 'message': '', 'request_id': request_id})
+        emit({'type': 'status', 'message': 'Try:', 'request_id': request_id})
+        emit({'type': 'status', 'message': f'  /voyage dispatch {server_id} {agents[0]["name"]} "hostname && uptime"', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  /fleet status', 'request_id': request_id})
+        emit({'type': 'status', 'message': '  F3 to see agents in Session Grid', 'request_id': request_id})
+
+        self._pending_fleet_setup = None
 
     def _detect_lmstudio_models(self) -> list[str]:
         models: list[str] = []
