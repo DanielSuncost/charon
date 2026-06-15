@@ -1,0 +1,17 @@
+{
+  "model": "gpt-5.5",
+  "rows": [
+    {
+      "variant": "genuine",
+      "chars": 860,
+      "A": 8.0,
+      "B": 8.0
+    },
+    {
+      "variant": "gamed (+padding)",
+      "chars": 1623,
+      "A": 6.83,
+      "B": 6.17
+    }
+  ]
+}
