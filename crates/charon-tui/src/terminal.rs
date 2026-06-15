@@ -187,6 +187,23 @@ impl TerminalState {
         &self.grid[self.idx(x, y)]
     }
 
+    /// The text of row `y` (cells joined, trailing blanks trimmed).
+    pub fn line_text(&self, y: u16) -> String {
+        if y >= self.height {
+            return String::new();
+        }
+        let mut s = String::with_capacity(self.width as usize);
+        for x in 0..self.width {
+            s.push(self.cell(x, y).ch);
+        }
+        s.trim_end().to_string()
+    }
+
+    /// The text of the line the cursor is on (typically the active prompt/input line).
+    pub fn cursor_line(&self) -> String {
+        self.line_text(self.cursor.y)
+    }
+
     #[inline]
     pub(crate) fn cell_mut(&mut self, x: u16, y: u16) -> &mut Cell {
         let i = self.idx(x, y);

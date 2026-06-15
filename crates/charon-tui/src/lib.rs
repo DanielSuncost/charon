@@ -6,6 +6,7 @@
 pub mod backend;
 pub mod daemon;
 pub mod daemon_client;
+pub mod detect;
 pub mod parser;
 pub mod protocol;
 pub mod session;

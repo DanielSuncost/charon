@@ -13,6 +13,7 @@ mod chat_view;
 pub mod clipboard;
 mod daemon;
 mod daemon_client;
+mod detect;
 mod f1_mono;
 mod grid;
 mod native_session;
