@@ -122,7 +122,8 @@ class JudgeLoopConfig:
     max_iterations: int = 20
     max_wall_minutes: int = 0           # 0 = no limit
     max_consecutive_failures: int = 5
-    min_delta: float = 0.0              # stop if improvement < this for N iterations
+    min_delta: float = 0.0              # absolute improvement floor (noise reject)
+    min_delta_rel: float = 0.0          # relative improvement floor, fraction of |best|
     plateau_window: int = 5             # how many discards before declaring plateau
 
     # Program (instructions for the implementer shade)
@@ -818,14 +819,26 @@ def check_convergence(config: JudgeLoopConfig) -> Convergence | None:
 
 # ── Loop controller ─────────────────────────────────────────────────
 
-def is_improvement(score: float, best: float, direction: str, min_delta: float = 0.0) -> bool:
-    """Check if a new score is an improvement over the current best."""
+def is_improvement(score: float, best: float, direction: str, min_delta: float = 0.0,
+                   min_delta_rel: float = 0.0) -> bool:
+    """Check if a new score is a real improvement over the current best.
+
+    The required gain must clear the larger of two noise floors:
+      - min_delta:     an ABSOLUTE floor (right for judges whose noise is
+                       absolute, e.g. an aesthetic judge with σ≈0.22 on 0–10).
+      - min_delta_rel: a RELATIVE floor, as a fraction of |best| (right for
+                       metrics that span orders of magnitude, e.g. wall-clock
+                       that starts at 1.8s and optimizes down to milliseconds —
+                       a fixed absolute delta would go blind once the metric
+                       shrinks below it).
+    """
     if math.isnan(score):
         return False
+    delta = max(min_delta, min_delta_rel * abs(best))
     if direction == 'maximize':
-        return score > best + min_delta
+        return score > best + delta
     else:
-        return score < best - min_delta
+        return score < best - delta
 
 
 def build_iteration_prompt(config: JudgeLoopConfig) -> str:
@@ -909,6 +922,7 @@ def create_loop(
     max_wall_minutes: int = 0,
     max_consecutive_failures: int = 5,
     min_delta: float | None = None,
+    min_delta_rel: float = 0.0,
     plateau_window: int = 5,
     program: str = '',
 ) -> JudgeLoopConfig:
@@ -943,6 +957,7 @@ def create_loop(
         max_wall_minutes=max_wall_minutes,
         max_consecutive_failures=max_consecutive_failures,
         min_delta=min_delta,
+        min_delta_rel=min_delta_rel,
         plateau_window=plateau_window,
         program=program,
         status='created',
@@ -1098,7 +1113,8 @@ def run_iteration(
         # Rollback
         if checkpoint_mgr and config.best_checkpoint:
             checkpoint_mgr.rollback(config.best_checkpoint)
-    elif is_improvement(verdict.score, config.best_score or 0.0, config.direction, config.min_delta):
+    elif is_improvement(verdict.score, config.best_score or 0.0, config.direction,
+                        config.min_delta, config.min_delta_rel):
         # Improvement — keep it
         iteration.status = 'kept'
         iteration.kept = True
