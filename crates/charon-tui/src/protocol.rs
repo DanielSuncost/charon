@@ -68,6 +68,9 @@ pub enum ClientMsg {
     },
     /// Terminate a session.
     Kill { session: String },
+    /// Re-run an exited session's original command (in its original cwd),
+    /// preserving its persisted scrollback.
+    Respawn { session: String },
     /// Liveness / latency probe.
     Ping {
         #[serde(default)]
