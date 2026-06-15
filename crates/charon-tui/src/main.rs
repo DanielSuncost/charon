@@ -2632,8 +2632,14 @@ fn main() -> io::Result<()> {
     let mut stdout = io::stdout();
     stdout.queue(EnterAlternateScreen)?;
     stdout.queue(EnableBracketedPaste)?;
+    // Enable alternate scroll mode: terminal converts scroll wheel into
+    // Up/Down arrow key sequences when in the alternate screen buffer.
+    // This lets us receive scroll events as key events WITHOUT capturing
+    // the mouse — so terminal-native selection, right-click, and Cmd+C
+    // all work normally.
+    stdout.write_all(b"\x1b[?1007h")?;
     let mut mouse_capture_enabled = false;
-    if app.active_view == View::Chat || app.active_view == View::Sessions {
+    if app.active_view == View::Sessions {
         stdout.queue(EnableMouseCapture)?;
         mouse_capture_enabled = true;
     }
@@ -3066,13 +3072,24 @@ fn main() -> io::Result<()> {
                                         local_view_dirty = true;
                                     }
                                     KeyCode::Up => {
-                                        app.chat.history_up();
-                                        app.chat.maybe_open_command_menu();
+                                        // When input is empty, scroll conversation (handles
+                                        // alternate scroll mode where wheel → arrow keys).
+                                        // When input has text, cycle command history.
+                                        if app.chat.input.is_empty() && app.chat.history_index.is_none() {
+                                            app.chat.scroll = app.chat.scroll.saturating_add(3);
+                                        } else {
+                                            app.chat.history_up();
+                                            app.chat.maybe_open_command_menu();
+                                        }
                                         local_view_dirty = true;
                                     }
                                     KeyCode::Down => {
-                                        app.chat.history_down();
-                                        app.chat.maybe_open_command_menu();
+                                        if app.chat.input.is_empty() && app.chat.history_index.is_none() {
+                                            app.chat.scroll = app.chat.scroll.saturating_sub(3);
+                                        } else {
+                                            app.chat.history_down();
+                                            app.chat.maybe_open_command_menu();
+                                        }
                                         local_view_dirty = true;
                                     }
                                     KeyCode::PageUp => {
@@ -3645,6 +3662,7 @@ fn main() -> io::Result<()> {
     stdout.queue(cursor::Show)?;
     stdout.queue(DisableMouseCapture)?;
     stdout.queue(DisableBracketedPaste)?;
+    stdout.write_all(b"\x1b[?1007l")?;  // disable alternate scroll mode
     stdout.queue(LeaveAlternateScreen)?;
     stdout.flush()?;
     ct::disable_raw_mode()?;
