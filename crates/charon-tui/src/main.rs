@@ -63,6 +63,8 @@ enum LaunchMode {
     DaemonAttach(String),
     /// Respawn an exited daemon session (re-run its command) and attach.
     DaemonRespawn(String),
+    /// Gracefully stop the running daemon and start a fresh one (binary upgrade).
+    DaemonUpgrade,
     /// Print the daemon's session inventory and exit.
     DaemonList,
 }
@@ -152,6 +154,8 @@ fn parse_args() -> CliOptions {
             eprintln!("Error: --daemon-respawn requires a session id");
             std::process::exit(1);
         }
+    } else if remaining[0] == "--daemon-upgrade" {
+        LaunchMode::DaemonUpgrade
     } else if remaining[0] == "--attach" || remaining[0] == "-a" {
         if let Some(name) = remaining.get(1) {
             LaunchMode::AttachSession(name.clone())
@@ -320,7 +324,7 @@ fn build_initial_sessions(mode: &LaunchMode, outer_w: u16, outer_h: u16) -> io::
     let next_id = 0u64;
 
     match mode {
-        LaunchMode::ListSessions | LaunchMode::DaemonList => {}
+        LaunchMode::ListSessions | LaunchMode::DaemonList | LaunchMode::DaemonUpgrade => {}
         LaunchMode::DaemonSpawn(cmd) => {
             daemon::ensure_running()?;
             let sock = daemon::control_socket();
@@ -2689,6 +2693,21 @@ fn main() -> io::Result<()> {
                 println!("  {} → tmux:{} ({})", s.display_name, s.session_name, s.agent_type);
             }
         }
+        return Ok(());
+    }
+
+    if matches!(mode, &LaunchMode::DaemonUpgrade) {
+        if daemon::is_running() {
+            daemon_client::shutdown(&daemon::control_socket())
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("shutdown failed: {e}")))?;
+            // Wait for the old daemon to release the socket.
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while daemon::is_running() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+        daemon::ensure_running()?;
+        println!("charond upgraded and restarted.");
         return Ok(());
     }
 

@@ -6,7 +6,8 @@
 > thin clients over a single control socket.
 >
 > **Status:** Phases 1–5 implemented; Phase 6 daemon model done (workspaces/tabs);
-> Phase 6 TUI manual-splits + Phases 7–8 pending.
+> Phase 7 graceful-drain handoff done (live fd-passing deferred). Phase 6 TUI
+> manual-splits + Phase 8 pending.
 >
 > **Implemented so far:**
 > - `charond` daemon binary — owns sessions/PTYs, fans output out to many clients,
@@ -30,10 +31,15 @@
 > - **Workspaces/tabs (Phase 6, daemon model):** each session has a `workspace` + `tab`
 >   (in `spawn`, the `move` command, and `inventory`), persisted in `meta.json` and
 >   restored across restart. TUI manual-split rendering is still pending.
+> - **Handoff (Phase 7, graceful-drain):** a `shutdown` command cleanly stops the
+>   daemon (state already persisted; socket released); `charon --daemon-upgrade`
+>   shuts down + starts the fresh binary; sessions are restored. Zero-downtime
+>   fd-passing of live PTYs is deferred (see §7).
 > - Tests: `tests/daemon_client.rs` (round-trip), `tests/daemon_persist.rs`
 >   (scrollback survives a hard daemon kill → restore → replay → respawn),
 >   `tests/daemon_detect.rs` (idle → blocked → idle over the protocol),
->   `tests/daemon_workspace.rs` (workspace/tab spawn, defaults, `move`, restart), plus
+>   `tests/daemon_workspace.rs` (workspace/tab spawn, defaults, `move`, restart),
+>   `tests/daemon_handoff.rs` (graceful shutdown → socket released → restore), plus
 >   `detect`/`config` unit tests.
 > - **Detach/reattach works:** a session survives the client exiting; reattaching
 >   replays its scrollback.
@@ -275,7 +281,11 @@ Upgrade the daemon binary without killing agents: a new `charond` starts, checks
 the `proto` version, the old daemon serializes live state (PTY master FDs via
 `SCM_RIGHTS` fd-passing; external sessions re-attach from `meta.json`), and clients
 reconnect across the swap. Fallback: local PTYs are flagged `exited`+respawnable;
-external sessions survive untouched. *(Phase 7 — not yet implemented.)*
+external sessions survive untouched. *(Phase 7 — the graceful-drain fallback is
+implemented: `shutdown` command + `charon --daemon-upgrade` cleanly restart and
+restore. Zero-downtime fd-passing of live local PTYs is deferred — the
+`portable-pty` stack doesn't expose re-importable master fds, so it needs deeper
+rework.)*
 
 ---
 
@@ -313,7 +323,7 @@ has to change.
 | **4** ✅ | **Agent-state detection** | Output-heuristic + timing classifier (`detect.rs`) → broadcast `status`. (Process-scan + native signals still TODO.) | low |
 | **5** ✅ | **Config + themes** | `config.toml` + `Theme` struct + built-in themes + `[themes.*]` overrides; TUI reads the theme. (Full color migration + rebindable keys are incremental.) | low |
 | **6** ◑ | **Workspaces + tabs + manual splits** | Daemon model done: per-session workspace/tab via `spawn`/`move`/`inventory`, persisted. TUI grouping + manual split layout tree + drag-resize still pending. | med |
-| **7** | **Live handoff** | `charond upgrade`, fd-passing, graceful drain. | high |
+| **7** ◑ | **Live handoff** | Graceful-drain done: `shutdown` command + `charon --daemon-upgrade` (clean restart + restore). Zero-downtime fd-passing of live PTYs deferred. | high |
 | **8** | **Additional front-ends** | Point GUI/desktop front-ends at `charond`; one runtime behind every UI. | med |
 
 ---

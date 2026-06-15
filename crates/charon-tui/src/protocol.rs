@@ -88,6 +88,9 @@ pub enum ClientMsg {
         #[serde(default)]
         ts: u64,
     },
+    /// Ask the daemon to flush state and exit cleanly (for upgrade/handoff).
+    /// Sessions are persisted; local ones become respawnable after restart.
+    Shutdown,
 }
 
 /// Messages the daemon sends to clients.
@@ -137,6 +140,8 @@ pub enum DaemonMsg {
     Pong {
         ts: u64,
     },
+    /// Acknowledges a [`ClientMsg::Shutdown`]; the daemon exits right after sending.
+    ShuttingDown,
 }
 
 /// One session's metadata, as reported in [`DaemonMsg::Inventory`].
