@@ -5,8 +5,8 @@
 > runtime, many front-ends: the terminal TUI today, GUI front-ends later, all
 > thin clients over a single control socket.
 >
-> **Status:** Phases 1–3 implemented (daemon + client + TUI wiring + persistence).
-> Phases 4–8 pending.
+> **Status:** Phases 1–5 implemented (daemon + client + TUI wiring + persistence +
+> state detection + config/themes). Phases 6–8 pending.
 >
 > **Implemented so far:**
 > - `charond` daemon binary — owns sessions/PTYs, fans output out to many clients,
@@ -21,8 +21,16 @@
 >   `~/.charon/sessions/<id>/`; on daemon restart, sessions are restored as
 >   `exited` with history intact and can be respawned (re-run their command in
 >   their original cwd). `$CHARON_DIR` overrides the state dir.
+> - **State detection (Phase 4):** the daemon classifies each live session into
+>   `idle/working/blocked` from output + timing (`src/detect.rs`) and broadcasts
+>   `status` changes to all clients.
+> - **Config + themes (Phase 5):** `~/.charon/config.toml` selects a theme (built-ins:
+>   `charon-dark`, `midnight`, `mono`) or defines one under `[themes.*]`; defaults
+>   reproduce today's colors. (`src/config.rs`; `$CHARON_DIR` overrides the path.)
 > - Tests: `tests/daemon_client.rs` (round-trip), `tests/daemon_persist.rs`
->   (scrollback survives a hard daemon kill → restore → replay → respawn).
+>   (scrollback survives a hard daemon kill → restore → replay → respawn),
+>   `tests/daemon_detect.rs` (idle → blocked → idle over the protocol), plus
+>   `detect`/`config` unit tests.
 > - **Detach/reattach works:** a session survives the client exiting; reattaching
 >   replays its scrollback.
 > - **Session restore works:** a session survives the *daemon* restarting.
@@ -238,7 +246,9 @@ from several signal sources, in priority order:
    permission prompts) to infer `working`/`blocked` for agents we can only observe.
 
 The detector runs once in the daemon and broadcasts `status` events to all clients,
-so every front-end shows identical state. *(Phase 4 — not yet implemented.)*
+so every front-end shows identical state. *(Phase 4 — output-heuristic + timing
+implemented in `src/detect.rs`; process-scan and native agent-reported signals still
+pending.)*
 
 ---
 
@@ -247,7 +257,10 @@ so every front-end shows identical state. *(Phase 4 — not yet implemented.)*
 New `~/.charon/config.toml`: theme selection, rebindable keys, behavior, and the
 detection table. A `Theme` struct replaces the scattered hardcoded `RGB(...)`
 constants in `main.rs`, with a set of built-in themes plus user-defined ones.
-Defaults reproduce today's behavior exactly. *(Phase 5 — not yet implemented.)*
+Defaults reproduce today's behavior exactly. *(Phase 5 — `src/config.rs` implements
+TOML loading, the `Theme` struct, built-in themes, and `[themes.*]` overrides; the TUI
+reads the theme for its header. Wiring the remaining hardcoded colors and rebindable
+keys through the renderer is incremental follow-up.)*
 
 ---
 
@@ -292,8 +305,8 @@ has to change.
 | **1** ✅ | **`charond` skeleton** | Standalone daemon binary; multi-session server; pidfile/lock; `hello`/`welcome`/`list`. | med |
 | **2** ✅ | **`DaemonClient` backend** | `impl ByteStream` over the control socket; TUI auto-starts the daemon and routes sessions through it. **Detach/reattach works.** | med |
 | **3** ✅ | **Persistence** | `sessions/*/scrollback.log` + `meta.json`; restore-as-exited on restart; `attach replay`; respawn. (`screen.bin` fast-restore + `seq`-gap reconnect still TODO.) **Session restore works.** | med |
-| **4** | **Agent-state detection** | Promote `process_inspector` + output heuristics into the daemon; broadcast `status`. | low |
-| **5** | **Config + themes** | `config.toml`; `Theme` struct; built-in themes; rebindable keys. | low |
+| **4** ✅ | **Agent-state detection** | Output-heuristic + timing classifier (`detect.rs`) → broadcast `status`. (Process-scan + native signals still TODO.) | low |
+| **5** ✅ | **Config + themes** | `config.toml` + `Theme` struct + built-in themes + `[themes.*]` overrides; TUI reads the theme. (Full color migration + rebindable keys are incremental.) | low |
 | **6** | **Workspaces + tabs + manual splits** | Real workspace containers, named tabs, split layout tree, drag-resize. | med |
 | **7** | **Live handoff** | `charond upgrade`, fd-passing, graceful drain. | high |
 | **8** | **Additional front-ends** | Point GUI/desktop front-ends at `charond`; one runtime behind every UI. | med |
