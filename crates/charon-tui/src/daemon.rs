@@ -287,6 +287,7 @@ struct Daemon {
     sessions: HashMap<String, DaemonSession>,
     clients: Clients,
     next_session: u64,
+    shutdown: bool,
 }
 
 impl Daemon {
@@ -295,6 +296,7 @@ impl Daemon {
             sessions: HashMap::new(),
             clients: HashMap::new(),
             next_session: 1,
+            shutdown: false,
         }
     }
 
@@ -367,7 +369,14 @@ impl Daemon {
                     Err(mpsc::TryRecvError::Disconnected) => return,
                 }
             }
-            // 2. Poll every session for output and fan it out.
+            // 2. Graceful shutdown requested (upgrade/handoff): state is already
+            //    persisted incrementally, so just stop the loop and let the
+            //    PidGuard clean up the socket + pidfile.
+            if self.shutdown {
+                debug_log("graceful shutdown");
+                return;
+            }
+            // 3. Poll every session for output and fan it out.
             self.pump_sessions();
             thread::sleep(TICK);
         }
@@ -464,6 +473,10 @@ impl Daemon {
             }
             ClientMsg::Respawn { session } => self.handle_respawn(client, &session),
             ClientMsg::Ping { ts } => self.send(client, &DaemonMsg::Pong { ts }),
+            ClientMsg::Shutdown => {
+                self.send(client, &DaemonMsg::ShuttingDown);
+                self.shutdown = true;
+            }
         }
     }
 
