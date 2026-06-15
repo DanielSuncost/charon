@@ -1,6 +1,7 @@
 /// SessionCell — one live terminal: TerminalState + AnsiParser + Backend.
 
 use crate::backend::{BoatPane, ByteStream, CharonPane, FleetServer, PtyCapture, TmuxPane};
+use crate::daemon_client::DaemonClient;
 use crate::parser::AnsiParser;
 use crate::terminal::TerminalState;
 
@@ -25,6 +26,7 @@ pub enum BackendType {
     BoatPane { session_id: String },
     RemoteBoat { server_id: String, session_id: String },
     CharonPane { socket_path: String },
+    DaemonPane { session_id: String },
 }
 
 impl SessionCell {
@@ -97,6 +99,22 @@ impl SessionCell {
         })
     }
 
+    /// Attach to a session owned by the `charond` daemon. The session keeps
+    /// running in the daemon even after this client (and the whole TUI) exits —
+    /// reattaching replays its scrollback. `replay` is always requested.
+    pub fn attach_daemon(id: u64, title: &str, session_id: &str, socket_path: &str, width: u16, height: u16) -> io::Result<Self> {
+        let client = DaemonClient::attach(std::path::Path::new(socket_path), session_id, width, height, true)?;
+        Ok(SessionCell {
+            terminal: TerminalState::new(width, height),
+            parser: AnsiParser::new(),
+            backend: Box::new(client),
+            title: title.to_string(),
+            id,
+            backend_type: BackendType::DaemonPane { session_id: session_id.to_string() },
+            viewport_scroll: 0,
+        })
+    }
+
     pub fn attach_charon(id: u64, title: &str, socket_path: &str, width: u16, height: u16) -> io::Result<Self> {
         let charon = CharonPane::attach(socket_path, width, height)?;
         Ok(SessionCell {
@@ -112,6 +130,13 @@ impl SessionCell {
 
     /// Read any available bytes from backend and feed to VTE parser.
     pub fn poll(&mut self) -> io::Result<()> {
+        self.poll_collect()?;
+        Ok(())
+    }
+
+    /// Like [`poll`](Self::poll), but also returns the raw bytes read from the
+    /// backend. Used by the daemon to fan out terminal output to remote clients.
+    pub fn poll_collect(&mut self) -> io::Result<Vec<u8>> {
         let bytes = self.backend.read_available()?;
         if !bytes.is_empty() {
             self.parser.process(&bytes, &mut self.terminal);
@@ -119,7 +144,7 @@ impl SessionCell {
                 self.terminal.dirty = true;
             }
         }
-        Ok(())
+        Ok(bytes)
     }
 
     /// Forward keystrokes to the backend PTY.

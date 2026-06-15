@@ -441,8 +441,7 @@ impl BoatPane {
         });
 
         let mut pane = Self { conn: BoatConn::StreamProc { _child: child, stdin }, rx, eof: false, session_id: session_id.to_string() };
-        pane.send(json!({"type": "resize", "session": session_id, "cols": width, "rows": height}))?;
-        pane.send(json!({"type": "focus", "session": session_id}))?;
+        pane.focus_session_candidates(session_id, width, height)?;
         Ok(pane)
     }
 
@@ -516,6 +515,7 @@ impl BoatPane {
         let stdout = child.stdout.take().ok_or_else(|| io::Error::new(io::ErrorKind::Other, "missing ssh stdout"))?;
         let (tx, rx) = mpsc::channel();
         let session = session_id.to_string();
+        let session_alt = if session.starts_with("boat-") { None } else { Some(format!("boat-{}", session)) };
         thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines() {
@@ -528,7 +528,7 @@ impl BoatPane {
                         match typ {
                             "output" => {
                                 let sid = v.get("session").and_then(|x| x.as_str()).unwrap_or("");
-                                if sid == session {
+                                if sid == session || session_alt.as_deref() == Some(sid) {
                                     let data = v.get("data").and_then(|x| x.as_str()).unwrap_or("");
                                     if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(data) {
                                         if tx.send(ReaderMsg::Data(decoded)).is_err() { return; }
@@ -545,9 +545,23 @@ impl BoatPane {
         });
 
         let mut pane = Self { conn: BoatConn::StreamProc { _child: child, stdin }, rx, eof: false, session_id: session_id.to_string() };
-        pane.send(json!({"type": "resize", "session": session_id, "cols": width, "rows": height}))?;
-        pane.send(json!({"type": "focus", "session": session_id}))?;
+        pane.focus_session_candidates(session_id, width, height)?;
         Ok(pane)
+    }
+
+    fn focus_session_candidates(&mut self, session_id: &str, width: u16, height: u16) -> io::Result<()> {
+        // Fleet config stores human agent names (e.g. "ops"), while boat-wrapped
+        // sessions are commonly registered as ids like "boat-ops" with name "ops".
+        // If the fleet status cache is cold, the TUI may only know the name. Try
+        // both forms so remote panes subscribe even before cache resolves the id.
+        self.send(json!({"type": "resize", "session": session_id, "cols": width, "rows": height}))?;
+        self.send(json!({"type": "focus", "session": session_id}))?;
+        if !session_id.starts_with("boat-") {
+            let boat_id = format!("boat-{}", session_id);
+            self.send(json!({"type": "resize", "session": boat_id, "cols": width, "rows": height}))?;
+            self.send(json!({"type": "focus", "session": boat_id}))?;
+        }
+        Ok(())
     }
 
     fn send(&mut self, value: Value) -> io::Result<()> {
@@ -856,7 +870,7 @@ fn extract_json_string(json: &str, key: &str) -> Option<String> {
     Some(value_start[..value_start.char_indices().nth(end)?.0].to_string())
 }
 
-fn dirs_home() -> std::path::PathBuf {
+pub fn dirs_home() -> std::path::PathBuf {
     std::env::var("HOME")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("/tmp"))
