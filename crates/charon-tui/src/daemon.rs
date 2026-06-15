@@ -14,6 +14,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -24,6 +25,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
+use serde::{Deserialize, Serialize};
 
 use crate::backend::dirs_home;
 use crate::protocol::{ClientMsg, DaemonMsg, SessionInfo, PROTO_VERSION};
@@ -34,7 +36,11 @@ const SCROLLBACK_CAP: usize = 2 * 1024 * 1024; // 2 MiB
 /// Main loop tick: drain client commands + poll sessions for output.
 const TICK: Duration = Duration::from_millis(8);
 
+/// Root Charon state dir. `$CHARON_DIR` overrides (used by tests for isolation).
 fn charon_dir() -> PathBuf {
+    if let Ok(d) = std::env::var("CHARON_DIR") {
+        return PathBuf::from(d);
+    }
     dirs_home().join(".charon")
 }
 fn socket_path() -> PathBuf {
@@ -45,9 +51,34 @@ fn socket_path() -> PathBuf {
 fn pid_path() -> PathBuf {
     charon_dir().join("charond.pid")
 }
+/// Directory holding one subdirectory per persisted session.
+fn sessions_dir() -> PathBuf {
+    charon_dir().join("sessions")
+}
+fn session_dir(id: &str) -> PathBuf {
+    sessions_dir().join(id)
+}
+
+fn default_shell() -> String {
+    std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+}
 
 fn b64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// On-disk session metadata, enough to restore + respawn after a daemon restart.
+#[derive(Serialize, Deserialize)]
+struct PersistMeta {
+    id: String,
+    title: String,
+    kind: String,
+    #[serde(default)]
+    cmd: Vec<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    cols: u16,
+    rows: u16,
 }
 fn debug_log(msg: &str) {
     if std::env::var("CHARON_DEBUG").is_ok() {
@@ -60,9 +91,13 @@ fn debug_log(msg: &str) {
 /// A session owned by the daemon: the live terminal plus everything needed to
 /// replay it to a freshly-attached client.
 struct DaemonSession {
+    id: String,
     cell: SessionCell,
     title: String,
     kind: String,
+    /// Argv used to spawn the session; replayed on respawn after a restart.
+    cmd: Vec<String>,
+    cwd: Option<String>,
     cols: u16,
     rows: u16,
     seq: u64,
@@ -71,18 +106,84 @@ struct DaemonSession {
     /// Client ids currently receiving this session's output.
     subscribers: Vec<u64>,
     state: String,
+    /// Append handle for the on-disk scrollback log (None until persisted).
+    log: Option<File>,
+    log_len: usize,
 }
 
 impl DaemonSession {
-    fn info(&self, id: &str) -> SessionInfo {
+    fn info(&self) -> SessionInfo {
         SessionInfo {
-            id: id.to_string(),
+            id: self.id.clone(),
             title: self.title.clone(),
             kind: self.kind.clone(),
             cols: self.cols,
             rows: self.rows,
             state: self.state.clone(),
             seq: self.seq,
+        }
+    }
+
+    /// Write `meta.json` so the session can be restored after a daemon restart.
+    fn persist_meta(&self) {
+        let dir = session_dir(&self.id);
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let meta = PersistMeta {
+            id: self.id.clone(),
+            title: self.title.clone(),
+            kind: self.kind.clone(),
+            cmd: self.cmd.clone(),
+            cwd: self.cwd.clone(),
+            cols: self.cols,
+            rows: self.rows,
+        };
+        if let Ok(json) = serde_json::to_string_pretty(&meta) {
+            let _ = std::fs::write(dir.join("meta.json"), json);
+        }
+    }
+
+    /// Open (and optionally truncate) the on-disk scrollback log.
+    fn open_log(&mut self, truncate: bool) {
+        let dir = session_dir(&self.id);
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let path = dir.join("scrollback.log");
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).write(true);
+        if truncate {
+            opts.truncate(true);
+        } else {
+            opts.append(true);
+        }
+        if let Ok(f) = opts.open(&path) {
+            self.log_len = std::fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
+            self.log = Some(f);
+        }
+    }
+
+    /// Append terminal bytes to the on-disk log, compacting if it grows too large.
+    fn append_log(&mut self, bytes: &[u8]) {
+        let ok = match self.log.as_mut() {
+            Some(f) => f.write_all(bytes).is_ok(),
+            None => false,
+        };
+        if ok {
+            self.log_len += bytes.len();
+            if self.log_len > SCROLLBACK_CAP * 2 {
+                self.compact_log();
+            }
+        }
+    }
+
+    /// Rewrite the log from the (already-capped) in-memory scrollback.
+    fn compact_log(&mut self) {
+        let path = session_dir(&self.id).join("scrollback.log");
+        if std::fs::write(&path, &self.scrollback).is_ok() {
+            self.log_len = self.scrollback.len();
+            self.open_log(false);
         }
     }
 }
@@ -121,6 +222,7 @@ pub fn run() -> io::Result<()> {
     spawn_accept_thread(listener, tx);
 
     let mut daemon = Daemon::new();
+    daemon.load_persisted();
     daemon.event_loop(rx);
     Ok(())
 }
@@ -177,6 +279,62 @@ impl Daemon {
         }
     }
 
+    /// Load sessions persisted on disk (from a prior daemon run) as `exited`
+    /// sessions with their scrollback intact, so reattaching replays history and
+    /// the client can respawn them. External-backed kinds are out of scope here
+    /// (Phase 3 covers local sessions).
+    fn load_persisted(&mut self) {
+        let Ok(entries) = std::fs::read_dir(sessions_dir()) else {
+            return;
+        };
+        let mut max_local = 0u64;
+        for entry in entries.flatten() {
+            let dir = entry.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            let Ok(meta_str) = std::fs::read_to_string(dir.join("meta.json")) else {
+                continue;
+            };
+            let Ok(meta) = serde_json::from_str::<PersistMeta>(&meta_str) else {
+                continue;
+            };
+            let mut scrollback = std::fs::read(dir.join("scrollback.log")).unwrap_or_default();
+            if scrollback.len() > SCROLLBACK_CAP {
+                let drop = scrollback.len() - SCROLLBACK_CAP;
+                scrollback.drain(0..drop);
+            }
+            if let Some(n) = meta
+                .id
+                .strip_prefix("local-")
+                .and_then(|s| s.parse::<u64>().ok())
+            {
+                max_local = max_local.max(n);
+            }
+            let (cols, rows) = (meta.cols.max(1), meta.rows.max(1));
+            let mut sess = DaemonSession {
+                id: meta.id.clone(),
+                cell: SessionCell::dead(0, &meta.title, cols, rows),
+                title: meta.title,
+                kind: meta.kind,
+                cmd: meta.cmd,
+                cwd: meta.cwd,
+                cols,
+                rows,
+                seq: 0,
+                scrollback,
+                subscribers: Vec::new(),
+                state: "exited".to_string(),
+                log: None,
+                log_len: 0,
+            };
+            sess.open_log(false); // append handle, kept for respawn
+            debug_log(&format!("restored session {}", sess.id));
+            self.sessions.insert(meta.id, sess);
+        }
+        self.next_session = max_local + 1;
+    }
+
     fn event_loop(&mut self, rx: Receiver<Inbound>) {
         loop {
             // 1. Drain all pending client commands.
@@ -225,8 +383,8 @@ impl Daemon {
             ClientMsg::List => {
                 let sessions = self
                     .sessions
-                    .iter()
-                    .map(|(id, s)| s.info(id))
+                    .values()
+                    .map(|s| s.info())
                     .collect::<Vec<_>>();
                 self.send(client, &DaemonMsg::Inventory { sessions });
             }
@@ -270,9 +428,12 @@ impl Daemon {
             } => self.handle_spawn(client, kind, cmd, title, cwd, session, cols, rows),
             ClientMsg::Kill { session } => {
                 if self.sessions.remove(&session).is_some() {
+                    // Explicit kill discards the persisted history too.
+                    let _ = std::fs::remove_dir_all(session_dir(&session));
                     self.broadcast_all(&DaemonMsg::Exited { session });
                 }
             }
+            ClientMsg::Respawn { session } => self.handle_respawn(client, &session),
             ClientMsg::Ping { ts } => self.send(client, &DaemonMsg::Pong { ts }),
         }
     }
@@ -326,7 +487,7 @@ impl Daemon {
         kind: String,
         cmd: Vec<String>,
         title: Option<String>,
-        _cwd: Option<String>, // TODO(phase-1): honor cwd once SessionCell supports it
+        cwd: Option<String>,
         session: Option<String>,
         cols: u16,
         rows: u16,
@@ -361,28 +522,33 @@ impl Daemon {
         }
         let (cols, rows) = (cols.max(1).max(80), rows.max(1).max(24));
         let argv: Vec<String> = if cmd.is_empty() {
-            vec![std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())]
+            vec![default_shell()]
         } else {
             cmd
         };
         let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
         let title = title.unwrap_or_else(|| id.clone());
-        match SessionCell::spawn(self.next_session, &title, &argv_ref, cols, rows) {
+        match SessionCell::spawn_cwd(self.next_session, &title, &argv_ref, cols, rows, cwd.as_deref()) {
             Ok(cell) => {
-                self.sessions.insert(
-                    id.clone(),
-                    DaemonSession {
-                        cell,
-                        title,
-                        kind,
-                        cols,
-                        rows,
-                        seq: 0,
-                        scrollback: Vec::new(),
-                        subscribers: vec![client], // auto-attach the spawner
-                        state: "working".to_string(),
-                    },
-                );
+                let mut sess = DaemonSession {
+                    id: id.clone(),
+                    cell,
+                    title,
+                    kind,
+                    cmd: argv,
+                    cwd,
+                    cols,
+                    rows,
+                    seq: 0,
+                    scrollback: Vec::new(),
+                    subscribers: vec![client], // auto-attach the spawner
+                    state: "working".to_string(),
+                    log: None,
+                    log_len: 0,
+                };
+                sess.persist_meta();
+                sess.open_log(true);
+                self.sessions.insert(id.clone(), sess);
                 self.send(client, &DaemonMsg::Spawned { session: id.clone() });
                 self.broadcast_all(&DaemonMsg::Status {
                     session: id,
@@ -401,6 +567,52 @@ impl Daemon {
         }
     }
 
+    /// Re-run an exited session's command, preserving its scrollback.
+    fn handle_respawn(&mut self, client: u64, id: &str) {
+        let result = {
+            let Some(s) = self.sessions.get_mut(id) else {
+                self.send(
+                    client,
+                    &DaemonMsg::Error {
+                        code: "no_session".into(),
+                        message: format!("no such session: {id}"),
+                        session: Some(id.to_string()),
+                    },
+                );
+                return;
+            };
+            let argv: Vec<String> = if s.cmd.is_empty() {
+                vec![default_shell()]
+            } else {
+                s.cmd.clone()
+            };
+            let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
+            match SessionCell::spawn_cwd(s.cell.id, &s.title, &argv_ref, s.cols, s.rows, s.cwd.as_deref()) {
+                Ok(cell) => {
+                    s.cell = cell;
+                    s.state = "working".to_string();
+                    Ok(())
+                }
+                Err(e) => Err(e.to_string()),
+            }
+        };
+        match result {
+            Ok(()) => self.broadcast_all(&DaemonMsg::Status {
+                session: id.to_string(),
+                state: "working".into(),
+                detail: None,
+            }),
+            Err(message) => self.send(
+                client,
+                &DaemonMsg::Error {
+                    code: "respawn_failed".into(),
+                    message,
+                    session: Some(id.to_string()),
+                },
+            ),
+        }
+    }
+
     /// Poll each session for new output, append to scrollback, and forward to
     /// subscribers. Detect EOF and mark exited.
     fn pump_sessions(&mut self) {
@@ -414,6 +626,7 @@ impl Daemon {
                 } else {
                     s.seq += 1;
                     append_capped(&mut s.scrollback, &bytes, SCROLLBACK_CAP);
+                    s.append_log(&bytes);
                     Some(DaemonMsg::Output {
                         session: id.clone(),
                         data: b64(&bytes),

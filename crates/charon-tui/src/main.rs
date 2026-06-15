@@ -59,6 +59,8 @@ enum LaunchMode {
     DaemonSpawn(Vec<String>),
     /// Attach to an existing daemon session by id.
     DaemonAttach(String),
+    /// Respawn an exited daemon session (re-run its command) and attach.
+    DaemonRespawn(String),
     /// Print the daemon's session inventory and exit.
     DaemonList,
 }
@@ -141,6 +143,13 @@ fn parse_args() -> CliOptions {
         }
     } else if remaining[0] == "--daemon-spawn" {
         LaunchMode::DaemonSpawn(remaining[1..].to_vec())
+    } else if remaining[0] == "--daemon-respawn" {
+        if let Some(id) = remaining.get(1) {
+            LaunchMode::DaemonRespawn(id.clone())
+        } else {
+            eprintln!("Error: --daemon-respawn requires a session id");
+            std::process::exit(1);
+        }
     } else if remaining[0] == "--attach" || remaining[0] == "-a" {
         if let Some(name) = remaining.get(1) {
             LaunchMode::AttachSession(name.clone())
@@ -325,6 +334,17 @@ fn build_initial_sessions(mode: &LaunchMode, outer_w: u16, outer_h: u16) -> io::
         LaunchMode::DaemonAttach(id) => {
             daemon::ensure_running()?;
             let sock = daemon::control_socket();
+            let (_, _, rects) = compute_grid(1, outer_w, outer_h.saturating_sub(2));
+            if let Some(r) = rects.first() {
+                let sock_str = sock.to_string_lossy();
+                sessions.push(SessionCell::attach_daemon(next_id, id, id, &sock_str, r.width, r.height)?);
+            }
+        }
+        LaunchMode::DaemonRespawn(id) => {
+            daemon::ensure_running()?;
+            let sock = daemon::control_socket();
+            daemon_client::respawn_session(&sock, id)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("daemon respawn failed: {e}")))?;
             let (_, _, rects) = compute_grid(1, outer_w, outer_h.saturating_sub(2));
             if let Some(r) = rects.first() {
                 let sock_str = sock.to_string_lossy();

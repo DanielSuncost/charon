@@ -95,8 +95,8 @@ pub struct PtyCapture {
 }
 
 impl PtyCapture {
-    /// Spawn a new child process inside a PTY.
-    pub fn spawn(cmd: &[&str], width: u16, height: u16) -> io::Result<Self> {
+    /// Spawn a new child process inside a PTY, optionally in `cwd`.
+    pub fn spawn_cwd(cmd: &[&str], width: u16, height: u16, cwd: Option<&str>) -> io::Result<Self> {
         let pty_system = NativePtySystem::default();
 
         let pair = pty_system
@@ -113,6 +113,9 @@ impl PtyCapture {
             command.arg(arg);
         }
         command.env("TERM", "xterm-256color");
+        if let Some(dir) = cwd {
+            command.cwd(dir);
+        }
 
         let _child = pair
             .slave
@@ -173,6 +176,29 @@ impl ByteStream for PtyCapture {
         self.pty_pair
             .resize(PtySize { rows: height, cols: width, pixel_width: 0, pixel_height: 0 })
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+    }
+}
+
+// ── NullStream — a backend with no process ──────────────────────────────────
+//
+// Used for daemon sessions restored from disk after a daemon restart: the
+// original PTY is gone, but its scrollback survives, so the session is shown as
+// exited (replayable) until respawned.
+
+pub struct NullStream;
+
+impl ByteStream for NullStream {
+    fn read_available(&mut self) -> io::Result<Vec<u8>> {
+        Ok(Vec::new())
+    }
+    fn write_bytes(&mut self, data: &[u8]) -> io::Result<usize> {
+        Ok(data.len())
+    }
+    fn is_eof(&self) -> bool {
+        true
+    }
+    fn resize(&mut self, _width: u16, _height: u16) -> io::Result<()> {
+        Ok(())
     }
 }
 
