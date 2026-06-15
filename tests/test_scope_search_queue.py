@@ -60,9 +60,20 @@ def test_no_scope_allows_everything(tmp_path):
 
 def test_scope_multiple_prefixes(tmp_path):
     ctx = ToolContext(project_root=tmp_path, scope=['src/', 'tests/'])
-    assert _check_scope('Read', {'path': 'src/auth/login.py'}, ctx) is None
-    assert _check_scope('Read', {'path': 'tests/test_auth.py'}, ctx) is None
-    assert _check_scope('Read', {'path': 'docs/readme.md'}, ctx) is not None
+    # Scope is a WRITE contract: writes outside scope are blocked...
+    assert _check_scope('Write', {'path': 'src/auth/login.py'}, ctx) is None
+    assert _check_scope('Write', {'path': 'tests/test_auth.py'}, ctx) is None
+    assert _check_scope('Write', {'path': 'docs/readme.md'}, ctx) is not None
+
+
+def test_scope_allows_reads_anywhere(tmp_path):
+    """Scope gates modifications, not reads. An implementer must be able to read
+    context outside its write-scope (e.g. a frozen checker it optimizes toward) —
+    and reads were never actually confined anyway, since Bash bypasses scope."""
+    ctx = ToolContext(project_root=tmp_path, scope=['src/'])
+    assert _check_scope('Read', {'path': 'src/main.py'}, ctx) is None
+    assert _check_scope('Read', {'path': 'docs/readme.md'}, ctx) is None
+    assert _check_scope('Read', {'path': 'check.py'}, ctx) is None
 
 
 def test_scope_blocks_sibling_prefix(tmp_path):

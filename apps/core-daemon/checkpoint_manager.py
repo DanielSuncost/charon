@@ -68,11 +68,19 @@ class CheckpointManager:
 
     def _git(self, *args: str, check: bool = True, timeout: int = 30) -> subprocess.CompletedProcess:
         """Run a git command against the shadow repo."""
+        return self._git_env(None, *args, check=check, timeout=timeout)
+
+    def _git_env(self, extra_env: dict | None, *args: str, check: bool = True,
+                 timeout: int = 30) -> subprocess.CompletedProcess:
+        """Run a git command, optionally overriding env (e.g. GIT_INDEX_FILE)."""
         self._ensure_init()
+        env = self._env()
+        if extra_env:
+            env.update(extra_env)
         result = subprocess.run(
             ['git'] + list(args),
             cwd=str(self.working_dir),
-            env=self._env(),
+            env=env,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -190,14 +198,32 @@ class CheckpointManager:
         Used to enforce frozen paths: anything returned here was modified,
         added, or deleted under a frozen path since the checkpoint — regardless
         of whether the change came from Write/Edit or from a shell command.
-        Stages the working tree first so newly-created files are also seen.
+
+        Staging the working tree (so newly-created files are seen) must NOT
+        mutate the persistent index: when snapshots are scope-limited, a stray
+        `git add -A` here would stage out-of-scope files that the next scoped
+        snapshot would then commit — and a later rollback to an earlier (scoped)
+        checkpoint would *delete* them. So we stage into a throwaway index file
+        and leave the real index untouched.
         """
         clean = [p.strip().strip('/') for p in (paths or []) if p.strip()]
         if not clean:
             return []
-        self._git('add', '-A', check=False)
-        result = self._git('diff', checkpoint_id, '--cached', '--name-only', '--',
-                           *clean, check=False)
+        self._ensure_init()
+        tmp_index = self.git_dir / f'.frozen-index-{os.getpid()}'
+        extra = {'GIT_INDEX_FILE': str(tmp_index)}
+        try:
+            # Seed the throwaway index from the checkpoint, then overlay the
+            # working tree, so the diff reflects working-tree vs checkpoint.
+            self._git_env(extra, 'read-tree', checkpoint_id, check=False)
+            self._git_env(extra, 'add', '-A', check=False)
+            result = self._git_env(extra, 'diff', checkpoint_id, '--cached',
+                                   '--name-only', '--', *clean, check=False)
+        finally:
+            try:
+                tmp_index.unlink()
+            except OSError:
+                pass
         return [l.strip() for l in result.stdout.splitlines() if l.strip()]
 
     def diff_full(self, checkpoint_id: str) -> str:

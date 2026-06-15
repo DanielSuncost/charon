@@ -171,6 +171,51 @@ def test_rollback_removes_files_added_in_discarded_iteration(tmp_path):
     assert not (work / 'junk.py').exists(), 'rollback leaked a file added during a discarded iteration'
 
 
+def test_advance_loop_frozen_violation_caught_and_restored(tmp_path):
+    """An implementer that edits a frozen file by a means the tool layer can't
+    see (a raw write, standing in for a shell command) must be caught by the
+    engine-level frozen gate, rolled back, and the frozen file restored — while
+    the loop keeps its previously-kept best."""
+    work = tmp_path / 'project'; work.mkdir()
+    state = tmp_path / 'state'; state.mkdir()
+    (work / 'score.txt').write_text('100\n')
+    (work / 'locked.py').write_text('V = 1\n')
+
+    config = _new_loop(state, work, target_score=10_000.0, frozen=['locked.py'])
+    cp = CheckpointManager(state, work)
+
+    steps = iter([
+        ('iter1', 150, None),                 # legit improvement, kept
+        ('iter2', 999, 'V = 1\nHACK = 1\n'),  # huge score but edits frozen file
+        ('iter3', 175, None),                 # legit improvement again, kept
+    ])
+
+    def implementer(c, wd):
+        try:
+            _, val, frozen_edit = next(steps)
+        except StopIteration:
+            return None
+        (Path(wd) / 'score.txt').write_text(f'{val}\n')
+        if frozen_edit:
+            (Path(wd) / 'locked.py').write_text(frozen_edit)  # bypasses tool scope
+        return f'set {val}'
+
+    advance_loop(state, config, implementer=implementer, working_dir=work, checkpoint_mgr=cp)  # baseline
+    config, ev1 = advance_loop(state, config, implementer=implementer, working_dir=work, checkpoint_mgr=cp)
+    assert ev1['kept'] is True and config.best_score == 150.0
+
+    config, ev2 = advance_loop(state, config, implementer=implementer, working_dir=work, checkpoint_mgr=cp)
+    assert ev2['status'] == 'frozen_violation'
+    assert ev2['kept'] is False
+    assert config.best_score == 150.0                      # the 999 was not banked
+    assert (work / 'locked.py').read_text() == 'V = 1\n'   # frozen file restored
+    assert (work / 'score.txt').read_text().strip() == '150'
+
+    # The loop recovers and keeps improving afterwards.
+    config, ev3 = advance_loop(state, config, implementer=implementer, working_dir=work, checkpoint_mgr=cp)
+    assert ev3['kept'] is True and config.best_score == 175.0
+
+
 def test_tick_skips_paused_loops(tmp_path):
     work = tmp_path / 'project'; work.mkdir()
     state = tmp_path / 'state'; state.mkdir()
