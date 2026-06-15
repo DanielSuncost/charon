@@ -38,6 +38,9 @@ const SCROLLBACK_CAP: usize = 2 * 1024 * 1024; // 2 MiB
 const TICK: Duration = Duration::from_millis(8);
 /// No output for this long → a session is considered quiescent (idle/blocked).
 const IDLE_THRESHOLD: Duration = Duration::from_millis(500);
+/// Default workspace/tab for sessions created without one.
+const DEFAULT_WORKSPACE: &str = "default";
+const DEFAULT_TAB: &str = "main";
 
 /// Root Charon state dir. `$CHARON_DIR` overrides (used by tests for isolation).
 fn charon_dir() -> PathBuf {
@@ -77,6 +80,10 @@ struct PersistMeta {
     title: String,
     kind: String,
     #[serde(default)]
+    workspace: String,
+    #[serde(default)]
+    tab: String,
+    #[serde(default)]
     cmd: Vec<String>,
     #[serde(default)]
     cwd: Option<String>,
@@ -98,6 +105,9 @@ struct DaemonSession {
     cell: SessionCell,
     title: String,
     kind: String,
+    /// Workspace + tab this session belongs to (grouping for front-ends).
+    workspace: String,
+    tab: String,
     /// Argv used to spawn the session; replayed on respawn after a restart.
     cmd: Vec<String>,
     cwd: Option<String>,
@@ -122,6 +132,8 @@ impl DaemonSession {
             id: self.id.clone(),
             title: self.title.clone(),
             kind: self.kind.clone(),
+            workspace: self.workspace.clone(),
+            tab: self.tab.clone(),
             cols: self.cols,
             rows: self.rows,
             state: self.state.clone(),
@@ -139,6 +151,8 @@ impl DaemonSession {
             id: self.id.clone(),
             title: self.title.clone(),
             kind: self.kind.clone(),
+            workspace: self.workspace.clone(),
+            tab: self.tab.clone(),
             cmd: self.cmd.clone(),
             cwd: self.cwd.clone(),
             cols: self.cols,
@@ -322,6 +336,8 @@ impl Daemon {
                 cell: SessionCell::dead(0, &meta.title, cols, rows),
                 title: meta.title,
                 kind: meta.kind,
+                workspace: if meta.workspace.is_empty() { DEFAULT_WORKSPACE.to_string() } else { meta.workspace },
+                tab: if meta.tab.is_empty() { DEFAULT_TAB.to_string() } else { meta.tab },
                 cmd: meta.cmd,
                 cwd: meta.cwd,
                 cols,
@@ -429,9 +445,16 @@ impl Daemon {
                 title,
                 cwd,
                 session,
+                workspace,
+                tab,
                 cols,
                 rows,
-            } => self.handle_spawn(client, kind, cmd, title, cwd, session, cols, rows),
+            } => self.handle_spawn(client, kind, cmd, title, cwd, session, workspace, tab, cols, rows),
+            ClientMsg::Move {
+                session,
+                workspace,
+                tab,
+            } => self.handle_move(client, &session, workspace, tab),
             ClientMsg::Kill { session } => {
                 if self.sessions.remove(&session).is_some() {
                     // Explicit kill discards the persisted history too.
@@ -495,6 +518,8 @@ impl Daemon {
         title: Option<String>,
         cwd: Option<String>,
         session: Option<String>,
+        workspace: Option<String>,
+        tab: Option<String>,
         cols: u16,
         rows: u16,
     ) {
@@ -541,6 +566,8 @@ impl Daemon {
                     cell,
                     title,
                     kind,
+                    workspace: workspace.filter(|w| !w.is_empty()).unwrap_or_else(|| DEFAULT_WORKSPACE.to_string()),
+                    tab: tab.filter(|t| !t.is_empty()).unwrap_or_else(|| DEFAULT_TAB.to_string()),
                     cmd: argv,
                     cwd,
                     cols,
@@ -569,6 +596,29 @@ impl Daemon {
                     code: "spawn_failed".into(),
                     message: e.to_string(),
                     session: None,
+                },
+            ),
+        }
+    }
+
+    /// Move a session into a workspace and/or tab (only provided fields change).
+    fn handle_move(&mut self, client: u64, id: &str, workspace: Option<String>, tab: Option<String>) {
+        match self.sessions.get_mut(id) {
+            Some(s) => {
+                if let Some(w) = workspace.filter(|w| !w.is_empty()) {
+                    s.workspace = w;
+                }
+                if let Some(t) = tab.filter(|t| !t.is_empty()) {
+                    s.tab = t;
+                }
+                s.persist_meta();
+            }
+            None => self.send(
+                client,
+                &DaemonMsg::Error {
+                    code: "no_session".into(),
+                    message: format!("no such session: {id}"),
+                    session: Some(id.to_string()),
                 },
             ),
         }
