@@ -184,6 +184,41 @@ pub fn spawn_session(socket: &Path, cmd: &[String], cols: u16, rows: u16) -> io:
     ))
 }
 
+/// One-shot: respawn an exited session (re-run its command, keep scrollback).
+pub fn respawn_session(socket: &Path, session: &str) -> io::Result<()> {
+    let mut stream = UnixStream::connect(socket)?;
+    send(&mut stream, &hello())?;
+    send(
+        &mut stream,
+        &ClientMsg::Respawn {
+            session: session.to_string(),
+        },
+    )?;
+    let read = stream.try_clone()?;
+    let mut reader = BufReader::new(read);
+    let mut line = String::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+        match serde_json::from_str::<DaemonMsg>(line.trim()) {
+            Ok(DaemonMsg::Status { session: s, state, .. }) if s == session && state == "working" => {
+                return Ok(())
+            }
+            Ok(DaemonMsg::Error { message, .. }) => {
+                return Err(io::Error::new(io::ErrorKind::Other, message))
+            }
+            _ => {}
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        "no respawn confirmation from daemon",
+    ))
+}
+
 /// One-shot: fetch the daemon's session inventory.
 pub fn list_sessions(socket: &Path) -> io::Result<Vec<SessionInfo>> {
     let mut stream = UnixStream::connect(socket)?;

@@ -32,7 +32,12 @@ pub enum BackendType {
 impl SessionCell {
     /// Spawn a new session running `cmd` (e.g. ["bash"]).
     pub fn spawn(id: u64, title: &str, cmd: &[&str], width: u16, height: u16) -> io::Result<Self> {
-        let pty = PtyCapture::spawn(cmd, width, height)?;
+        Self::spawn_cwd(id, title, cmd, width, height, None)
+    }
+
+    /// Spawn a new session running `cmd`, optionally in working directory `cwd`.
+    pub fn spawn_cwd(id: u64, title: &str, cmd: &[&str], width: u16, height: u16, cwd: Option<&str>) -> io::Result<Self> {
+        let pty = PtyCapture::spawn_cwd(cmd, width, height, cwd)?;
         Ok(SessionCell {
             terminal: TerminalState::new(width, height),
             parser: AnsiParser::new(),
@@ -42,6 +47,20 @@ impl SessionCell {
             backend_type: BackendType::LocalPty,
             viewport_scroll: 0,
         })
+    }
+
+    /// A processless session cell (see [`NullStream`](crate::backend::NullStream)).
+    /// Used by the daemon for sessions restored from disk after a restart.
+    pub fn dead(id: u64, title: &str, width: u16, height: u16) -> Self {
+        SessionCell {
+            terminal: TerminalState::new(width, height),
+            parser: AnsiParser::new(),
+            backend: Box::new(crate::backend::NullStream),
+            title: title.to_string(),
+            id,
+            backend_type: BackendType::LocalPty,
+            viewport_scroll: 0,
+        }
     }
 
     /// Attach to an existing tmux session.
