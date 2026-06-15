@@ -35,6 +35,7 @@ import shlex
 import signal
 import socket
 import sys
+import subprocess
 import threading
 import time
 from pathlib import Path
