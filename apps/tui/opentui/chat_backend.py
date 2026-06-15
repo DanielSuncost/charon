@@ -7170,6 +7170,9 @@ class ChatBackend:
     def handle_chat(self, message: str, request_id: str | None):
         """Handle a chat message — run through conversation engine with streaming."""
         stripped = message.strip()
+        if self._pending_fleet_setup:
+            self._handle_fleet_setup_response(stripped, request_id)
+            return
         if self._pending_provider_switch and stripped in {'1', '2'}:
             self.handle_command(f'/{stripped}', request_id)
             return
