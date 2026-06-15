@@ -210,21 +210,68 @@ Closing this exposed and fixed three real defects in the live path:
 - **`ready` was ignored**, so a configured-but-unauthenticated provider would be
   used anyway.
 
-**Honest scope:** this proves the *plumbing* end-to-end on one easy task that the
-model solves in a single iteration. It is **not** evidence that the loop improves
-hard problems over many iterations — the multi-iteration keep/rollback/converge
-behavior is covered by deterministic tests, not yet by a hard live task.
+### A harder live task — and the `min_delta` flaw it exposed
+
+`scripts/run_judge_loop_opt_live.py`. A genuinely open-ended objective: **speed up
+`count_close_pairs` (count 2-D point pairs within radius r) without changing its
+output.** Quantitative judge on wall-clock (minimize, no reachable target so it
+runs until it plateaus); a **frozen** brute-force oracle test as a hard
+correctness constraint (fast-but-wrong is rolled back); write-scope `solver.py`.
+Baseline ≈ 1.8s (naive O(n²)).
+
+First run, with an **absolute** `min_delta=0.002` (sized for the ~1.8s baseline):
+
+| tick | seconds | kept |
+|---|---|---|
+| 1 | 0.007609 | **kept** (jumps straight to a spatial-grid hash — 234×) |
+| 2 | 0.006603 | discarded |
+| 5 | 0.006586 | discarded |
+| → | | converged on `consecutive_failures` at 0.007609 |
+
+Two discarded ticks (2 and 5) were **genuinely ~13% faster** than the kept best —
+thrown away because the *absolute* 0.002s floor, reasonable at 1.8s, is now larger
+than the entire remaining headroom once the metric is in milliseconds. **The loop
+went blind right after the big win.** A frontier model also doesn't climb the
+"ladder" rung by rung — it implements the endgame algorithm (grid hashing) in one
+tick — so the hardness shows up not in the ascent but in the post-peak fine-tuning,
+exactly where an absolute threshold fails.
+
+The fix (`is_improvement` now takes `min_delta_rel`): require a gain to clear the
+**larger of** an absolute floor and a *relative* one (`min_delta_rel · |best|`).
+Absolute suits a judge with absolute noise (aesthetic σ≈0.22); relative suits a
+metric spanning orders of magnitude. Re-run with `min_delta_rel=0.03` (keep a
+change only if it's >3% faster):
+
+| tick | seconds | kept |
+|---|---|---|
+| 1 | 0.007891 | kept |
+| 2 | 0.005496 | kept |
+| 3–5 | ~0.00534–0.00538 | discarded (sub-3% — correctly read as noise) |
+| 6 | **0.005216** | **kept** (a real ~5% gain the absolute floor would have missed) |
+| → | | best 0.005216 — **349×** over baseline |
+
+The relative floor banks the late-stage 5% win (0.00028s — far below the old 0.002
+floor) while still rejecting the sub-3% jitter, and reaches a 1.46× better final
+result. Gates held throughout: frozen oracle untouched, every kept solution passed
+the correctness constraint, regressions byte-exact rolled back.
+
+**Honest scope:** the loop now demonstrably improves an open-ended task across
+multiple live iterations, and stress-testing it surfaced+fixed a real reward-shape
+bug (absolute-only `min_delta` goes blind on multi-scale metrics). Caveats remain:
+one model, wall-clock is noisy (mitigated by best-of-3 timing), and the model
+reaches a near-optimal algorithm fast enough that the deep multi-iteration regime
+is still better covered by the deterministic tests than by live runs.
 
 ## What this is — and what it is NOT
 
 - It **is** an honest stress-test of a verifier-guided optimization loop and an
   on-device memory stack, with reproducible scripts and committed results,
   including negative findings about its own features.
-- It is **not** a benchmark (samples are small, one model), **not** evidence of
-  agentic capability (the gym tasks are saturated; the live LLM-implementer is
-  proven end-to-end but only on simple tasks — see §7), and **not** a claim that
-  the judge is injection-proof or that the gates are complete (scope is soft for
-  shell; no OS sandbox).
+- It is **not** a benchmark (samples are small, one model), **not** broad evidence
+  of agentic capability (the gym tasks are saturated; the live LLM-implementer is
+  proven end-to-end on both a trivial and an open-ended optimization task — §7 —
+  but on one model), and **not** a claim that the judge is injection-proof or that
+  the gates are complete (scope is soft for shell; no OS sandbox).
 - The retrieval numbers are **on-device** (bge-base + sqlite-vec); the
   LongMemEval reader score (78.8%, elsewhere) uses a cloud GPT-4o reader and is
   not relevant here.

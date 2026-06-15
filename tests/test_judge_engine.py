@@ -182,6 +182,22 @@ class TestImprovement:
         assert not is_improvement(100.1, 100.0, 'maximize', min_delta=0.5)
         assert is_improvement(100.6, 100.0, 'maximize', min_delta=0.5)
 
+    def test_min_delta_rel_scales_with_magnitude(self):
+        # Relative floor of 2% of |best|. At a large best, a tiny absolute gain
+        # is rejected; the same 2% threshold accepts a proportional gain.
+        assert not is_improvement(99.0, 100.0, 'minimize', min_delta_rel=0.02)   # 1% < 2%
+        assert is_improvement(97.0, 100.0, 'minimize', min_delta_rel=0.02)       # 3% > 2%
+        # The bug this fixes: an absolute delta sized for a large baseline goes
+        # blind once the metric shrinks. A relative floor stays meaningful.
+        assert not is_improvement(0.0076, 0.0076, 'minimize', min_delta=0.002)   # absolute: blind
+        assert is_improvement(0.0066, 0.0076, 'minimize', min_delta_rel=0.02)    # relative: ~13% kept
+
+    def test_min_delta_uses_larger_of_abs_and_rel(self):
+        # Effective floor is max(abs, rel*|best|): both must be cleared.
+        # rel floor = 0.05*100 = 5; abs floor = 2 → effective 5.
+        assert not is_improvement(96.0, 100.0, 'minimize', min_delta=2.0, min_delta_rel=0.05)
+        assert is_improvement(94.0, 100.0, 'minimize', min_delta=2.0, min_delta_rel=0.05)
+
     def test_nan_not_improvement(self):
         assert not is_improvement(float('nan'), 100.0, 'maximize')
 
