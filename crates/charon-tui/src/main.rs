@@ -11,10 +11,13 @@ mod backend;
 mod chat;
 mod chat_view;
 pub mod clipboard;
+mod daemon;
+mod daemon_client;
 mod f1_mono;
 mod grid;
 mod native_session;
 mod parser;
+mod protocol;
 mod render;
 mod screen;
 mod session;
@@ -52,6 +55,12 @@ enum LaunchMode {
     SpawnCommand(Vec<String>),
     AttachSession(String),
     ListSessions,
+    /// Spawn a new daemon-backed session (persists across TUI restarts) and attach.
+    DaemonSpawn(Vec<String>),
+    /// Attach to an existing daemon session by id.
+    DaemonAttach(String),
+    /// Print the daemon's session inventory and exit.
+    DaemonList,
 }
 
 #[derive(Clone, Debug)]
@@ -121,6 +130,17 @@ fn parse_args() -> CliOptions {
         LaunchMode::AutoDiscover
     } else if remaining[0] == "--list" || remaining[0] == "-l" {
         LaunchMode::ListSessions
+    } else if remaining[0] == "--daemon-list" {
+        LaunchMode::DaemonList
+    } else if remaining[0] == "--daemon-attach" {
+        if let Some(id) = remaining.get(1) {
+            LaunchMode::DaemonAttach(id.clone())
+        } else {
+            eprintln!("Error: --daemon-attach requires a session id");
+            std::process::exit(1);
+        }
+    } else if remaining[0] == "--daemon-spawn" {
+        LaunchMode::DaemonSpawn(remaining[1..].to_vec())
     } else if remaining[0] == "--attach" || remaining[0] == "-a" {
         if let Some(name) = remaining.get(1) {
             LaunchMode::AttachSession(name.clone())
@@ -289,7 +309,28 @@ fn build_initial_sessions(mode: &LaunchMode, outer_w: u16, outer_h: u16) -> io::
     let next_id = 0u64;
 
     match mode {
-        LaunchMode::ListSessions => {}
+        LaunchMode::ListSessions | LaunchMode::DaemonList => {}
+        LaunchMode::DaemonSpawn(cmd) => {
+            daemon::ensure_running()?;
+            let sock = daemon::control_socket();
+            let (_, _, rects) = compute_grid(1, outer_w, outer_h.saturating_sub(2));
+            if let Some(r) = rects.first() {
+                let sid = daemon_client::spawn_session(&sock, cmd, r.width, r.height)
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("daemon spawn failed: {e}")))?;
+                let title = cmd.first().map(|s| s.as_str()).unwrap_or("shell");
+                let sock_str = sock.to_string_lossy();
+                sessions.push(SessionCell::attach_daemon(next_id, title, &sid, &sock_str, r.width, r.height)?);
+            }
+        }
+        LaunchMode::DaemonAttach(id) => {
+            daemon::ensure_running()?;
+            let sock = daemon::control_socket();
+            let (_, _, rects) = compute_grid(1, outer_w, outer_h.saturating_sub(2));
+            if let Some(r) = rects.first() {
+                let sock_str = sock.to_string_lossy();
+                sessions.push(SessionCell::attach_daemon(next_id, id, id, &sock_str, r.width, r.height)?);
+            }
+        }
         LaunchMode::SpawnCommand(cmd) => {
             let cmd_refs: Vec<&str> = cmd.iter().map(|s| s.as_str()).collect();
             let (_, _, rects) = compute_grid(1, outer_w, outer_h.saturating_sub(2));
@@ -1590,6 +1631,15 @@ fn draw_libris_graph<W: Write>(stdout: &mut W, room: &Value, area: Rect, selecte
     Ok(graph_nodes)
 }
 
+fn session_ids_match(a: &str, b: &str) -> bool {
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    a == b
+        || (!a.starts_with("boat-") && format!("boat-{}", a) == b)
+        || (!b.starts_with("boat-") && a == format!("boat-{}", b))
+}
+
 fn room_session_meta(room: &Value, payload: Option<&Value>) -> Vec<SessionAgentMeta> {
     let mut wanted: std::collections::HashSet<String> = std::collections::HashSet::new();
     if let Some(arr) = room.get("participant_sessions").and_then(|v| v.as_array()) {
@@ -1608,7 +1658,7 @@ fn room_session_meta(room: &Value, payload: Option<&Value>) -> Vec<SessionAgentM
     }
     session_agent_meta(payload)
         .into_iter()
-        .filter(|m| wanted.contains(&m.tmux) || wanted.contains(&m.id) || wanted.contains(&format!("boat-{}", m.tmux)))
+        .filter(|m| wanted.contains(&m.id) || wanted.iter().any(|w| session_ids_match(w, &m.tmux)))
         .collect()
 }
 
@@ -1690,13 +1740,19 @@ fn sync_inter_agent_room_panes(app: &mut App, room: &Value, outer_w: u16, outer_
     let (_, _, rects) = compute_grid(target_total, outer_w.max(20), outer_h.max(8));
     let mut changed = false;
     for meta in metas {
-        let visual = visuals.get(&meta.tmux).or_else(|| visuals.get(&format!("boat-{}", meta.tmux)));
+        let visual = visuals.get(&meta.tmux).or_else(|| {
+            if meta.tmux.starts_with("boat-") {
+                visuals.get(meta.tmux.trim_start_matches("boat-"))
+            } else {
+                visuals.get(&format!("boat-{}", meta.tmux))
+            }
+        });
         let title = visual.map(|v| v.title.clone()).unwrap_or_else(|| compose_session_title(&meta));
         let existing_idx = app.inter_agent.room_panes.iter().position(|c| match &c.backend_type {
-            BackendType::BoatPane { session_id } | BackendType::RemoteBoat { session_id, .. } => !meta.tmux.is_empty() && session_id == &meta.tmux,
-            BackendType::TmuxPane { session_name } => !meta.tmux.is_empty() && session_name == &meta.tmux,
+            BackendType::BoatPane { session_id } | BackendType::RemoteBoat { session_id, .. } => session_ids_match(session_id, &meta.tmux),
+            BackendType::TmuxPane { session_name } => session_ids_match(session_name, &meta.tmux),
             BackendType::CharonPane { socket_path } => meta.transport == "charon" && !meta.socket.is_empty() && socket_path == &meta.socket,
-            BackendType::LocalPty => false,
+            BackendType::LocalPty | BackendType::DaemonPane { .. } => false,
         });
         if let Some(idx) = existing_idx {
             if let Some(cell) = app.inter_agent.room_panes.get_mut(idx) {
@@ -1738,7 +1794,7 @@ fn draw_room_panes<W: Write>(stdout: &mut W, app: &mut App, room: &Value, area: 
         let visual = match &cell.backend_type {
             BackendType::BoatPane { session_id } | BackendType::RemoteBoat { session_id, .. } => visuals.get(session_id),
             BackendType::TmuxPane { session_name } => visuals.get(session_name),
-            BackendType::CharonPane { .. } | BackendType::LocalPty => None,
+            BackendType::CharonPane { .. } | BackendType::LocalPty | BackendType::DaemonPane { .. } => None,
         };
         let title = visual.map(|v| v.title.as_str()).unwrap_or(cell.title.as_str());
         let border_color = visual.map(|v| v.border_color).unwrap_or(style::Color::DarkGrey);
@@ -2218,10 +2274,10 @@ fn visible_session_agent_ids(app: &mut App) -> Vec<String> {
 fn pane_agent_id(cell: &SessionCell, payload: Option<&Value>, idx: usize) -> String {
     for m in session_agent_meta(payload) {
         let backend_match = match &cell.backend_type {
-            BackendType::TmuxPane { session_name } => !m.tmux.is_empty() && m.tmux == *session_name,
-            BackendType::BoatPane { session_id } | BackendType::RemoteBoat { session_id, .. } => !m.tmux.is_empty() && m.tmux == *session_id,
+            BackendType::TmuxPane { session_name } => session_ids_match(&m.tmux, session_name),
+            BackendType::BoatPane { session_id } | BackendType::RemoteBoat { session_id, .. } => session_ids_match(&m.tmux, session_id),
             BackendType::CharonPane { socket_path } => m.transport == "charon" && !m.socket.is_empty() && m.socket == *socket_path,
-            BackendType::LocalPty => false,
+            BackendType::LocalPty | BackendType::DaemonPane { .. } => false,
         };
         if backend_match {
             return m.id;
@@ -2281,10 +2337,10 @@ fn sync_session_panes_from_payload(app: &mut App, outer_w: u16, outer_h: u16) ->
             let pid = pane_agent_id(c, app.chat.refresh_payload.as_ref(), i);
             let matched = pid == meta.id
                 || match &c.backend_type {
-                    BackendType::TmuxPane { session_name } => !meta.tmux.is_empty() && session_name == &meta.tmux,
-                    BackendType::BoatPane { session_id } | BackendType::RemoteBoat { session_id, .. } => !meta.tmux.is_empty() && session_id == &meta.tmux,
+                    BackendType::TmuxPane { session_name } => session_ids_match(session_name, &meta.tmux),
+                    BackendType::BoatPane { session_id } | BackendType::RemoteBoat { session_id, .. } => session_ids_match(session_id, &meta.tmux),
                     BackendType::CharonPane { socket_path } => meta.transport == "charon" && !meta.socket.is_empty() && socket_path == &meta.socket,
-                    BackendType::LocalPty => false,
+                    BackendType::LocalPty | BackendType::DaemonPane { .. } => false,
                 };
             if matched { Some(i) } else { None }
         });
@@ -2607,6 +2663,24 @@ fn main() -> io::Result<()> {
             println!("Discoverable sessions:");
             for s in discovered {
                 println!("  {} → tmux:{} ({})", s.display_name, s.session_name, s.agent_type);
+            }
+        }
+        return Ok(());
+    }
+
+    if matches!(mode, &LaunchMode::DaemonList) {
+        daemon::ensure_running()?;
+        match daemon_client::list_sessions(&daemon::control_socket()) {
+            Ok(sessions) if sessions.is_empty() => println!("No daemon sessions."),
+            Ok(sessions) => {
+                println!("Daemon sessions:");
+                for s in sessions {
+                    println!("  {} [{}] {}x{} {} (seq {})", s.id, s.kind, s.cols, s.rows, s.state, s.seq);
+                }
+            }
+            Err(e) => {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
             }
         }
         return Ok(());
