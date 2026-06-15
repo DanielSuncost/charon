@@ -62,9 +62,21 @@ pub enum ClientMsg {
         #[serde(default)]
         session: Option<String>,
         #[serde(default)]
+        workspace: Option<String>,
+        #[serde(default)]
+        tab: Option<String>,
+        #[serde(default)]
         cols: u16,
         #[serde(default)]
         rows: u16,
+    },
+    /// Move a session into a workspace and/or tab (only provided fields change).
+    Move {
+        session: String,
+        #[serde(default)]
+        workspace: Option<String>,
+        #[serde(default)]
+        tab: Option<String>,
     },
     /// Terminate a session.
     Kill { session: String },
@@ -133,6 +145,10 @@ pub struct SessionInfo {
     pub id: String,
     pub title: String,
     pub kind: String,
+    #[serde(default)]
+    pub workspace: String,
+    #[serde(default)]
+    pub tab: String,
     pub cols: u16,
     pub rows: u16,
     pub state: String,
