@@ -246,6 +246,31 @@ pub fn list_sessions(socket: &Path) -> io::Result<Vec<SessionInfo>> {
     ))
 }
 
+/// One-shot: ask the daemon to flush state and exit cleanly (for upgrade/handoff).
+/// Returns once the daemon acknowledges or the connection closes.
+pub fn shutdown(socket: &Path) -> io::Result<()> {
+    let mut stream = UnixStream::connect(socket)?;
+    send(&mut stream, &hello())?;
+    send(&mut stream, &ClientMsg::Shutdown)?;
+    let read = stream.try_clone()?;
+    let mut reader = BufReader::new(read);
+    let mut line = String::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => return Ok(()), // daemon closed the socket → it's exiting
+            Ok(_) => {
+                if let Ok(DaemonMsg::ShuttingDown) = serde_json::from_str::<DaemonMsg>(line.trim()) {
+                    return Ok(());
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
 fn hello() -> ClientMsg {
     ClientMsg::Hello {
         proto: PROTO_VERSION,
