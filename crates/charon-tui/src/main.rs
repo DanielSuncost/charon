@@ -2815,8 +2815,12 @@ fn main() -> io::Result<()> {
             local_view_dirty = false;
         }
 
-        let want_mouse_capture = (app.active_view == View::Chat && app.chat.app_mouse_mode)
-            || (app.active_view == View::Sessions && !app.sessions.terminal_mode && app.sessions.app_mouse_mode)
+        // Mouse capture is only enabled for Session Grid and Inter-Agent views
+        // (clicking panes, drag-select). Chat view never captures mouse — terminal
+        // handles selection, copy, right-click, paste natively. Scroll in chat uses
+        // PgUp/PgDn/arrow keys.
+        let want_mouse_capture =
+            (app.active_view == View::Sessions && !app.sessions.terminal_mode && app.sessions.app_mouse_mode)
             || (app.active_view == View::InterAgent && app.inter_agent.app_mouse_mode);
         if want_mouse_capture != mouse_capture_enabled {
             if want_mouse_capture {
