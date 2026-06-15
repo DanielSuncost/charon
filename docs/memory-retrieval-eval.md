@@ -1,10 +1,10 @@
 # Ablating a memory system's own retrieval features — per-category recall and four honest nulls
 
 A small, reproducible, **on-device** evaluation of Charon's memory retrieval on a
-LongMemEval_S subset. The point of this eval is **measurement discipline**: I
-ablated my own retrieval features and report where they don't help.
+LongMemEval_S subset. The point here is **measurement discipline**: I ablated my
+own retrieval features and report where they don't help.
 
-> **Summary:** I built a reproducible harness that ablates a memory system's
+> **Summary:** A reproducible harness that ablates a memory system's
 > own features against LongMemEval with per-category recall@k, and several of them —
 > RRF "hybrid" fusion, version-chain update detection — deliver **no measurable
 > retrieval gain over plain vector search**. Knowing where a feature *doesn't* help is
