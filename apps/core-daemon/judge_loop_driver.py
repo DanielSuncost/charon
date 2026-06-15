@@ -135,10 +135,10 @@ def shade_implementer(state_dir: Path, config, working_dir: Path) -> "str | None
         return None
 
     try:
-        provider, model, _meta = get_shade_provider_and_model(state_dir)
+        provider, model, ready = get_shade_provider_and_model(state_dir)
     except Exception:
         return None
-    if not provider:
+    if not provider or not ready:
         return None
 
     prompt = build_iteration_prompt(config)
@@ -206,7 +206,10 @@ def tick_judge_loops(state_dir: Path, *, implementer: "Implementer | None" = Non
         checkpoint_mgr = None
         try:
             from checkpoint_manager import CheckpointManager
-            checkpoint_mgr = CheckpointManager(state_dir, working_dir, scope=config.scope)
+            # Whole-tree checkpoints (no scope): the loop needs byte-exact full
+            # rollback and consistent frozen-path detection. The implementer's
+            # write scope is enforced separately at the tool layer.
+            checkpoint_mgr = CheckpointManager(state_dir, working_dir)
         except Exception:
             checkpoint_mgr = None
 

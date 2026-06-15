@@ -1190,14 +1190,17 @@ def _check_scope(name: str, params: dict, ctx: ToolContext) -> str | None:
                 f'[{frozen_list}] that must not be modified.'
             )
 
-    # Scope allowlist (only when a scope is set).
-    if ctx.scope:
+    # Scope allowlist gates *modifications* only (Write/Edit). Reads are allowed
+    # across the project: an implementer must be able to read its checker/tests
+    # (often a frozen file) to understand the target it's optimizing toward —
+    # the frozen denylist above still prevents it from modifying them.
+    if ctx.scope and name in ('Write', 'Edit'):
         if any(_within(entry) for entry in ctx.scope):
             return None
         scope_list = ', '.join(ctx.scope)
         return (
             f'Scope violation: {name} on "{path_param}" is outside allowed scope [{scope_list}]. '
-            f'This shade is restricted to files within its contract scope.'
+            f'This shade is restricted to modifying files within its contract scope.'
         )
 
     return None
