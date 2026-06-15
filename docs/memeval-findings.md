@@ -1,8 +1,9 @@
-# memeval: synthetic multi-session retrieval eval — generator, harness, findings
+# memeval: synthetic multi-session retrieval eval — generator + harness (exploratory)
 
-A small, free, on-device agentic-memory eval built around *authored ground truth*
-and *controllable difficulty*. The point isn't scale — it's that we can dial the
-exact axes a memory benchmark cares about and watch which one breaks retrieval.
+A small, on-device tool for authoring agentic-memory eval data with *ground truth*
+and *controllable difficulty*, to localize which axis breaks retrieval. Exploratory:
+the surface text is synthetic/templated and the samples are small, so the numbers
+below are observations to motivate experiments, not results to cite.
 
 ## Components
 
@@ -21,7 +22,7 @@ exact axes a memory benchmark cares about and watch which one breaks retrieval.
 
 Run: `PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local python scripts/exp_memeval.py --seeds 3`
 
-## Findings (3 seeds/difficulty; hybrid recall@k)
+## Observations (3 seeds/difficulty; hybrid recall@k — note the small per-cell n)
 
 | difficulty | type | n | R@1 | R@2 | R@3 | R@5 |
 |---|---|---|---|---|---|---|
@@ -49,21 +50,20 @@ needs *both* gold sessions): R@5 erodes 1.00 → 0.94 → 0.86 from easy to hard
 distractor ratio rises 0.2 → 0.4 → 0.6. Getting *both* required sessions into top-k
 is where memory breaks.
 
-**3. Hybrid fusion helps — until it doesn't (the new result).** On
+**3. Retrieval-mode comparison on joins — suggestive only, not powered.** On
 `multi_session_join` at recall@3:
 
 | difficulty | vector | fts | hybrid |
 |---|---|---|---|
-| easy | 0.67 | 0.67 | **0.83** |
-| medium | 0.83 | 0.67 | **0.89** |
-| hard | **0.64** | 0.44 | 0.58 |
+| easy | 0.67 | 0.67 | 0.83 |
+| medium | 0.83 | 0.67 | 0.89 |
+| hard | 0.64 | 0.44 | 0.58 |
 
-Hybrid RRF *beats* vector at easy/medium but **inverts at hard**, where the weaker
-FTS signal pollutes the ranking under heavy distraction. The static LongMemEval
-ablation could only conclude "hybrid ≡ vector"; the controllable generator shows
-the benefit is **difficulty-dependent and reverses under distraction** — a concrete
-"when does fusion help vs. hurt" diagnosis, and direct motivation for
-confidence-weighted / distraction-aware fusion (roadmap #4).
+The numbers hint that hybrid's value might be difficulty-dependent (helpful when
+distraction is low, a drag when it's high). **But the per-cell n is 3–18 over 3
+seeds and the gaps are ≈0.05–0.15 — well within noise. This is not a claim.** It is
+at most a hypothesis to test at real n (more seeds, ideally on real dialogue rather
+than templated text) before stating anything.
 
 ## Honest limits
 
@@ -74,9 +74,11 @@ confidence-weighted / distraction-aware fusion (roadmap #4).
 - **Retrieval-only** (gold-session recall). No reader / answer-correctness yet.
 - **One embedding model** (bge-base), on-device.
 
-## What this demonstrates
+## What this is
 
-The skill, not a system: authoring synthetic multi-session eval data with ground
-truth, dialing difficulty to localize failure modes, and producing a fusion finding
-the fixed benchmark couldn't. Next: a failure taxonomy on the join misses
-(roadmap #3) and distraction-aware fusion (#4).
+Exploratory infrastructure: a way to author synthetic multi-session eval data with
+ground truth and dial difficulty to localize failure modes. It reproduces the known
+weak spots (latest-value at top rank, multi-session joins under distraction) on
+controlled data. It does **not** yet produce a powered, transferable finding — the
+surface text is templated and synthetic, and the n is small. Treat it as a tool and
+a set of hypotheses, not a result.

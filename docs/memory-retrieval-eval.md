@@ -2,7 +2,7 @@
 
 A small, reproducible, **on-device** evaluation of Charon's memory retrieval on a
 LongMemEval_S subset. The point of this eval is **measurement discipline**: I
-ablated my own marketed retrieval features and report where they don't help.
+ablated my own retrieval features and report where they don't help.
 
 > **Summary:** I built a reproducible harness that ablates a memory system's
 > own features against LongMemEval with per-category recall@k, and several of them —
@@ -44,7 +44,7 @@ number hides this; the per-category split is the useful artifact.
 | vector-only | 0.657 | 0.839 | 0.922 | 0.964 |
 | hybrid + RRF | 0.657 | 0.839 | 0.922 | 0.964 |
 
-The marketed "hybrid retrieval" was, on this benchmark, **pure vector retrieval** —
+The "hybrid retrieval" mode was, on this benchmark, **pure vector retrieval** —
 byte-identical recall at every k, even at R@1 where there's ample headroom.
 
 **2. The FTS half was a dead no-op (a bug), and fixing it still doesn't justify the hybrid.**

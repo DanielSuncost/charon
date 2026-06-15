@@ -6,14 +6,13 @@ Build a local-first semantic memory engine that scores well on
 LongMemEval_S using only on-device resources. No cloud, no API keys,
 no vector DB — SQLite + local embeddings only.
 
-Current score: 78.8% with GPT-4o as the responder model, above the
-original paper's best RAG configuration (72%). Note: LongMemEval
-scores depend heavily on the responder model — the same retrieval
-system can swing substantially by switching readers, and scores are also
-sensitive to the LLM-as-judge prompt — so the headline number is reader- and
-harness-dependent, not a leaderboard rank. The value here is achieving
-competitive recall with ~10ms retrieval latency (embedding-dominated) on
-local hardware and no cloud dependency in the retrieval path.
+An end-to-end QA score (78.8% with a GPT-4o reader, measured 2026-03) exists, but
+LongMemEval scores depend heavily on the reader model and the LLM-as-judge prompt —
+the same retrieval system swings substantially by switching readers — so that number
+is reader- and harness-dependent, not a leaderboard rank, and not the thing to lean
+on. The reproducible, on-device part is **retrieval recall** (no API); that's what
+the eval here measures. ~10ms retrieval latency (embedding-dominated), no cloud
+dependency in the retrieval path.
 
 ## What LongMemEval_S Tests
 
@@ -246,17 +245,15 @@ use when they need deeper/broader memory access.
 | Oracle-retrieval ceiling | GPT-4o | ~82.4% | reference, not our number — see below |
 
 The **oracle** condition hands the reader only the gold answer-relevant
-sessions, taking retrieval out of the equation — it is the ceiling a
-*perfect* retriever could reach with the same GPT-4o reader, as reported on
-the [LongMemEval](https://github.com/xiaowu0162/LongMemEval) QA leaderboard.
-Charon's 78.8% lands within ~4 points of that ceiling while doing retrieval
-**fully on-device**. That on-device, no-network retrieval path is the point —
-most published results at or above this use substantially heavier machinery.
+sessions, taking retrieval out of the equation — the ceiling a *perfect*
+retriever could reach with the same GPT-4o reader. Both reader numbers are
+reader-/judge-dependent; the point of including them is context, not a ranking.
 
-Retrieval accuracy (500 questions): R@1 0.72, R@5 0.95, R@10 0.985. A small
-**no-API** sample is committed under `results/longmemeval/` (30-question
-subset: R@1 0.93, R@5 0.97, ~10–18 ms per recall) and is reproducible with
-`bench_longmemeval.py --retrieval-only`.
+The reproducible, no-API part is retrieval accuracy (500 questions): R@1 0.72,
+R@5 0.95, R@10 0.985. A small sample is committed under `results/longmemeval/`
+(30-question subset: R@1 0.93, R@5 0.97, ~10–18 ms per recall), reproducible with
+`bench_longmemeval.py --retrieval-only`. For the per-category breakdown and the
+measured negatives, see [memory-retrieval-eval.md](../memory-retrieval-eval.md).
 
 Caveats, stated up front:
 - LongMemEval scores are dominated by the reader model and are sensitive to
