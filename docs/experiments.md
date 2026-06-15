@@ -184,15 +184,47 @@ vs off gives **identical** recall on knowledge-update at every k
 the category it targets. (It may help a reader pick the latest value; it does not
 change retrieval ranking here.)
 
+## 7. The live loop closes end-to-end with a real LLM implementer
+
+Earlier sections drive the loop's *machinery* with scripted edits; this one runs
+the **production implementer** (`shade_implementer`: a scoped one-shot agent on
+gpt-5.5) inside the loop. Task: implement `transform(n) = #primes ≤ n` so a
+**frozen** `check.py` passes; write-scope `solver.py`; correctness judge; target
+1.0. Driver: `scripts/run_judge_loop_live.py`; provider-gated test:
+`tests/test_judge_loop_live.py` (`CHARON_RUN_LIVE=1`).
+
+The real agent reads the frozen checker (a read it needs but must not modify),
+writes a correct sieve to `solver.py`, the engine scores 1.0, keeps it, and the
+loop converges on `target_met` — with `check.py` byte-for-byte untouched.
+
+Closing this exposed and fixed three real defects in the live path:
+- **Scope blocked reads.** The write-scope allowlist also gated `Read`, so the
+  implementer couldn't read its own checker and optimized blind (guessed
+  `return 1`). Scope is now a *write* contract; reads are open (the frozen
+  denylist still prevents modifying protected files, and `Bash` already bypassed
+  read-confinement, so it was never a real boundary).
+- **The frozen file got deleted.** The frozen-path detector staged the whole tree
+  (`git add -A`) into the *persistent* index; a later scoped snapshot committed
+  it and a rollback then deleted it. The detector now stages into a throwaway
+  index, and the loop checkpoints the **whole tree** for byte-exact rollback.
+- **`ready` was ignored**, so a configured-but-unauthenticated provider would be
+  used anyway.
+
+**Honest scope:** this proves the *plumbing* end-to-end on one easy task that the
+model solves in a single iteration. It is **not** evidence that the loop improves
+hard problems over many iterations — the multi-iteration keep/rollback/converge
+behavior is covered by deterministic tests, not yet by a hard live task.
+
 ## What this is — and what it is NOT
 
 - It **is** an honest stress-test of a verifier-guided optimization loop and an
   on-device memory stack, with reproducible scripts and committed results,
   including negative findings about its own features.
 - It is **not** a benchmark (samples are small, one model), **not** evidence of
-  agentic capability (the gym tasks are saturated; the loop's LLM-implementer is
-  lightly exercised), and **not** a claim that the judge is injection-proof or
-  that the gates are complete (scope is soft for shell; no OS sandbox).
+  agentic capability (the gym tasks are saturated; the live LLM-implementer is
+  proven end-to-end but only on simple tasks — see §7), and **not** a claim that
+  the judge is injection-proof or that the gates are complete (scope is soft for
+  shell; no OS sandbox).
 - The retrieval numbers are **on-device** (bge-base + sqlite-vec); the
   LongMemEval reader score (78.8%, elsewhere) uses a cloud GPT-4o reader and is
   not relevant here.

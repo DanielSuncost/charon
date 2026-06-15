@@ -140,3 +140,44 @@ class TestExists:
     def test_invalid_checkpoint(self, mgr):
         mgr.snapshot('ensure-init')
         assert not mgr.exists('deadbeef' * 5)
+
+
+class TestChangedPathsUnder:
+    """The frozen-path detector must see changes by any means without
+    corrupting the persistent index."""
+
+    def test_detects_modified_frozen_file(self, mgr, workspace):
+        work_dir, _ = workspace
+        base = mgr.snapshot('baseline')
+        assert mgr.changed_paths_under(base, ['config.yaml']) == []
+        (work_dir / 'config.yaml').write_text('debug: false\n')
+        assert 'config.yaml' in mgr.changed_paths_under(base, ['config.yaml'])
+
+    def test_detects_newly_created_file_under_frozen_dir(self, mgr, workspace):
+        work_dir, _ = workspace
+        base = mgr.snapshot('baseline')
+        (work_dir / 'src' / 'secret.py').write_text('KEY = 1\n')
+        changed = mgr.changed_paths_under(base, ['src/'])
+        assert any('secret.py' in p for p in changed)
+
+    def test_detection_does_not_pollute_index(self, mgr, workspace):
+        """Regression for the frozen-file-deletion bug: changed_paths_under must
+        not leave files staged in the PERSISTENT index. Previously it ran a bare
+        `git add -A`, so a subsequent snapshot committed whatever it staged, and a
+        later rollback to an earlier checkpoint deleted those files. The detector
+        now stages into a throwaway index instead."""
+        work_dir, _ = workspace
+        base = mgr.snapshot('baseline')
+
+        # An untracked file appears, then the frozen detector runs.
+        (work_dir / 'extra.txt').write_text('side data\n')
+        mgr.changed_paths_under(base, ['config.yaml'])
+
+        # The persistent index must NOT have extra.txt staged. (Before the fix,
+        # the detector's `git add -A` staged it; a later scope-limited snapshot
+        # would then commit it, and a rollback to an earlier checkpoint that
+        # never had it would delete it — the frozen-file-deletion bug.)
+        staged = mgr._git('diff', '--cached', '--name-only', check=False).stdout
+        assert 'extra.txt' not in staged, 'detector polluted the persistent index'
+        # Detection must also be repeatable and side-effect-free.
+        assert mgr.changed_paths_under(base, ['config.yaml']) == []
