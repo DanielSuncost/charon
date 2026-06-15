@@ -28,6 +28,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::dirs_home;
+use crate::detect;
 use crate::protocol::{ClientMsg, DaemonMsg, SessionInfo, PROTO_VERSION};
 use crate::session::SessionCell;
 
@@ -35,6 +36,8 @@ use crate::session::SessionCell;
 const SCROLLBACK_CAP: usize = 2 * 1024 * 1024; // 2 MiB
 /// Main loop tick: drain client commands + poll sessions for output.
 const TICK: Duration = Duration::from_millis(8);
+/// No output for this long → a session is considered quiescent (idle/blocked).
+const IDLE_THRESHOLD: Duration = Duration::from_millis(500);
 
 /// Root Charon state dir. `$CHARON_DIR` overrides (used by tests for isolation).
 fn charon_dir() -> PathBuf {
@@ -109,6 +112,8 @@ struct DaemonSession {
     /// Append handle for the on-disk scrollback log (None until persisted).
     log: Option<File>,
     log_len: usize,
+    /// When output last arrived; drives idle/working heuristics.
+    last_output_at: Instant,
 }
 
 impl DaemonSession {
@@ -327,6 +332,7 @@ impl Daemon {
                 state: "exited".to_string(),
                 log: None,
                 log_len: 0,
+                last_output_at: Instant::now(),
             };
             sess.open_log(false); // append handle, kept for respawn
             debug_log(&format!("restored session {}", sess.id));
@@ -545,6 +551,7 @@ impl Daemon {
                     state: "working".to_string(),
                     log: None,
                     log_len: 0,
+                    last_output_at: Instant::now(),
                 };
                 sess.persist_meta();
                 sess.open_log(true);
@@ -591,6 +598,7 @@ impl Daemon {
                 Ok(cell) => {
                     s.cell = cell;
                     s.state = "working".to_string();
+                    s.last_output_at = Instant::now();
                     Ok(())
                 }
                 Err(e) => Err(e.to_string()),
@@ -618,13 +626,15 @@ impl Daemon {
     fn pump_sessions(&mut self) {
         let ids: Vec<String> = self.sessions.keys().cloned().collect();
         for id in ids {
-            let (frame, exited) = {
+            let (frame, exited, status_change) = {
                 let Some(s) = self.sessions.get_mut(&id) else { continue };
                 let bytes = s.cell.poll_collect().unwrap_or_default();
+                let now = Instant::now();
                 let frame = if bytes.is_empty() {
                     None
                 } else {
                     s.seq += 1;
+                    s.last_output_at = now;
                     append_capped(&mut s.scrollback, &bytes, SCROLLBACK_CAP);
                     s.append_log(&bytes);
                     Some(DaemonMsg::Output {
@@ -637,20 +647,36 @@ impl Daemon {
                 if exited {
                     s.state = "exited".to_string();
                 }
-                (frame, exited)
+                // Heuristic idle/working/blocked classification for live sessions.
+                let status_change = if exited || s.state == "exited" {
+                    None
+                } else {
+                    let quiescent = now.duration_since(s.last_output_at) >= IDLE_THRESHOLD;
+                    let new_state = detect::classify(&s.cell.terminal.cursor_line(), quiescent).as_str();
+                    if new_state != s.state {
+                        s.state = new_state.to_string();
+                        Some(new_state.to_string())
+                    } else {
+                        None
+                    }
+                };
+                (frame, exited, status_change)
             };
             if let Some(frame) = frame {
                 self.broadcast(&id, &frame);
             }
             if exited {
-                self.broadcast(
-                    &id,
-                    &DaemonMsg::Status {
-                        session: id.clone(),
-                        state: "exited".into(),
-                        detail: None,
-                    },
-                );
+                self.broadcast_all(&DaemonMsg::Status {
+                    session: id.clone(),
+                    state: "exited".into(),
+                    detail: None,
+                });
+            } else if let Some(state) = status_change {
+                self.broadcast_all(&DaemonMsg::Status {
+                    session: id.clone(),
+                    state,
+                    detail: None,
+                });
             }
         }
     }
