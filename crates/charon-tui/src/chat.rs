@@ -487,13 +487,34 @@ impl ChatState {
             return;
         }
         if let Some(item) = self.menu_items.get(self.menu_index).cloned() {
-            if item.executable {
+            // If the user has typed more than the menu item (e.g. typed
+            // "/fleet setup deploy@host" while menu shows "/fleet setup"),
+            // send the user's full input, not the menu item.
+            let user_input = self.input.trim().to_string();
+            if item.executable && user_input.len() <= item.cmd.len() {
+                // User input matches the menu item — execute the menu item
                 self.transcript.push(format!("> {}", item.cmd));
                 self.messages.push(ChatMessage::User { text: item.cmd.clone() });
                 self.scroll = 0;
                 self.input_history.push(item.cmd.clone());
                 self.history_index = None;
                 let _ = self.backend.send_command(&item.cmd);
+                self.input.clear();
+                self.close_menu();
+                return;
+            }
+            if !user_input.is_empty() && user_input.len() > item.cmd.len() {
+                // User typed additional args beyond the menu item — send the full input
+                self.transcript.push(format!("> {}", user_input));
+                self.messages.push(ChatMessage::User { text: user_input.clone() });
+                self.scroll = 0;
+                self.input_history.push(user_input.clone());
+                self.history_index = None;
+                if user_input.starts_with('/') {
+                    let _ = self.backend.send_command(&user_input);
+                } else {
+                    let _ = self.backend.send_chat(&user_input);
+                }
                 self.input.clear();
                 self.close_menu();
                 return;
