@@ -242,13 +242,14 @@ full list.
 
 1. **Users talk to agents, never to shades.** Shades are internal
    workers managed by the agent.
-2. **Source of truth is text.** User profile, project knowledge, and
-   working memory are human-readable markdown, always inspectable.
+2. **Source of truth is local and inspectable.** User profile and
+   project knowledge are JSON; working memory is a local SQLite DB. No
+   opaque cloud store — you own the data.
 3. **Degrade gracefully.** No vector deps — keyword search still works.
    No provider — orchestration still works. Shade failure — agent
    continues.
-4. **Budget everything.** Scope, token, and time limits enforced at the
-   tool-call level.
+4. **Budget everything.** Scope is enforced at the tool-call level;
+   token, time, and iteration limits bound shades and loops.
 5. **Append-only truth.** Events, interventions, and phase transitions
    are never deleted.
 
