@@ -11,6 +11,7 @@ mod backend;
 mod chat;
 mod chat_view;
 pub mod clipboard;
+mod config;
 mod daemon;
 mod daemon_client;
 mod detect;
@@ -422,7 +423,8 @@ fn terminal_window_title(app: &App) -> String {
 fn draw_header<W: Write>(stdout: &mut W, app: &App, w: u16) -> io::Result<()> {
     write!(stdout, "\x1b]0;{}\x07", terminal_window_title(app))?;
     stdout.queue(cursor::MoveTo(0, 0))?;
-    stdout.queue(style::SetForegroundColor(style::Color::Rgb { r: 167, g: 139, b: 250 }))?;
+    let hdr = config::active().theme.header;
+    stdout.queue(style::SetForegroundColor(style::Color::Rgb { r: hdr.0, g: hdr.1, b: hdr.2 }))?;
 
     let view = match app.active_view {
         View::Chat => match app.chat.view_mode {
@@ -528,7 +530,8 @@ fn draw_footer<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Resul
 }
 
 fn draw_header_buf(buf: &mut screen::ScreenBuf, app: &App, w: u16) {
-    let fg = style::Color::Rgb { r: 167, g: 139, b: 250 };
+    let hdr = config::active().theme.header;
+    let fg = style::Color::Rgb { r: hdr.0, g: hdr.1, b: hdr.2 };
     let view = match app.active_view {
         View::Chat => match app.chat.view_mode {
             ChatViewMode::Transcript => "Chat/Transcript",
