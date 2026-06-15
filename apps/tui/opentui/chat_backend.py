@@ -6039,7 +6039,9 @@ class ChatBackend:
                 if not charon_installed:
                     emit({'type': 'status', 'message': '', 'request_id': request_id})
                     emit({'type': 'status', 'message': 'Charon is not installed on this server.', 'request_id': request_id})
-                    emit({'type': 'status', 'message': 'Install now? (yes/no)', 'request_id': request_id})
+                    emit({'type': 'status', 'message': '', 'request_id': request_id})
+                    emit({'type': 'status', 'message': '  1. Install full Charon (agents with tools, memory, provider)', 'request_id': request_id})
+                    emit({'type': 'status', 'message': '  2. Skip (use Harbor bash dispatch only)', 'request_id': request_id})
                     self._pending_fleet_setup['step'] = 'confirm_install'
                 else:
                     emit({'type': 'status', 'message': '✓ Charon already installed', 'request_id': request_id})
@@ -6078,14 +6080,16 @@ class ChatBackend:
             return
 
         if step == 'confirm_install':
-            if response in ('yes', 'y', '1'):
-                emit({'type': 'status', 'message': 'Installing Charon on remote server... (this may take a minute)', 'request_id': request_id})
-                import threading
+            if response in ('1', 'yes', 'y'):
+                emit({'type': 'status', 'message': 'Installing Charon on remote server...', 'request_id': request_id})
+                emit({'type': 'status', 'message': '(cloning repo + installing deps — may take a few minutes)', 'request_id': request_id})
                 threading.Thread(target=self._fleet_setup_install_remote, args=(request_id,), daemon=True).start()
-            else:
-                emit({'type': 'status', 'message': 'Skipping install. charons-boat will be deployed for Harbor dispatch (bash commands only).', 'request_id': request_id})
+            elif response in ('2', 'no', 'n', 'skip'):
+                emit({'type': 'status', 'message': 'Skipping install. Deploying charons-boat for Harbor dispatch.', 'request_id': request_id})
                 self._fleet_setup_deploy_boat(request_id)
                 self._fleet_setup_ask_agents(request_id)
+            else:
+                emit({'type': 'status', 'message': 'Pick 1 (install) or 2 (skip)', 'request_id': request_id})
 
         elif step == 'choose_agents':
             # Parse agent selection: "ops,builder" or "1,2" or custom names
@@ -6179,30 +6183,51 @@ class ChatBackend:
             return
         target = setup['target']
         try:
-            # Clone and install
-            install_cmds = (
-                'export PATH="$HOME/.local/bin:$PATH" && '
-                'test -d ~/charon || git clone https://github.com/DanielSuncost/charon.git ~/charon && '
-                'cd ~/charon && ./scripts/install.sh --no-playwright --no-tmux -y'
+            # Step 1: Clone repo
+            emit({'type': 'status', 'message': '  Cloning charon repo...', 'request_id': request_id})
+            clone_result = subprocess.run(
+                ['ssh', '-o', 'BatchMode=yes', target,
+                 'test -d ~/charon && echo exists || git clone --depth=1 https://github.com/DanielSuncost/charon.git ~/charon'],
+                capture_output=True, text=True, timeout=120,
             )
-            result = subprocess.run(
-                ['ssh', '-o', 'BatchMode=yes', target, install_cmds],
-                capture_output=True, text=True, timeout=300,
+            if clone_result.returncode != 0:
+                emit({'type': 'error', 'error': f'Clone failed: {clone_result.stderr.strip()[:200]}', 'request_id': request_id})
+                emit({'type': 'status', 'message': 'Falling back to charons-boat only.', 'request_id': request_id})
+                self._fleet_setup_deploy_boat(request_id)
+                self._fleet_setup_ask_agents(request_id)
+                return
+            emit({'type': 'status', 'message': '  ✓ Repo ready', 'request_id': request_id})
+
+            # Step 2: Run install script
+            emit({'type': 'status', 'message': '  Running install.sh (deps + build)...', 'request_id': request_id})
+            install_result = subprocess.run(
+                ['ssh', '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=30', target,
+                 'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH" && '
+                 'cd ~/charon && ./scripts/install.sh --no-playwright --no-tmux -y'],
+                capture_output=True, text=True, timeout=600,  # 10 minutes
             )
-            if result.returncode == 0:
-                emit({'type': 'status', 'message': '✓ Charon installed on remote', 'request_id': request_id})
+            if install_result.returncode == 0:
+                emit({'type': 'status', 'message': '  ✓ Charon installed', 'request_id': request_id})
                 setup['charon_installed'] = True
-                setup['boat_installed'] = True  # install.sh includes boat
+                setup['boat_installed'] = True
             else:
-                stderr = result.stderr.strip()[-300:]
-                emit({'type': 'error', 'error': f'Install failed: {stderr}', 'request_id': request_id})
-                emit({'type': 'status', 'message': 'Continuing with charons-boat only (bash commands via Harbor).', 'request_id': request_id})
+                # Show last few lines of output for debugging
+                output = (install_result.stdout + install_result.stderr).strip()
+                last_lines = '\n'.join(output.splitlines()[-5:])
+                emit({'type': 'error', 'error': f'Install failed:\n{last_lines}', 'request_id': request_id})
+                emit({'type': 'status', 'message': 'Falling back to charons-boat only.', 'request_id': request_id})
                 self._fleet_setup_deploy_boat(request_id)
 
             self._fleet_setup_ask_agents(request_id)
+        except subprocess.TimeoutExpired:
+            emit({'type': 'error', 'error': 'Install timed out (10 min). Try running install.sh manually on the server.', 'request_id': request_id})
+            emit({'type': 'status', 'message': 'Continuing with charons-boat only.', 'request_id': request_id})
+            self._fleet_setup_deploy_boat(request_id)
+            self._fleet_setup_ask_agents(request_id)
         except Exception as e:
             emit({'type': 'error', 'error': f'Remote install failed: {e}', 'request_id': request_id})
-            self._pending_fleet_setup = None
+            self._fleet_setup_deploy_boat(request_id)
+            self._fleet_setup_ask_agents(request_id)
 
     def _fleet_setup_ask_agents(self, request_id: str | None):
         """Prompt user to choose which agents to set up."""
