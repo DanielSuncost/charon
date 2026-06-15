@@ -46,7 +46,7 @@ Charon is a single-user, multi-project agent operating system. It lets you run
 persistent coding agents, coordinate them with ephemeral "shade" workers, and
 manage sessions across local and remote machines.
 
-The codebase lives at `/home/dopppo/Projects/charon`. It's a Python backend
+The codebase lives at `/home/user/Projects/charon`. It's a Python backend
 with a Bun/TypeScript frontend (OpenTUI). Your work is entirely in Python.
 
 ## What Already Exists and Works
@@ -147,7 +147,7 @@ Charon-specific:
 5. Memory notes from working memory should be injected as context
 
 Look at how pi-agent builds its system prompt in
-`/home/dopppo/Projects/pi-mono/packages/coding-agent/src/core/system-prompt.ts`
+`/home/user/Projects/pi-mono/packages/coding-agent/src/core/system-prompt.ts`
 for reference.
 
 ### Priority 4: Memory Retention & Consolidation
@@ -260,7 +260,7 @@ Test fixtures in `tests/contracts/fixtures/valid/` and `invalid/`.
 
 ```bash
 # Run all tests
-cd /home/dopppo/Projects/charon
+cd /home/user/Projects/charon
 python -m pytest tests/ -q
 
 # Direct chat (no daemon, no TUI)
