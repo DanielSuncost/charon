@@ -97,7 +97,7 @@ operation.json
   "title": "Build web app that does X",
   "prompt": "Build a web app that does X",
   "status": "running",
-  "project_root": "/home/dopppo/Projects/charon",
+  "project_root": "/home/user/Projects/charon",
   "project_id": "charon-c564e8fd",
   "coordinator_agent_id": "AG-coord-1",
   "global_judge_agent_id": "AG-judge-global-1",

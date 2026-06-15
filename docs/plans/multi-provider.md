@@ -52,7 +52,7 @@ provider's onboarding (OAuth link or config step).
     }
   },
   "default_provider": "claude-code",
-  "project": "/home/dopppo/Projects/charon",
+  "project": "/home/user/Projects/charon",
   "complete": true
 }
 ```
@@ -76,7 +76,7 @@ provider's onboarding (OAuth link or config step).
   "name": "charon-main-01",
   "provider": "claude-code",
   "model": "claude-sonnet-4.6",
-  "project": "/home/dopppo/Projects/charon",
+  "project": "/home/user/Projects/charon",
   "goal": "Primary agent",
   ...
 }

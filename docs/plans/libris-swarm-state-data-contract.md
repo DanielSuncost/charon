@@ -201,7 +201,7 @@ Example:
   "status": "running",
   "phase": "drafting",
   "goal": "Research recent RL papers",
-  "project": "/home/dopppo/Projects/charon",
+  "project": "/home/user/Projects/charon",
   "topic_slug": "recent-rl-papers",
   "source": "tmux",
   "hasTmux": true,

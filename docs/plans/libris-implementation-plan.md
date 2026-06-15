@@ -129,7 +129,7 @@ Suggested schema:
   "kind": "software",
   "research_mode": null,
   "status": "active",
-  "root_path": "/home/dopppo/Projects/charon",
+  "root_path": "/home/user/Projects/charon",
   "linked_paths": [],
   "parent_project_id": null,
   "tags": ["agents", "local-first"],
