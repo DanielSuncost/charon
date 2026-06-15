@@ -1244,6 +1244,8 @@ impl ChatState {
             item("/shade stats", "Show shade stats"),
             item("/1", "Provider switch: continue with context transfer"),
             item("/2", "Provider switch: start a new session"),
+            item("/fleet setup", "Set up a remote agent team (install, auth, start agents)"),
+            item("/fleet status", "Show fleet status"),
             item("/voyage dispatch", "Dispatch a task to a remote agent worker"),
             item("/voyage status", "Check status of a voyage"),
             item("/voyage list", "List recent voyages"),
