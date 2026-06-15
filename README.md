@@ -49,33 +49,19 @@ More detail: [docs/install.md](docs/install.md)
 ### Memory
 
 Every conversation is indexed into a local vector database. Agents
-recall past discussions by meaning, know when facts have changed, and
-learn your preferences once across all projects.
+recall past discussions by meaning and learn your preferences once
+across all projects. Retrieval runs fully on-device: bge-base-en-v1.5
+embeddings + sqlite-vec with an FTS5 keyword index, ~10ms per recall.
+No cloud calls for recall.
 
-Hybrid retrieval (vector similarity + FTS5 keywords, merged with
-reciprocal rank fusion). Local embeddings (bge-base-en-v1.5, ~10ms per
-recall, query-embedding dominated). Version chains detect when knowledge
-has been superseded.
+What it actually does, measured on a LongMemEval_S subset: plain vector
+search carries it. The FTS5 + reciprocal-rank-fusion "hybrid" adds
+nothing on abstractive questions, and version-chain update-detection
+gives no measurable retrieval gain. Single-session recall is
+near-saturated; multi-session is the hard case (recall@1 ≈0.27).
+Per-category recall@k, the negatives, and a one-command reproduce:
+[docs/memory-retrieval-eval.md](docs/memory-retrieval-eval.md).
 
-Honest caveat, measured: on LongMemEval's abstractive questions the FTS5
-half contributes ~nothing, so hybrid+RRF there equals vector-only
-(`docs/experiments.md`). The hybrid helps keyword-exact queries, not those.
-
-Scored 78.8% on
-[LongMemEval_S](https://github.com/xiaowu0162/LongMemEval) with a GPT-4o
-reader, against the benchmark's oracle-retrieval ceiling of ~82.4% for the
-same reader (measured 2026-03). The notable part is the retrieval stack —
-bge-base embeddings, hybrid vector + FTS5, RRF — running **fully on-device
-with no network calls**, where most published results at or above this use
-substantially heavier machinery. (The GPT-4o reader is a cloud call;
-"on-device" refers to retrieval and embeddings.) Reader scores are sensitive
-to the model and judge prompt, so this is our own harness under stated
-conditions, not a leaderboard rank. Retrieval quality (recall@k) is
-reproducible with no API — `scripts/bench_longmemeval.py --retrieval-only`,
-sample in `results/longmemeval/`
-([details](docs/plans/semantic-memory-engine.md#longmemeval_s-benchmark)).
-
-[Architecture](docs/plans/semantic-memory-engine.md) /
 [Three-tier design](docs/three-tier-memory.md)
 
 ### Shades
@@ -112,10 +98,12 @@ tick  action     score  kept   best
 
 This run uses the deterministic Quantitative judge (the score is the
 program's output, no LLM), so it reproduces exactly. The LLM-implementer
-path — where a model proposes the change each iteration — exists but is
-lightly exercised; treat the loop as verified machinery, not a benchmarked
-agent capability. See [the case study](docs/judge-loop-case-study.md) and
-[reward-hacking demo](docs/reward-hacking-demo.md).
+path — where a model proposes each change — also runs end-to-end: it
+reads a frozen checker, edits within its scope, and converges, with the
+frozen-file and rollback gates holding. Demonstrated on small tasks, not
+a benchmarked agent capability. See [the case
+study](docs/judge-loop-case-study.md) and [reward-hacking
+demo](docs/reward-hacking-demo.md).
 
 | Judge type | Signal | Example |
 |------------|--------|---------|
@@ -224,11 +212,11 @@ charon/
 
 ## Status
 
-Active development. 748 tests, full suite run in CI on every push. Used
-daily as a primary working environment.
+Active development. Full test suite run in CI on every push. Used daily
+as a primary working environment.
 
 What works:
-- Memory, recall, version chains, user model consolidation
+- Memory recall and user-model / preference consolidation
 - Shade swarms with scope enforcement
 - Judge loops with checkpoint/rollback
 - Multi-provider (Claude, Codex, local models)
@@ -271,7 +259,7 @@ full list.
 | Document | Description |
 |----------|-------------|
 | [Install](docs/install.md) | Setup on macOS and Ubuntu |
-| [Semantic Memory Engine](docs/plans/semantic-memory-engine.md) | Hybrid retrieval, LongMemEval benchmarks |
+| [Memory retrieval eval](docs/memory-retrieval-eval.md) | Per-category recall@k + measured negatives |
 | [Three-Tier Memory](docs/three-tier-memory.md) | User / project / agent context hierarchy |
 | [Procedures & Judge Loops](docs/plans/procedure-learning-and-optimization-loops.md) | Iterative optimization with pluggable scoring |
 | [Autonomous Work](docs/plans/autonomous-goal-driven-work.md) | Goal-driven self-assignment |
