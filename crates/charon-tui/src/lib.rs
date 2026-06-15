@@ -4,6 +4,7 @@
 //! can be reused by both the `charon` TUI client and the `charond` daemon.
 
 pub mod backend;
+pub mod config;
 pub mod daemon;
 pub mod daemon_client;
 pub mod detect;
