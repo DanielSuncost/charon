@@ -2260,6 +2260,39 @@ fn session_list_rows(app: &mut App) -> Vec<SessionListRow> {
             session_ids.extend(child_ids);
         }
     }
+    // Daemon-owned sessions, grouped by workspace (independent of the payload).
+    let mut by_ws: std::collections::BTreeMap<String, Vec<crate::protocol::SessionInfo>> =
+        std::collections::BTreeMap::new();
+    for info in &app.sessions.daemon_sessions {
+        if info.state == "exited" {
+            continue;
+        }
+        let ws = if info.workspace.is_empty() { "default".to_string() } else { info.workspace.clone() };
+        by_ws.entry(ws).or_default().push(info.clone());
+    }
+    for (ws, infos) in by_ws {
+        let child_ids: Vec<String> = infos.iter().map(|i| i.id.clone()).collect();
+        let header = format!("◈ {ws}");
+        let collapsed = app.sessions.collapsed_agents.contains(&header);
+        rows.push(SessionListRow::AgentHeader {
+            name: header,
+            project: String::new(),
+            detail: "daemon".to_string(),
+            count: infos.len(),
+            session_ids: child_ids.clone(),
+            collapsed,
+        });
+        if collapsed {
+            session_ids.extend(child_ids);
+        } else {
+            for info in infos {
+                let label = if info.title.is_empty() { info.id.clone() } else { info.title.clone() };
+                session_ids.push(info.id.clone());
+                rows.push(SessionListRow::Session { id: info.id, label, status: info.state });
+            }
+        }
+    }
+
     let current_ids: std::collections::HashSet<String> = session_ids.iter().cloned().collect();
     if app.sessions.visible_agents.is_empty() {
         for id in &session_ids {
@@ -2283,15 +2316,15 @@ fn session_list_rows(app: &mut App) -> Vec<SessionListRow> {
 }
 
 fn visible_session_agent_ids(app: &mut App) -> Vec<String> {
-    let meta = session_agent_meta(app.chat.refresh_payload.as_ref());
-    if meta.is_empty() {
+    let rows = session_list_rows(app);
+    let has_sessions = rows.iter().any(|r| matches!(r, SessionListRow::Session { .. }));
+    if !has_sessions {
         if app.sessions.backend_filter_pending {
             return vec![];
         }
         return app.sessions.panes.iter().enumerate().map(|(i, _)| format!("pane:{}", i)).collect();
     }
-    session_list_rows(app)
-        .into_iter()
+    rows.into_iter()
         .filter_map(|row| match row {
             SessionListRow::Session { id, .. } if app.sessions.visible_agents.contains(&id) => Some(id),
             _ => None,
@@ -2300,6 +2333,10 @@ fn visible_session_agent_ids(app: &mut App) -> Vec<String> {
 }
 
 fn pane_agent_id(cell: &SessionCell, payload: Option<&Value>, idx: usize) -> String {
+    // Daemon panes identify by their session id (matches the sidebar rows).
+    if let BackendType::DaemonPane { session_id } = &cell.backend_type {
+        return session_id.clone();
+    }
     for m in session_agent_meta(payload) {
         let backend_match = match &cell.backend_type {
             BackendType::TmuxPane { session_name } => session_ids_match(&m.tmux, session_name),
@@ -2320,7 +2357,7 @@ fn visible_pane_indices(app: &mut App) -> Vec<usize> {
         let id = pane_agent_id(cell, app.chat.refresh_payload.as_ref(), i);
         if allowed.contains(&id) {
             Some(i)
-        } else if matches!(cell.backend_type, BackendType::CharonPane { .. } | BackendType::DaemonPane { .. }) && id.starts_with("pane:") {
+        } else if matches!(cell.backend_type, BackendType::CharonPane { .. }) && id.starts_with("pane:") {
             Some(i)
         } else {
             None
@@ -2364,6 +2401,7 @@ fn sync_daemon_panes(app: &mut App, outer_w: u16, outer_h: u16) -> io::Result<bo
         Err(_) => return Ok(false),
     };
     let sock_str = sock.to_string_lossy().to_string();
+    app.sessions.daemon_sessions = sessions.clone();
     let mut changed = false;
     for info in sessions {
         // Record state for border coloring (including exited sessions).
