@@ -87,8 +87,56 @@ struct PersistMeta {
     cmd: Vec<String>,
     #[serde(default)]
     cwd: Option<String>,
+    #[serde(default)]
+    target: Option<String>,
+    #[serde(default)]
+    server: Option<String>,
     cols: u16,
     rows: u16,
+}
+
+/// Kinds whose backend lives outside the daemon and survives a daemon restart
+/// (so they should be re-attached on restore rather than marked exited).
+fn is_external_kind(kind: &str) -> bool {
+    matches!(kind, "tmux" | "boat" | "charon" | "remote")
+}
+
+/// Construct a `SessionCell` for a backend kind. Shared by spawn, restore, respawn.
+#[allow(clippy::too_many_arguments)]
+fn build_cell(
+    id: u64,
+    kind: &str,
+    title: &str,
+    cmd: &[String],
+    cwd: Option<&str>,
+    target: Option<&str>,
+    server: Option<&str>,
+    cols: u16,
+    rows: u16,
+) -> io::Result<SessionCell> {
+    fn need<'a>(kind: &str, v: Option<&'a str>) -> io::Result<&'a str> {
+        v.filter(|s| !s.is_empty())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("kind '{kind}' requires a target")))
+    }
+    match kind {
+        "local" => {
+            let argv: Vec<&str> = cmd.iter().map(String::as_str).collect();
+            SessionCell::spawn_cwd(id, title, &argv, cols, rows, cwd)
+        }
+        "tmux" => SessionCell::attach_tmux(id, title, need(kind, target)?, cols, rows),
+        "boat" => SessionCell::attach_boat(id, title, need(kind, target)?, cols, rows),
+        "charon" => SessionCell::attach_charon(id, title, need(kind, target)?, cols, rows),
+        "remote" => {
+            let sid = need(kind, target)?;
+            let server_id = need(kind, server)?;
+            let fleet = crate::backend::load_fleet_config();
+            match fleet.iter().find(|s| s.id == server_id) {
+                Some(srv) => SessionCell::attach_remote_boat(id, title, srv, sid, cols, rows),
+                None => Err(io::Error::new(io::ErrorKind::NotFound, format!("no fleet server: {server_id}"))),
+            }
+        }
+        other => Err(io::Error::new(io::ErrorKind::InvalidInput, format!("unsupported kind: {other}"))),
+    }
 }
 fn debug_log(msg: &str) {
     if std::env::var("CHARON_DEBUG").is_ok() {
@@ -111,6 +159,10 @@ struct DaemonSession {
     /// Argv used to spawn the session; replayed on respawn after a restart.
     cmd: Vec<String>,
     cwd: Option<String>,
+    /// Backend target (tmux name / boat id / charon socket) for non-local kinds.
+    target: Option<String>,
+    /// Fleet server id (for `kind = "remote"`).
+    server: Option<String>,
     cols: u16,
     rows: u16,
     seq: u64,
@@ -155,6 +207,8 @@ impl DaemonSession {
             tab: self.tab.clone(),
             cmd: self.cmd.clone(),
             cwd: self.cwd.clone(),
+            target: self.target.clone(),
+            server: self.server.clone(),
             cols: self.cols,
             rows: self.rows,
         };
@@ -325,29 +379,37 @@ impl Daemon {
                 let drop = scrollback.len() - SCROLLBACK_CAP;
                 scrollback.drain(0..drop);
             }
-            if let Some(n) = meta
-                .id
-                .strip_prefix("local-")
-                .and_then(|s| s.parse::<u64>().ok())
-            {
+            if let Some(n) = meta.id.rsplit('-').next().and_then(|s| s.parse::<u64>().ok()) {
                 max_local = max_local.max(n);
             }
             let (cols, rows) = (meta.cols.max(1), meta.rows.max(1));
+            // External-backed sessions survive a daemon restart → re-attach them.
+            // Local PTYs die with the daemon → restore as exited + respawnable.
+            let (cell, state) = if is_external_kind(&meta.kind) {
+                match build_cell(0, &meta.kind, &meta.title, &meta.cmd, meta.cwd.as_deref(), meta.target.as_deref(), meta.server.as_deref(), cols, rows) {
+                    Ok(c) => (c, "working".to_string()),
+                    Err(_) => (SessionCell::dead(0, &meta.title, cols, rows), "exited".to_string()),
+                }
+            } else {
+                (SessionCell::dead(0, &meta.title, cols, rows), "exited".to_string())
+            };
             let mut sess = DaemonSession {
                 id: meta.id.clone(),
-                cell: SessionCell::dead(0, &meta.title, cols, rows),
+                cell,
                 title: meta.title,
                 kind: meta.kind,
                 workspace: if meta.workspace.is_empty() { DEFAULT_WORKSPACE.to_string() } else { meta.workspace },
                 tab: if meta.tab.is_empty() { DEFAULT_TAB.to_string() } else { meta.tab },
                 cmd: meta.cmd,
                 cwd: meta.cwd,
+                target: meta.target,
+                server: meta.server,
                 cols,
                 rows,
                 seq: 0,
                 scrollback,
                 subscribers: Vec::new(),
-                state: "exited".to_string(),
+                state,
                 log: None,
                 log_len: 0,
                 last_output_at: Instant::now(),
@@ -456,9 +518,11 @@ impl Daemon {
                 session,
                 workspace,
                 tab,
+                target,
+                server,
                 cols,
                 rows,
-            } => self.handle_spawn(client, kind, cmd, title, cwd, session, workspace, tab, cols, rows),
+            } => self.handle_spawn(client, kind, cmd, title, cwd, session, workspace, tab, target, server, cols, rows),
             ClientMsg::Move {
                 session,
                 workspace,
@@ -533,25 +597,16 @@ impl Daemon {
         session: Option<String>,
         workspace: Option<String>,
         tab: Option<String>,
+        target: Option<String>,
+        server: Option<String>,
         cols: u16,
         rows: u16,
     ) {
         let kind = if kind.is_empty() { "local".to_string() } else { kind };
-        if kind != "local" {
-            self.send(
-                client,
-                &DaemonMsg::Error {
-                    code: "unsupported_kind".into(),
-                    message: format!("spawn kind '{kind}' not supported yet"),
-                    session: None,
-                },
-            );
-            return;
-        }
         let id = session.unwrap_or_else(|| {
             let n = self.next_session;
             self.next_session += 1;
-            format!("local-{n:02}")
+            format!("{kind}-{n:02}")
         });
         if self.sessions.contains_key(&id) {
             self.send(
@@ -565,14 +620,13 @@ impl Daemon {
             return;
         }
         let (cols, rows) = (cols.max(1).max(80), rows.max(1).max(24));
-        let argv: Vec<String> = if cmd.is_empty() {
+        let argv: Vec<String> = if kind == "local" && cmd.is_empty() {
             vec![default_shell()]
         } else {
             cmd
         };
-        let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
         let title = title.unwrap_or_else(|| id.clone());
-        match SessionCell::spawn_cwd(self.next_session, &title, &argv_ref, cols, rows, cwd.as_deref()) {
+        match build_cell(self.next_session, &kind, &title, &argv, cwd.as_deref(), target.as_deref(), server.as_deref(), cols, rows) {
             Ok(cell) => {
                 let mut sess = DaemonSession {
                     id: id.clone(),
@@ -583,6 +637,8 @@ impl Daemon {
                     tab: tab.filter(|t| !t.is_empty()).unwrap_or_else(|| DEFAULT_TAB.to_string()),
                     cmd: argv,
                     cwd,
+                    target,
+                    server,
                     cols,
                     rows,
                     seq: 0,
@@ -651,13 +707,13 @@ impl Daemon {
                 );
                 return;
             };
-            let argv: Vec<String> = if s.cmd.is_empty() {
+            let argv: Vec<String> = if s.kind == "local" && s.cmd.is_empty() {
                 vec![default_shell()]
             } else {
                 s.cmd.clone()
             };
-            let argv_ref: Vec<&str> = argv.iter().map(String::as_str).collect();
-            match SessionCell::spawn_cwd(s.cell.id, &s.title, &argv_ref, s.cols, s.rows, s.cwd.as_deref()) {
+            // Local → re-run the command; external kinds → re-attach the backend.
+            match build_cell(s.cell.id, &s.kind, &s.title, &argv, s.cwd.as_deref(), s.target.as_deref(), s.server.as_deref(), s.cols, s.rows) {
                 Ok(cell) => {
                     s.cell = cell;
                     s.state = "working".to_string();
