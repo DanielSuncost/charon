@@ -159,6 +159,8 @@ pub fn spawn_session(socket: &Path, cmd: &[String], cols: u16, rows: u16) -> io:
             session: None,
             workspace: None,
             tab: None,
+            target: None,
+            server: None,
             cols,
             rows,
         },

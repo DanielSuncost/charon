@@ -48,7 +48,9 @@ pub enum ClientMsg {
         cols: u16,
         rows: u16,
     },
-    /// Create a new session. Phase 1: `kind = "local"` (a shell/command).
+    /// Create a new session. `kind`: `local` (cmd/cwd), `tmux`/`boat`/`charon`
+    /// (`target` = tmux name / boat session id / charon socket path), or `remote`
+    /// (`server` = fleet id, `target` = remote session id).
     Spawn {
         #[serde(default)]
         kind: String,
@@ -58,6 +60,12 @@ pub enum ClientMsg {
         title: Option<String>,
         #[serde(default)]
         cwd: Option<String>,
+        /// Backend-specific target (tmux name / boat id / socket path).
+        #[serde(default)]
+        target: Option<String>,
+        /// Fleet server id (for `kind = "remote"`).
+        #[serde(default)]
+        server: Option<String>,
         /// Optional explicit session id; daemon assigns one if absent.
         #[serde(default)]
         session: Option<String>,
