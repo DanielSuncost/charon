@@ -35,6 +35,11 @@
 >   daemon (state already persisted; socket released); `charon --daemon-upgrade`
 >   shuts down + starts the fresh binary; sessions are restored. Zero-downtime
 >   fd-passing of live PTYs is deferred (see §7).
+> - **Spawn kinds:** the daemon owns all backend types — `local` (cmd/cwd), `tmux`,
+>   `boat`, `charon`, `remote` (`target`/`server` on `spawn`). External-backed kinds
+>   (tmux/boat/charon/remote) **re-attach** on daemon restart instead of going
+>   exited; local PTYs restore as exited+respawnable. (`build_cell` in `daemon.rs`;
+>   `tests/daemon_tmux.rs` proves tmux adopt + re-attach.)
 > - Tests: `tests/daemon_client.rs` (round-trip), `tests/daemon_persist.rs`
 >   (scrollback survives a hard daemon kill → restore → replay → respawn),
 >   `tests/daemon_detect.rs` (idle → blocked → idle over the protocol),
@@ -233,7 +238,7 @@ All under `~/.charon/` (override with `$CHARON_DIR`).
   independently and will be re-attached from `meta.json` (planned). Local PTYs cannot
   survive a daemon exit; on restart they're shown as `exited` with full scrollback
   intact and offer a one-command **respawn** (re-runs `meta.cmd` in the same `cwd`).
-  *(Implemented for local sessions.)*
+  *(Implemented: local → exited+respawnable; tmux/boat/charon/remote → re-attached.)*
 - **Client reconnect (daemon still up):** seamless snapshot replay; no loss.
 
 ### 4.4 Resize arbitration
