@@ -2320,7 +2320,7 @@ fn visible_pane_indices(app: &mut App) -> Vec<usize> {
         let id = pane_agent_id(cell, app.chat.refresh_payload.as_ref(), i);
         if allowed.contains(&id) {
             Some(i)
-        } else if matches!(cell.backend_type, BackendType::CharonPane { .. }) && id.starts_with("pane:") {
+        } else if matches!(cell.backend_type, BackendType::CharonPane { .. } | BackendType::DaemonPane { .. }) && id.starts_with("pane:") {
             Some(i)
         } else {
             None
@@ -2349,6 +2349,46 @@ fn ensure_native_self_pane(app: &mut App, server: Option<&NativeSessionServer>, 
     let cell = SessionCell::attach_charon(idx as u64, &label, &socket, r.width.max(1), r.height.max(1))?;
     app.sessions.panes.push(cell);
     Ok(true)
+}
+
+/// Surface live `charond` sessions as panes in the F3 grid. Additive and
+/// independent of the Python payload path: only runs when a daemon is already
+/// running, attaches any session not yet shown, and skips exited ones.
+fn sync_daemon_panes(app: &mut App, outer_w: u16, outer_h: u16) -> io::Result<bool> {
+    if !daemon::is_running() {
+        return Ok(false);
+    }
+    let sock = daemon::control_socket();
+    let sessions = match daemon_client::list_sessions(&sock) {
+        Ok(s) => s,
+        Err(_) => return Ok(false),
+    };
+    let sock_str = sock.to_string_lossy().to_string();
+    let mut changed = false;
+    for info in sessions {
+        if info.state == "exited" {
+            continue;
+        }
+        let exists = app.sessions.panes.iter().any(|c| {
+            matches!(&c.backend_type, BackendType::DaemonPane { session_id } if session_id == &info.id)
+        });
+        if exists {
+            continue;
+        }
+        let idx = app.sessions.panes.len();
+        let (_, _, rects) = compute_grid(
+            (idx + 1).max(1),
+            outer_w.saturating_sub(((outer_w as f32) * 0.125) as u16 + 2),
+            outer_h.saturating_sub(2),
+        );
+        let r = rects.get(idx).copied().unwrap_or(Rect { x: 0, y: 0, width: 80, height: 24 });
+        let title = if info.title.is_empty() { info.id.clone() } else { info.title.clone() };
+        if let Ok(cell) = SessionCell::attach_daemon(idx as u64, &title, &info.id, &sock_str, r.width.max(1), r.height.max(1)) {
+            app.sessions.panes.push(cell);
+            changed = true;
+        }
+    }
+    Ok(changed)
 }
 
 fn sync_session_panes_from_payload(app: &mut App, outer_w: u16, outer_h: u16) -> io::Result<bool> {
@@ -2772,6 +2812,7 @@ fn main() -> io::Result<()> {
     let mut cached_chat = F1MonoCache::default();
     let mut last_rowing_tick = Instant::now();
     let mut last_session_poll = Instant::now() - Duration::from_secs(1);
+    let mut last_daemon_poll = Instant::now() - Duration::from_secs(2);
     let mut front_buf = screen::ScreenBuf::new(outer_w, outer_h);
     let mut back_buf = screen::ScreenBuf::new(outer_w, outer_h);
     let mut last_chat_msg_count: usize = 0;
@@ -2837,6 +2878,15 @@ fn main() -> io::Result<()> {
                 changed = true;
             }
             if changed {
+                session_structure_changed = true;
+                needs_full_redraw = true;
+            }
+        }
+        // Daemon-owned sessions are independent of the Python payload; poll the
+        // daemon's inventory on a slow timer and surface new sessions as panes.
+        if app.active_view == View::Sessions && last_daemon_poll.elapsed() >= Duration::from_millis(1000) {
+            last_daemon_poll = Instant::now();
+            if sync_daemon_panes(&mut app, outer_w, outer_h)? {
                 session_structure_changed = true;
                 needs_full_redraw = true;
             }
