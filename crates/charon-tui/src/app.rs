@@ -70,6 +70,9 @@ pub struct SessionsState {
     pub collapsed_agents: HashSet<String>,
     pub backend_filter_pending: bool,
     pub known_session_ids: HashSet<String>,
+    /// Latest state per charond session id (from the daemon inventory poll),
+    /// used to color daemon pane borders. Keyed by session id.
+    pub daemon_states: HashMap<String, String>,
 }
 
 impl SessionsState {
@@ -89,6 +92,7 @@ impl SessionsState {
             collapsed_agents: HashSet::new(),
             backend_filter_pending: false,
             known_session_ids: HashSet::new(),
+            daemon_states: HashMap::new(),
         }
     }
 }
