@@ -1,4 +1,5 @@
 use crate::chat::{ChatState, LaunchOptions};
+use crate::protocol::SessionInfo;
 use crate::session::SessionCell;
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -73,6 +74,8 @@ pub struct SessionsState {
     /// Latest state per charond session id (from the daemon inventory poll),
     /// used to color daemon pane borders. Keyed by session id.
     pub daemon_states: HashMap<String, String>,
+    /// Full charond inventory from the latest poll, for sidebar workspace grouping.
+    pub daemon_sessions: Vec<SessionInfo>,
 }
 
 impl SessionsState {
@@ -93,6 +96,7 @@ impl SessionsState {
             backend_filter_pending: false,
             known_session_ids: HashSet::new(),
             daemon_states: HashMap::new(),
+            daemon_sessions: Vec::new(),
         }
     }
 }
