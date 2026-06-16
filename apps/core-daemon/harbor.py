@@ -111,14 +111,14 @@ def _build_harbor_ssh_command(server: dict) -> list[str]:
     cmd = ["ssh"]
     for opt in server.get("ssh_options", []):
         cmd.append(opt)
-    cmd.extend(["-o", f"ConnectTimeout={SSH_TIMEOUT}", "-o", "BatchMode=yes"])
+    cmd.extend(["-o", f"ConnectTimeout={SSH_TIMEOUT}", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30"])
     user = server.get("user", "")
     host = server.get("host", "")
     target = f"{user}@{host}" if user else host
     cmd.append(target)
-    # Use harbor subcommand instead of stream
-    boat_command = server.get("boat_command", "charons-boat").split()[0]
-    cmd.extend([boat_command, "harbor"])
+    # Ensure ~/.local/bin is in PATH (charons-boat lives there),
+    # then run the harbor subcommand.
+    cmd.append('export PATH="$HOME/.local/bin:$PATH" && charons-boat harbor')
     return cmd
 
 
