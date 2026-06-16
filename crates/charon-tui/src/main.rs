@@ -2366,6 +2366,8 @@ fn sync_daemon_panes(app: &mut App, outer_w: u16, outer_h: u16) -> io::Result<bo
     let sock_str = sock.to_string_lossy().to_string();
     let mut changed = false;
     for info in sessions {
+        // Record state for border coloring (including exited sessions).
+        app.sessions.daemon_states.insert(info.id.clone(), info.state.clone());
         if info.state == "exited" {
             continue;
         }
@@ -2382,7 +2384,13 @@ fn sync_daemon_panes(app: &mut App, outer_w: u16, outer_h: u16) -> io::Result<bo
             outer_h.saturating_sub(2),
         );
         let r = rects.get(idx).copied().unwrap_or(Rect { x: 0, y: 0, width: 80, height: 24 });
-        let title = if info.title.is_empty() { info.id.clone() } else { info.title.clone() };
+        let base = if info.title.is_empty() { info.id.clone() } else { info.title.clone() };
+        // Surface the workspace as a grouping prefix when it's not the default.
+        let title = if info.workspace.is_empty() || info.workspace == "default" {
+            base
+        } else {
+            format!("{}/{}", info.workspace, base)
+        };
         if let Ok(cell) = SessionCell::attach_daemon(idx as u64, &title, &info.id, &sock_str, r.width.max(1), r.height.max(1)) {
             app.sessions.panes.push(cell);
             changed = true;
@@ -2698,7 +2706,21 @@ fn draw_sessions<W: Write>(stdout: &mut W, app: &mut App, rects: &[Rect], force_
                 None => continue,
             };
             let focused = *pane_i == app.sessions.focused && app.sessions.section == SessionsSection::Grid;
-            render::render_border(stdout, *area, &title, focused)?;
+            // Daemon panes color their border by the daemon-reported state.
+            match &backend_type {
+                BackendType::DaemonPane { session_id } if !focused => {
+                    let state = app.sessions.daemon_states.get(session_id).map(String::as_str);
+                    let theme = &config::active().theme;
+                    let c = match state {
+                        Some("working") => theme.status_working,
+                        Some("blocked") => theme.status_blocked,
+                        Some("exited") => config::Rgb(122, 130, 160),
+                        _ => theme.status_idle,
+                    };
+                    render::render_border_colored(stdout, *area, &title, style::Color::Rgb { r: c.0, g: c.1, b: c.2 })?;
+                }
+                _ => render::render_border(stdout, *area, &title, focused)?,
+            }
             let is_self_charon = match (&backend_type, self_socket_to_hide) {
                 (BackendType::CharonPane { socket_path }, Some(sock)) => socket_path == sock,
                 _ => false,
