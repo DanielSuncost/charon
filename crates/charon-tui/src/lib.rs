@@ -8,6 +8,7 @@ pub mod config;
 pub mod daemon;
 pub mod daemon_client;
 pub mod detect;
+pub mod layout;
 pub mod parser;
 pub mod protocol;
 pub mod session;
