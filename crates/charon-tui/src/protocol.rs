@@ -66,6 +66,10 @@ pub enum ClientMsg {
         /// Fleet server id (for `kind = "remote"`).
         #[serde(default)]
         server: Option<String>,
+        /// Ephemeral sessions die when their last client detaches (Claude-Code
+        /// style) and never persist to disk. Default false = persistent.
+        #[serde(default)]
+        ephemeral: bool,
         /// Optional explicit session id; daemon assigns one if absent.
         #[serde(default)]
         session: Option<String>,
