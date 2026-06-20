@@ -128,6 +128,9 @@ pub struct Config {
     pub theme: Theme,
     pub mouse: bool,
     pub default_view: String,
+    /// If false (default), TUI-spawned sessions are ephemeral (end on close,
+    /// Claude-Code style). Set true to make them persist across restarts.
+    pub persist_sessions: bool,
     pub keys: HashMap<String, String>,
 }
 
@@ -137,6 +140,7 @@ impl Default for Config {
             theme: Theme::charon_dark(),
             mouse: true,
             default_view: "chat".to_string(),
+            persist_sessions: false,
             keys: HashMap::new(),
         }
     }
@@ -170,6 +174,7 @@ impl Config {
             theme,
             mouse: raw.ui.mouse.unwrap_or(true),
             default_view: raw.ui.default_view.unwrap_or_else(|| "chat".to_string()),
+            persist_sessions: raw.ui.persist_sessions.unwrap_or(false),
             keys: raw.keys,
         })
     }
@@ -199,6 +204,7 @@ struct RawUi {
     theme: Option<String>,
     mouse: Option<bool>,
     default_view: Option<String>,
+    persist_sessions: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]

@@ -41,6 +41,9 @@ const IDLE_THRESHOLD: Duration = Duration::from_millis(500);
 /// Default workspace/tab for sessions created without one.
 const DEFAULT_WORKSPACE: &str = "default";
 const DEFAULT_TAB: &str = "main";
+/// Grace after an ephemeral session's last client detaches before it's reaped —
+/// covers spawn→attach handoff and brief reconnects.
+const REAP_GRACE: Duration = Duration::from_secs(3);
 
 /// Root Charon state dir. `$CHARON_DIR` overrides (used by tests for isolation).
 fn charon_dir() -> PathBuf {
@@ -176,6 +179,10 @@ struct DaemonSession {
     log_len: usize,
     /// When output last arrived; drives idle/working heuristics.
     last_output_at: Instant,
+    /// Ephemeral sessions die when their last client detaches and never persist.
+    ephemeral: bool,
+    /// If set, an ephemeral session with no clients is reaped at this time.
+    reap_at: Option<Instant>,
 }
 
 impl DaemonSession {
@@ -413,6 +420,8 @@ impl Daemon {
                 log: None,
                 log_len: 0,
                 last_output_at: Instant::now(),
+                ephemeral: false,
+                reap_at: None,
             };
             sess.open_log(false); // append handle, kept for respawn
             debug_log(&format!("restored session {}", sess.id));
@@ -440,6 +449,8 @@ impl Daemon {
             }
             // 3. Poll every session for output and fan it out.
             self.pump_sessions();
+            // 4. Reap ephemeral sessions whose grace has elapsed with no clients.
+            self.reap_ephemeral();
             thread::sleep(TICK);
         }
     }
@@ -452,8 +463,14 @@ impl Daemon {
             }
             Inbound::Disconnect(id) => {
                 self.clients.remove(&id);
+                let now = Instant::now();
                 for sess in self.sessions.values_mut() {
                     sess.subscribers.retain(|c| *c != id);
+                    // Ephemeral sessions whose last client just left are reaped
+                    // after a short grace (allows reattach / spawn→attach handoff).
+                    if sess.ephemeral && sess.subscribers.is_empty() && sess.reap_at.is_none() {
+                        sess.reap_at = Some(now + REAP_GRACE);
+                    }
                 }
                 debug_log(&format!("client {id} disconnected"));
             }
@@ -520,9 +537,10 @@ impl Daemon {
                 tab,
                 target,
                 server,
+                ephemeral,
                 cols,
                 rows,
-            } => self.handle_spawn(client, kind, cmd, title, cwd, session, workspace, tab, target, server, cols, rows),
+            } => self.handle_spawn(client, kind, cmd, title, cwd, session, workspace, tab, target, server, ephemeral, cols, rows),
             ClientMsg::Move {
                 session,
                 workspace,
@@ -559,6 +577,7 @@ impl Daemon {
         if !s.subscribers.contains(&client) {
             s.subscribers.push(client);
         }
+        s.reap_at = None; // a client attached → cancel any pending ephemeral reap
         if cols > 0 && rows > 0 {
             s.cols = cols;
             s.rows = rows;
@@ -599,6 +618,7 @@ impl Daemon {
         tab: Option<String>,
         target: Option<String>,
         server: Option<String>,
+        ephemeral: bool,
         cols: u16,
         rows: u16,
     ) {
@@ -648,9 +668,15 @@ impl Daemon {
                     log: None,
                     log_len: 0,
                     last_output_at: Instant::now(),
+                    ephemeral,
+                    reap_at: None,
                 };
-                sess.persist_meta();
-                sess.open_log(true);
+                // Ephemeral sessions are in-memory only (no disk persistence);
+                // persistent ones write meta + scrollback so they survive a restart.
+                if !ephemeral {
+                    sess.persist_meta();
+                    sess.open_log(true);
+                }
                 self.sessions.insert(id.clone(), sess);
                 self.send(client, &DaemonMsg::Spawned { session: id.clone() });
                 self.broadcast_all(&DaemonMsg::Status {
@@ -667,6 +693,24 @@ impl Daemon {
                     session: None,
                 },
             ),
+        }
+    }
+
+    /// Reap ephemeral sessions whose grace elapsed with no attached clients.
+    fn reap_ephemeral(&mut self) {
+        let now = Instant::now();
+        let dead: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|(_, s)| {
+                s.ephemeral && s.subscribers.is_empty() && s.reap_at.map(|t| t <= now).unwrap_or(false)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in dead {
+            self.sessions.remove(&id);
+            debug_log(&format!("reaped ephemeral session {id}"));
+            self.broadcast_all(&DaemonMsg::Exited { session: id });
         }
     }
 
