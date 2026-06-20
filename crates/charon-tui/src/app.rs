@@ -78,6 +78,8 @@ pub struct SessionsState {
     pub daemon_sessions: Vec<SessionInfo>,
     /// Manual split layout for the grid, keyed by pane `uid`. `None` = auto-tile.
     pub layout: Option<crate::layout::Node>,
+    /// When true, the focused pane is shown fullscreen (zoom).
+    pub zoom: bool,
 }
 
 impl SessionsState {
@@ -100,6 +102,7 @@ impl SessionsState {
             daemon_states: HashMap::new(),
             daemon_sessions: Vec::new(),
             layout: None,
+            zoom: false,
         }
     }
 }

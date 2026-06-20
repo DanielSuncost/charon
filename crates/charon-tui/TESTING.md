@@ -94,6 +94,8 @@ PY
    - [ ] `<` / `>` resize the focused split; `=` resets to auto-tile.
    - [ ] Closing a pane (`w`) collapses the split; remaining panes re-fill.
    - [ ] `p` pins the focused daemon pane → 📌 appears; quit & relaunch → it persisted.
+   - [ ] `z` zooms the focused pane fullscreen (toggle).
+   - [ ] `X` kills the focused daemon session (gone from grid + `--daemon-list`).
 
 ### C. Detach / reattach
 - [ ] Quit the TUI (the daemon keeps running). Relaunch → F3 → panes repaint with prior
