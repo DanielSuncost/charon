@@ -6,6 +6,14 @@ use crate::parser::AnsiParser;
 use crate::terminal::TerminalState;
 
 use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Process-wide stable unique id for a pane (distinct from `id`, which callers
+/// set non-uniquely). Used as the key for the manual split-layout tree.
+pub fn next_uid() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
 
 #[allow(dead_code)] // session metadata; not all fields read in the TUI
 pub struct SessionCell {
@@ -14,6 +22,8 @@ pub struct SessionCell {
     pub backend: Box<dyn ByteStream>,
     pub title: String,
     pub id: u64,
+    /// Stable, process-unique id for layout/tracking (see [`next_uid`]).
+    pub uid: u64,
     pub backend_type: BackendType,
     pub viewport_scroll: usize,
 }
@@ -44,6 +54,7 @@ impl SessionCell {
             backend: Box::new(pty),
             title: title.to_string(),
             id,
+            uid: next_uid(),
             backend_type: BackendType::LocalPty,
             viewport_scroll: 0,
         })
@@ -58,6 +69,7 @@ impl SessionCell {
             backend: Box::new(crate::backend::NullStream),
             title: title.to_string(),
             id,
+            uid: next_uid(),
             backend_type: BackendType::LocalPty,
             viewport_scroll: 0,
         }
@@ -72,6 +84,7 @@ impl SessionCell {
             backend: Box::new(tmux),
             title: title.to_string(),
             id,
+            uid: next_uid(),
             backend_type: BackendType::TmuxPane { session_name: session_name.to_string() },
             viewport_scroll: 0,
         })
@@ -86,6 +99,7 @@ impl SessionCell {
             backend: Box::new(boat),
             title: title.to_string(),
             id,
+            uid: next_uid(),
             backend_type: BackendType::BoatPane { session_id: session_id.to_string() },
             viewport_scroll: 0,
         })
@@ -99,6 +113,7 @@ impl SessionCell {
             backend: Box::new(boat),
             title: title.to_string(),
             id,
+            uid: next_uid(),
             backend_type: BackendType::BoatPane { session_id: session_id.to_string() },
             viewport_scroll: 0,
         })
@@ -113,6 +128,7 @@ impl SessionCell {
             backend: Box::new(boat),
             title: title.to_string(),
             id,
+            uid: next_uid(),
             backend_type: BackendType::RemoteBoat { server_id: server.id.clone(), session_id: session_id.to_string() },
             viewport_scroll: 0,
         })
@@ -129,6 +145,7 @@ impl SessionCell {
             backend: Box::new(client),
             title: title.to_string(),
             id,
+            uid: next_uid(),
             backend_type: BackendType::DaemonPane { session_id: session_id.to_string() },
             viewport_scroll: 0,
         })
@@ -142,6 +159,7 @@ impl SessionCell {
             backend: Box::new(charon),
             title: title.to_string(),
             id,
+            uid: next_uid(),
             backend_type: BackendType::CharonPane { socket_path: socket_path.to_string() },
             viewport_scroll: 0,
         })
