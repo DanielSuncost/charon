@@ -331,7 +331,8 @@ fn build_initial_sessions(mode: &LaunchMode, outer_w: u16, outer_h: u16) -> io::
             let sock = daemon::control_socket();
             let (_, _, rects) = compute_grid(1, outer_w, outer_h.saturating_sub(2));
             if let Some(r) = rects.first() {
-                let sid = daemon_client::spawn_session(&sock, cmd, r.width, r.height)
+                let ephemeral = !config::active().persist_sessions;
+                let sid = daemon_client::spawn_session(&sock, cmd, r.width, r.height, ephemeral)
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("daemon spawn failed: {e}")))?;
                 let title = cmd.first().map(|s| s.as_str()).unwrap_or("shell");
                 let sock_str = sock.to_string_lossy();
@@ -2403,7 +2404,8 @@ fn split_focused_pane(app: &mut App, dir: layout::Dir, _outer_w: u16, _outer_h: 
     daemon::ensure_running()?;
     let sock = daemon::control_socket();
     let sock_str = sock.to_string_lossy().to_string();
-    let new_sid = daemon_client::spawn_session(&sock, &[], 80, 24)
+    let ephemeral = !config::active().persist_sessions;
+    let new_sid = daemon_client::spawn_session(&sock, &[], 80, 24, ephemeral)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("split spawn failed: {e}")))?;
     let cell = SessionCell::attach_daemon(app.sessions.panes.len() as u64, &new_sid, &new_sid, &sock_str, 80, 24)?;
     let new_uid = cell.uid;

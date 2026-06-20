@@ -37,6 +37,7 @@ Expected: **all green** (currently 33 tests). Build must be warning-clean except
 | `tests/daemon_workspace.rs` | workspace/tab spawn, defaults, `move`, restart persistence |
 | `tests/daemon_handoff.rs` | graceful `shutdown` → socket released + process exits → restore |
 | `tests/daemon_tmux.rs` | adopt a real tmux session; re-attaches (not exited) after restart. **Skips if tmux is absent.** |
+| `tests/daemon_ephemeral.rs` | ephemeral session is reaped after its client disconnects (grace); persistent one survives |
 
 Notes:
 - Integration tests set `CHARON_DIR` to a unique temp dir and clean up after.
@@ -122,9 +123,13 @@ tmux kill-session -t demo
 cat > "$CHARON_DIR/config.toml" <<'TOML'
 [ui]
 theme = "midnight"
+persist_sessions = false     # default: TUI sessions are ephemeral (end on close)
 TOML
 "$BIN/charon"                                    # header + daemon borders use the midnight palette
 ```
+- [ ] **Ephemeral default:** with `persist_sessions=false`, a session you `|`-split
+      in the TUI disappears after you quit (Claude-Code style). Set `true` → it
+      survives and reattaches on next launch.
 
 ### Teardown
 ```bash

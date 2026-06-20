@@ -35,6 +35,10 @@
 >   daemon (state already persisted; socket released); `charon --daemon-upgrade`
 >   shuts down + starts the fresh binary; sessions are restored. Zero-downtime
 >   fd-passing of live PTYs is deferred (see §7).
+> - **Session lifetime:** sessions can be `ephemeral` (reaped shortly after their last
+>   client detaches, never persisted — Claude-Code style) or persistent. The TUI spawns
+>   ephemeral by default; `[ui] persist_sessions = true` opts into persistence. A short
+>   reap grace covers spawn→attach handoff. (`tests/daemon_ephemeral.rs`.)
 > - **Spawn kinds:** the daemon owns all backend types — `local` (cmd/cwd), `tmux`,
 >   `boat`, `charon`, `remote` (`target`/`server` on `spawn`). External-backed kinds
 >   (tmux/boat/charon/remote) **re-attach** on daemon restart instead of going
