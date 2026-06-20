@@ -274,6 +274,13 @@ pub fn shutdown(socket: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// One-shot: terminate a session (and delete its persisted history).
+pub fn kill_session(socket: &Path, session: &str) -> io::Result<()> {
+    let mut stream = UnixStream::connect(socket)?;
+    send(&mut stream, &hello())?;
+    send(&mut stream, &ClientMsg::Kill { session: session.to_string() })
+}
+
 /// One-shot: pin/unpin a session's lifetime (persist vs ephemeral).
 pub fn set_persist(socket: &Path, session: &str, persist: bool) -> io::Result<()> {
     let mut stream = UnixStream::connect(socket)?;

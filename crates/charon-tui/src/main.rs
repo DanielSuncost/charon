@@ -2354,6 +2354,10 @@ fn pane_agent_id(cell: &SessionCell, payload: Option<&Value>, idx: usize) -> Str
 }
 
 fn visible_pane_indices(app: &mut App) -> Vec<usize> {
+    // Zoom: show only the focused pane fullscreen.
+    if app.sessions.zoom && app.sessions.focused < app.sessions.panes.len() {
+        return vec![app.sessions.focused];
+    }
     let allowed = visible_session_agent_ids(app);
     let matched: Vec<usize> = app.sessions.panes.iter().enumerate().filter_map(|(i, cell)| {
         let id = pane_agent_id(cell, app.chat.refresh_payload.as_ref(), i);
@@ -3789,6 +3793,29 @@ fn main() -> io::Result<()> {
                                     }
                                     KeyCode::Char('=') if app.sessions.section == SessionsSection::Grid => {
                                         app.sessions.layout = None;
+                                        session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
+                                        needs_full_redraw = true;
+                                    }
+                                    // Zoom: show the focused pane fullscreen.
+                                    KeyCode::Char('z') if app.sessions.section == SessionsSection::Grid => {
+                                        app.sessions.zoom = !app.sessions.zoom;
+                                        session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
+                                        needs_full_redraw = true;
+                                    }
+                                    // Kill the focused daemon session (terminate + delete history).
+                                    KeyCode::Char('X') if app.sessions.section == SessionsSection::Grid => {
+                                        if let Some(BackendType::DaemonPane { session_id }) =
+                                            app.sessions.panes.get(app.sessions.focused).map(|c| c.backend_type.clone())
+                                        {
+                                            let _ = daemon_client::kill_session(&daemon::control_socket(), &session_id);
+                                        }
+                                        if app.sessions.panes.len() > 1 {
+                                            app.sessions.panes.remove(app.sessions.focused);
+                                            if app.sessions.focused >= app.sessions.panes.len() {
+                                                app.sessions.focused = app.sessions.panes.len().saturating_sub(1);
+                                            }
+                                        }
+                                        app.sessions.zoom = false;
                                         session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
                                         needs_full_redraw = true;
                                     }
