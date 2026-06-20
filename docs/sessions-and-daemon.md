@@ -75,8 +75,10 @@ persist_sessions = false   # default: ephemeral (sessions end on close)
 | `-` | split the focused pane **stacked** |
 | `<` / `>` | resize the focused split |
 | `=` | reset the layout to auto-tile |
+| `z` | zoom the focused pane to fullscreen (toggle) |
 | `p` | pin/unpin the focused daemon pane (persist ↔ ephemeral); 📌 marks pinned |
-| `w` | close the focused pane |
+| `w` | close the focused pane (detach the view; session lives per its lifetime) |
+| `X` | kill the focused daemon session (terminate + delete its history) |
 | `F6` | toggle mouse handling (app vs terminal) |
 
 Pane borders are colored by state; titles are prefixed with their workspace.
