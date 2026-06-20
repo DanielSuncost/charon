@@ -82,6 +82,9 @@ pub enum ClientMsg {
         #[serde(default)]
         rows: u16,
     },
+    /// Pin/unpin a session's lifetime: `persist=true` makes it survive client
+    /// detach (and start persisting to disk); `false` makes it ephemeral.
+    SetPersist { session: String, persist: bool },
     /// Move a session into a workspace and/or tab (only provided fields change).
     Move {
         session: String,
@@ -166,6 +169,8 @@ pub struct SessionInfo {
     pub workspace: String,
     #[serde(default)]
     pub tab: String,
+    #[serde(default)]
+    pub ephemeral: bool,
     pub cols: u16,
     pub rows: u16,
     pub state: String,

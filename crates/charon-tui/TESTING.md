@@ -38,6 +38,7 @@ Expected: **all green** (currently 33 tests). Build must be warning-clean except
 | `tests/daemon_handoff.rs` | graceful `shutdown` → socket released + process exits → restore |
 | `tests/daemon_tmux.rs` | adopt a real tmux session; re-attaches (not exited) after restart. **Skips if tmux is absent.** |
 | `tests/daemon_ephemeral.rs` | ephemeral session is reaped after its client disconnects (grace); persistent one survives |
+| `tests/daemon_persist_toggle.rs` | `set_persist` pins an ephemeral session → it survives disconnect and reports `ephemeral=false` |
 
 Notes:
 - Integration tests set `CHARON_DIR` to a unique temp dir and clean up after.
@@ -92,6 +93,7 @@ PY
    - [ ] `|` splits it side-by-side with a **new shell**; `-` splits stacked.
    - [ ] `<` / `>` resize the focused split; `=` resets to auto-tile.
    - [ ] Closing a pane (`w`) collapses the split; remaining panes re-fill.
+   - [ ] `p` pins the focused daemon pane → 📌 appears; quit & relaunch → it persisted.
 
 ### C. Detach / reattach
 - [ ] Quit the TUI (the daemon keeps running). Relaunch → F3 → panes repaint with prior

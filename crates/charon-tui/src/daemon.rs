@@ -193,6 +193,7 @@ impl DaemonSession {
             kind: self.kind.clone(),
             workspace: self.workspace.clone(),
             tab: self.tab.clone(),
+            ephemeral: self.ephemeral,
             cols: self.cols,
             rows: self.rows,
             state: self.state.clone(),
@@ -546,6 +547,7 @@ impl Daemon {
                 workspace,
                 tab,
             } => self.handle_move(client, &session, workspace, tab),
+            ClientMsg::SetPersist { session, persist } => self.handle_set_persist(client, &session, persist),
             ClientMsg::Kill { session } => {
                 if self.sessions.remove(&session).is_some() {
                     // Explicit kill discards the persisted history too.
@@ -694,6 +696,45 @@ impl Daemon {
                 },
             ),
         }
+    }
+
+    /// Pin/unpin a session's lifetime. Pinning (persist) starts on-disk
+    /// persistence (writing current scrollback) and cancels any reap; unpinning
+    /// makes it ephemeral and drops its on-disk state.
+    fn handle_set_persist(&mut self, client: u64, id: &str, persist: bool) {
+        let Some(s) = self.sessions.get_mut(id) else {
+            self.send(
+                client,
+                &DaemonMsg::Error {
+                    code: "no_session".into(),
+                    message: format!("no such session: {id}"),
+                    session: Some(id.to_string()),
+                },
+            );
+            return;
+        };
+        if persist {
+            s.ephemeral = false;
+            s.reap_at = None;
+            s.persist_meta();
+            s.open_log(true);
+            let snapshot = s.scrollback.clone();
+            s.append_log(&snapshot); // seed the on-disk log with current history
+        } else {
+            s.ephemeral = true;
+            s.log = None;
+            s.log_len = 0;
+            let _ = std::fs::remove_dir_all(session_dir(id));
+            if s.subscribers.is_empty() {
+                s.reap_at = Some(Instant::now() + REAP_GRACE);
+            }
+        }
+        // Reflect the change in any client's inventory on next poll.
+        self.broadcast_all(&DaemonMsg::Status {
+            session: id.to_string(),
+            state: self.sessions.get(id).map(|s| s.state.clone()).unwrap_or_default(),
+            detail: Some(if persist { "pinned".into() } else { "unpinned".into() }),
+        });
     }
 
     /// Reap ephemeral sessions whose grace elapsed with no attached clients.
