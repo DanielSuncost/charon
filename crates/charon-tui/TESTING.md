@@ -87,6 +87,10 @@ PY
    - [ ] Enter on a header/session toggles its pane visibility in the grid.
 3. Interact: focus a pane, **Enter** (terminal mode), type `echo hi`, **Ctrl+]** to exit.
    - [ ] Input/output works against the daemon-backed pane.
+4. Manual splits (Grid section, focus a pane):
+   - [ ] `|` splits it side-by-side with a **new shell**; `-` splits stacked.
+   - [ ] `<` / `>` resize the focused split; `=` resets to auto-tile.
+   - [ ] Closing a pane (`w`) collapses the split; remaining panes re-fill.
 
 ### C. Detach / reattach
 - [ ] Quit the TUI (the daemon keeps running). Relaunch → F3 → panes repaint with prior
@@ -142,6 +146,7 @@ pkill -f "$BIN/charond"; rm -rf "$CHARON_DIR"
 ## 4. Interactive surfaces NOT covered by automated tests (verify by hand)
 - F3 grid rendering, focus/navigation, status border colors, workspace title prefixes.
 - Sidebar workspace grouping + visibility toggles.
-- Manual split layout **wiring** (the `layout.rs` engine is unit-tested; the keybinding/
-  drag/render integration is pending and must be verified via §2 once added).
+- Manual split layout: the `layout.rs` engine (incl. `reconcile`/`linear`) is unit-tested;
+  the keybinding + render integration (`|`/`-`/`=`/`<`/`>`) is wired but **interactive** —
+  verify via §2-B step 4. Mouse drag-to-resize on split borders is not yet implemented.
 - Mouse interactions (click-focus, selection, scroll).

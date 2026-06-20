@@ -135,6 +135,56 @@ impl Node {
         }
     }
 
+    /// Build an evenly-sized left-leaning horizontal layout from `uids`.
+    pub fn linear(uids: &[u64]) -> Option<Node> {
+        let mut iter = uids.iter();
+        let mut node = Node::Leaf(*iter.next()?);
+        let mut count = 1u32;
+        for &u in iter {
+            count += 1;
+            let ratio = (count - 1) as f32 / count as f32;
+            node = Node::Split {
+                dir: Dir::Horizontal,
+                ratio,
+                a: Box::new(node),
+                b: Box::new(Node::Leaf(u)),
+            };
+        }
+        Some(node)
+    }
+
+    /// Reconcile a layout against the set of currently-visible panes: drop leaves
+    /// that vanished (collapsing their splits) and append newly-visible panes,
+    /// preserving the existing arrangement. Returns `None` if nothing is visible.
+    pub fn reconcile(self, visible: &[u64]) -> Option<Node> {
+        use std::collections::HashSet;
+        if visible.is_empty() {
+            return None;
+        }
+        let vis: HashSet<u64> = visible.iter().copied().collect();
+        // Remove leaves that are no longer visible.
+        let mut tree = Some(self);
+        for id in tree.as_ref().map(Node::leaves).unwrap_or_default() {
+            if !vis.contains(&id) {
+                tree = tree.and_then(|n| n.remove(id));
+            }
+        }
+        // Append newly-visible panes not already in the tree.
+        let present: HashSet<u64> = tree.as_ref().map(|n| n.leaves().into_iter().collect()).unwrap_or_default();
+        for &id in visible {
+            if !present.contains(&id) {
+                tree = Some(match tree {
+                    None => Node::Leaf(id),
+                    Some(n) => {
+                        let target = n.leaves()[0];
+                        n.split(target, id, Dir::Horizontal, 0.5)
+                    }
+                });
+            }
+        }
+        tree
+    }
+
     /// Which pane's rect contains the point `(px, py)`, given the same `area`/`gap`.
     pub fn leaf_at(&self, area: Rect, gap: u16, px: u16, py: u16) -> Option<u64> {
         self.compute(area, gap)
@@ -236,6 +286,38 @@ mod tests {
         assert_eq!(t.leaf_at(AREA, 0, 10, 10), Some(1));
         assert_eq!(t.leaf_at(AREA, 0, 80, 10), Some(2));
         assert_eq!(t.leaf_at(AREA, 0, 200, 10), None);
+    }
+
+    #[test]
+    fn linear_is_even() {
+        let t = Node::linear(&[1, 2, 3, 4]).unwrap();
+        assert_eq!(t.leaves(), vec![1, 2, 3, 4]);
+        let rects = t.compute(AREA, 0);
+        // four even columns over width 100 → ~25 each
+        for (_, r) in &rects {
+            assert!((24..=26).contains(&r.width), "width {} not ~25", r.width);
+        }
+        assert!(Node::linear(&[]).is_none());
+    }
+
+    #[test]
+    fn reconcile_drops_and_appends() {
+        // start with a manual split [1 | 2]
+        let t = Node::Leaf(1).split(1, 2, Dir::Vertical, 0.3);
+        // pane 2 vanished, pane 3 appeared
+        let t = t.reconcile(&[1, 3]).unwrap();
+        let leaves = t.leaves();
+        assert!(leaves.contains(&1) && leaves.contains(&3) && !leaves.contains(&2));
+        assert_eq!(leaves.len(), 2);
+        // everything gone → None
+        assert!(t.reconcile(&[]).is_none());
+    }
+
+    #[test]
+    fn reconcile_preserves_existing_split_dir() {
+        let t = Node::Leaf(1).split(1, 2, Dir::Vertical, 0.3);
+        let t2 = t.clone().reconcile(&[1, 2]).unwrap();
+        assert_eq!(t, t2); // no change when the set matches
     }
 
     #[test]

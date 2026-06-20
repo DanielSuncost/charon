@@ -16,6 +16,7 @@ mod daemon;
 mod daemon_client;
 mod detect;
 mod f1_mono;
+mod layout;
 mod grid;
 mod native_session;
 mod parser;
@@ -461,9 +462,9 @@ fn draw_header<W: Write>(stdout: &mut W, app: &App, w: u16) -> io::Result<()> {
             if app.sessions.terminal_mode {
                 " │ terminal mode (Ctrl+] / Ctrl+G / F4)"
             } else if app.sessions.app_mouse_mode {
-                " │ grid mode (Enter to interact) │ F6:mouse terminal"
+                " │ grid mode (Enter to interact) │ |/- split = reset │ F6:mouse terminal"
             } else {
-                " │ grid mode (native select/copy) │ F6:mouse app"
+                " │ grid mode (native select/copy) │ |/- split = reset │ F6:mouse app"
             }
         }
         View::InterAgent => {
@@ -2388,6 +2389,37 @@ fn ensure_native_self_pane(app: &mut App, server: Option<&NativeSessionServer>, 
     Ok(true)
 }
 
+/// Split the focused pane: spawn a new daemon shell and place it beside the
+/// focused pane in the manual layout (seeding the layout from the current grid if
+/// none is active yet). Returns whether the grid changed.
+fn split_focused_pane(app: &mut App, dir: layout::Dir, _outer_w: u16, _outer_h: u16) -> io::Result<bool> {
+    let Some(focused_uid) = app.sessions.panes.get(app.sessions.focused).map(|c| c.uid) else {
+        return Ok(false);
+    };
+    let pre_uids: Vec<u64> = visible_pane_indices(app)
+        .iter()
+        .filter_map(|i| app.sessions.panes.get(*i).map(|c| c.uid))
+        .collect();
+    daemon::ensure_running()?;
+    let sock = daemon::control_socket();
+    let sock_str = sock.to_string_lossy().to_string();
+    let new_sid = daemon_client::spawn_session(&sock, &[], 80, 24)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("split spawn failed: {e}")))?;
+    let cell = SessionCell::attach_daemon(app.sessions.panes.len() as u64, &new_sid, &new_sid, &sock_str, 80, 24)?;
+    let new_uid = cell.uid;
+    // Make sure the new session is shown in the grid.
+    app.sessions.visible_agents.insert(new_sid.clone());
+    app.sessions.panes.push(cell);
+    let base = app.sessions.layout.take().or_else(|| layout::Node::linear(&pre_uids));
+    let tree = match base {
+        Some(t) => t.split(focused_uid, new_uid, dir, 0.5),
+        None => layout::Node::Leaf(new_uid),
+    };
+    app.sessions.layout = Some(tree);
+    app.sessions.focused = app.sessions.panes.len() - 1;
+    Ok(true)
+}
+
 /// Surface live `charond` sessions as panes in the F3 grid. Additive and
 /// independent of the Python payload path: only runs when a daemon is already
 /// running, attaches any session not yet shown, and skips exited ones.
@@ -2609,8 +2641,35 @@ fn session_grid_rects(app: &mut App, outer_w: u16, outer_h: u16) -> Vec<Rect> {
     let sidebar_w = ((outer_w as f32) * 0.125) as u16;
     let grid_x = 1 + sidebar_w.min(outer_w.saturating_sub(8));
     let grid_w = outer_w.saturating_sub(grid_x + 1);
+    let grid_h = outer_h.saturating_sub(2);
     let visible = visible_pane_indices(app);
-    let (_, _, rects) = compute_grid(visible.len().max(1), grid_w, outer_h.saturating_sub(2));
+
+    // Manual split layout, if active: reconcile against the visible panes' uids and
+    // place each pane per the layout tree. Falls back to auto-tile if it can't.
+    if app.sessions.layout.is_some() {
+        let visible_uids: Vec<u64> = visible
+            .iter()
+            .filter_map(|i| app.sessions.panes.get(*i).map(|c| c.uid))
+            .collect();
+        let reconciled = app.sessions.layout.take().and_then(|t| t.reconcile(&visible_uids));
+        app.sessions.layout = reconciled.clone();
+        if let Some(tree) = reconciled {
+            let area = layout::Rect { x: grid_x, y: 1, width: grid_w, height: grid_h };
+            let placed: std::collections::HashMap<u64, layout::Rect> = tree.compute(area, 1).into_iter().collect();
+            return visible
+                .iter()
+                .map(|i| {
+                    let uid = app.sessions.panes.get(*i).map(|c| c.uid).unwrap_or(0);
+                    match placed.get(&uid) {
+                        Some(r) => Rect { x: r.x, y: r.y, width: r.width, height: r.height },
+                        None => Rect { x: grid_x, y: 1, width: grid_w.max(1), height: grid_h.max(1) },
+                    }
+                })
+                .collect();
+        }
+    }
+
+    let (_, _, rects) = compute_grid(visible.len().max(1), grid_w, grid_h);
     rects.into_iter().map(|mut r| { r.x += grid_x; r.y += 1; r }).collect()
 }
 
@@ -3703,6 +3762,35 @@ fn main() -> io::Result<()> {
                                             }
                                             session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
                                             needs_full_redraw = true;
+                                        }
+                                    }
+                                    // Manual splits (Grid section): | side-by-side, - stacked,
+                                    // = reset to auto-tile, < / > resize the focused split.
+                                    KeyCode::Char('|') if app.sessions.section == SessionsSection::Grid => {
+                                        if split_focused_pane(&mut app, layout::Dir::Horizontal, outer_w, outer_h)? {
+                                            session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
+                                            needs_full_redraw = true;
+                                        }
+                                    }
+                                    KeyCode::Char('-') if app.sessions.section == SessionsSection::Grid => {
+                                        if split_focused_pane(&mut app, layout::Dir::Vertical, outer_w, outer_h)? {
+                                            session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
+                                            needs_full_redraw = true;
+                                        }
+                                    }
+                                    KeyCode::Char('=') if app.sessions.section == SessionsSection::Grid => {
+                                        app.sessions.layout = None;
+                                        session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
+                                        needs_full_redraw = true;
+                                    }
+                                    KeyCode::Char('<') | KeyCode::Char('>') if app.sessions.section == SessionsSection::Grid => {
+                                        if let Some(uid) = app.sessions.panes.get(app.sessions.focused).map(|c| c.uid) {
+                                            if let Some(tree) = app.sessions.layout.as_mut() {
+                                                let delta = if key.code == KeyCode::Char('>') { 0.05 } else { -0.05 };
+                                                tree.resize(uid, delta);
+                                                session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
+                                                needs_full_redraw = true;
+                                            }
                                         }
                                     }
                                     _ => {}
