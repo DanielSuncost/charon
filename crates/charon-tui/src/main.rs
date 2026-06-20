@@ -2805,6 +2805,13 @@ fn draw_sessions<W: Write>(stdout: &mut W, app: &mut App, rects: &[Rect], force_
                 None => continue,
             };
             let focused = *pane_i == app.sessions.focused && app.sessions.section == SessionsSection::Grid;
+            // Pin marker for persistent daemon panes.
+            let title = if let BackendType::DaemonPane { session_id } = &backend_type {
+                let persistent = app.sessions.daemon_sessions.iter().find(|s| &s.id == session_id).map(|s| !s.ephemeral).unwrap_or(false);
+                if persistent { format!("📌 {title}") } else { title }
+            } else {
+                title
+            };
             // Daemon panes color their border by the daemon-reported state.
             match &backend_type {
                 BackendType::DaemonPane { session_id } if !focused => {
@@ -3784,6 +3791,18 @@ fn main() -> io::Result<()> {
                                         app.sessions.layout = None;
                                         session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
                                         needs_full_redraw = true;
+                                    }
+                                    // Pin/unpin the focused daemon pane (persist vs ephemeral).
+                                    KeyCode::Char('p') if app.sessions.section == SessionsSection::Grid => {
+                                        if let Some(BackendType::DaemonPane { session_id }) =
+                                            app.sessions.panes.get(app.sessions.focused).map(|c| c.backend_type.clone())
+                                        {
+                                            let currently_ephemeral = app.sessions.daemon_sessions.iter()
+                                                .find(|s| s.id == session_id).map(|s| s.ephemeral).unwrap_or(true);
+                                            let _ = daemon_client::set_persist(&daemon::control_socket(), &session_id, currently_ephemeral);
+                                            last_daemon_poll = Instant::now() - Duration::from_secs(2); // refresh soon
+                                            needs_full_redraw = true;
+                                        }
                                     }
                                     KeyCode::Char('<') | KeyCode::Char('>') if app.sessions.section == SessionsSection::Grid => {
                                         if let Some(uid) = app.sessions.panes.get(app.sessions.focused).map(|c| c.uid) {

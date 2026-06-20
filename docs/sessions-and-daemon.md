@@ -57,6 +57,8 @@ persist_sessions = false   # default: ephemeral (sessions end on close)
 - **Persistent** sessions write their scrollback to `~/.charon/sessions/<id>/` and come
   back when you relaunch; local ones return as `exited` and can be respawned, while
   tmux/boat/remote ones re-attach live.
+- **Pin individual panes:** regardless of the global default, press `p` on a pane in the
+  F3 grid to pin it persistent (📌) or unpin it back to ephemeral.
 
 ---
 
@@ -73,6 +75,7 @@ persist_sessions = false   # default: ephemeral (sessions end on close)
 | `-` | split the focused pane **stacked** |
 | `<` / `>` | resize the focused split |
 | `=` | reset the layout to auto-tile |
+| `p` | pin/unpin the focused daemon pane (persist ↔ ephemeral); 📌 marks pinned |
 | `w` | close the focused pane |
 | `F6` | toggle mouse handling (app vs terminal) |
 

@@ -274,6 +274,19 @@ pub fn shutdown(socket: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// One-shot: pin/unpin a session's lifetime (persist vs ephemeral).
+pub fn set_persist(socket: &Path, session: &str, persist: bool) -> io::Result<()> {
+    let mut stream = UnixStream::connect(socket)?;
+    send(&mut stream, &hello())?;
+    send(
+        &mut stream,
+        &ClientMsg::SetPersist {
+            session: session.to_string(),
+            persist,
+        },
+    )
+}
+
 fn hello() -> ClientMsg {
     ClientMsg::Hello {
         proto: PROTO_VERSION,
