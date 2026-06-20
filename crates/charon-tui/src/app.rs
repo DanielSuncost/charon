@@ -76,6 +76,8 @@ pub struct SessionsState {
     pub daemon_states: HashMap<String, String>,
     /// Full charond inventory from the latest poll, for sidebar workspace grouping.
     pub daemon_sessions: Vec<SessionInfo>,
+    /// Manual split layout for the grid, keyed by pane `uid`. `None` = auto-tile.
+    pub layout: Option<crate::layout::Node>,
 }
 
 impl SessionsState {
@@ -97,6 +99,7 @@ impl SessionsState {
             known_session_ids: HashSet::new(),
             daemon_states: HashMap::new(),
             daemon_sessions: Vec::new(),
+            layout: None,
         }
     }
 }
