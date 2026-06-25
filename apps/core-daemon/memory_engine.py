@@ -506,8 +506,16 @@ class MemoryEngine:
         include_profile: bool = False,
         include_version_chains: bool = True,
         temporal_range: tuple[str, str] | None = None,
+        recency_weight: float = 0.0,
     ) -> RecallResult:
-        """Hybrid recall: vector + FTS5 + reciprocal rank fusion."""
+        """Hybrid recall: vector + FTS5 + reciprocal rank fusion.
+
+        recency_weight (opt-in, default 0): adds a recency bonus to each candidate
+        scaled by where its event_date falls in the candidate set's time range
+        (newest = +recency_weight, oldest = +0). Use it for temporal/latest-value
+        queries where the most recent matching memory should win; leave it 0 for
+        ordinary semantic recall (no behavior change).
+        """
         t0 = time.monotonic()
 
         query_vec = embed_one(query, self.state_dir)
@@ -551,6 +559,24 @@ class MemoryEngine:
         for mem_id, df in self._exact_lookup(query, container_tag=container_tag):
             scores[mem_id] = scores.get(mem_id, 0) + (EXACT_MATCH_BOOST / df)
             sources[mem_id] = "exact"
+
+        # Recency bonus (opt-in). Rank-based over the candidates' event_dates so it
+        # is robust to date format and magnitude: newest date gets +recency_weight,
+        # oldest +0, others linearly between. Lets latest-value/temporal queries
+        # surface the most recent matching memory over an equally-similar stale one.
+        if recency_weight and scores:
+            rdb = self._get_db()
+            cand = list(scores.keys())
+            qmarks = ",".join("?" * len(cand))
+            drows = rdb.execute(
+                f"SELECT id, event_date FROM memories WHERE id IN ({qmarks})", cand
+            ).fetchall()
+            dated = {r["id"]: r["event_date"] for r in drows if r["event_date"]}
+            uniq = sorted(set(dated.values()))
+            if len(uniq) >= 2:
+                rankf = {d: i / (len(uniq) - 1) for i, d in enumerate(uniq)}
+                for mid, d in dated.items():
+                    scores[mid] += recency_weight * rankf[d]
 
         # Sort by combined score
         ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:limit]
