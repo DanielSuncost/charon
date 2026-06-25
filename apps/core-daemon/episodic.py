@@ -210,6 +210,54 @@ def segment_by_conversation(engine, container_tag: str = "default", summarizer=N
     return created
 
 
+def _time_key(e: Episode) -> str:
+    return e.end_date or e.start_date or e.created_at or ""
+
+
+def recent_episodes(engine, container_tag: str | None = None, n: int = 5) -> list[Episode]:
+    """The N most recent episodes (the 'what did we just work on' query)."""
+    eps = list_episodes(engine, container_tag)
+    eps.sort(key=_time_key, reverse=True)
+    return eps[:n]
+
+
+def episodes_in_range(engine, start: str, end: str,
+                      container_tag: str | None = None) -> list[Episode]:
+    """All episodes overlapping the [start, end] date window ('what did I do in March')."""
+    out = []
+    for e in list_episodes(engine, container_tag):
+        s = e.start_date or e.end_date or e.created_at
+        f = e.end_date or e.start_date or e.created_at
+        if s and f and s <= end and f >= start:
+            out.append(e)
+    out.sort(key=lambda e: e.start_date or e.created_at)
+    return out
+
+
+def episode_before(engine, episode_id: str, container_tag: str | None = None) -> Episode | None:
+    """The episode immediately preceding `episode_id` in time ('what came before X')."""
+    anchor = get_episode(engine, episode_id)
+    if not anchor:
+        return None
+    key = anchor.start_date or anchor.created_at
+    cands = [e for e in list_episodes(engine, container_tag)
+             if e.id != episode_id and (e.start_date or e.created_at) < key]
+    cands.sort(key=lambda e: e.start_date or e.created_at)
+    return cands[-1] if cands else None
+
+
+def episode_after(engine, episode_id: str, container_tag: str | None = None) -> Episode | None:
+    """The episode immediately following `episode_id` in time."""
+    anchor = get_episode(engine, episode_id)
+    if not anchor:
+        return None
+    key = anchor.start_date or anchor.created_at
+    cands = [e for e in list_episodes(engine, container_tag)
+             if e.id != episode_id and (e.start_date or e.created_at) > key]
+    cands.sort(key=lambda e: e.start_date or e.created_at)
+    return cands[0] if cands else None
+
+
 def recall_episodes(engine, query: str, *, container_tag: str | None = None,
                     limit: int = 5, temporal_range: tuple[str, str] | None = None,
                     recency_weight: float = 0.0) -> list[tuple[Episode, float]]:
@@ -241,4 +289,5 @@ __all__ = [
     "Episode", "ensure_schema", "create_episode", "get_episode", "list_episodes",
     "episode_for_memory", "episode_members", "segment_by_conversation",
     "recall_episodes", "default_summarizer",
+    "recent_episodes", "episodes_in_range", "episode_before", "episode_after",
 ]

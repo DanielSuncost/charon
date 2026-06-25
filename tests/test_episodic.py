@@ -106,3 +106,39 @@ def test_recency_weight_zero_is_noop_default():
     r_default = eng.recall("caching note", container_tag="t", limit=5)
     r_zero = eng.recall("caching note", container_tag="t", limit=5, recency_weight=0.0)
     assert [m.memory.id for m in r_default.memories] == [m.memory.id for m in r_zero.memories]
+
+
+def _episode_on(eng, sid, date, body):
+    m = eng.add(f"{body} session {sid}", category="event", container_tag="t",
+                source_conv=sid, event_date=date, check_updates=False)
+    return ep.create_episode(eng, f"summary {sid} {body}", source_conv=sid,
+                             member_ids=[m.id], container_tag="t", title=sid)
+
+
+def test_recent_episodes_orders_by_time():
+    eng = _engine()
+    _episode_on(eng, "a", "2025-01-01", "alpha")
+    _episode_on(eng, "b", "2025-03-01", "beta")
+    _episode_on(eng, "c", "2025-06-01", "gamma")
+    recent = ep.recent_episodes(eng, "t", n=2)
+    assert [e.source_conv for e in recent] == ["c", "b"]
+
+
+def test_episodes_in_range_filters_by_window():
+    eng = _engine()
+    _episode_on(eng, "a", "2025-01-10", "alpha")
+    _episode_on(eng, "b", "2025-02-15", "beta")
+    _episode_on(eng, "c", "2025-03-20", "gamma")
+    got = {e.source_conv for e in ep.episodes_in_range(eng, "2025-02-01", "2025-02-28", "t")}
+    assert got == {"b"}
+
+
+def test_episode_before_and_after():
+    eng = _engine()
+    ea = _episode_on(eng, "a", "2025-01-01", "alpha")
+    eb = _episode_on(eng, "b", "2025-02-01", "beta")
+    ec = _episode_on(eng, "c", "2025-03-01", "gamma")
+    assert ep.episode_before(eng, eb.id, "t").source_conv == "a"
+    assert ep.episode_after(eng, eb.id, "t").source_conv == "c"
+    assert ep.episode_before(eng, ea.id, "t") is None   # nothing earlier
+    assert ep.episode_after(eng, ec.id, "t") is None     # nothing later

@@ -1,0 +1,22 @@
+{
+  "recency_top3": {
+    "n": 3,
+    "flat": 0.333,
+    "episodic": 1.0
+  },
+  "time_range_month": {
+    "n": 9,
+    "flat": 0.241,
+    "episodic": 1.0
+  },
+  "before_session": {
+    "n": 9,
+    "flat": 0.0,
+    "episodic": 1.0
+  },
+  "topic_in_month": {
+    "n": 18,
+    "flat": 0.278,
+    "episodic": 1.0
+  }
+}
