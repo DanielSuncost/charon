@@ -65,6 +65,38 @@ summaries never contaminate the baseline):
    relevant-but-not-newest gold. The lesson: recency must be applied *among
    relevant matches*, not globally — a real design constraint, not a tuning detail.
 
+## The right test: "when/where" queries (`scripts/exp_episodic_queries.py`)
+
+The measurement above tests *abstractive fact QA* — which is **semantic** memory,
+the wrong construct for episodic value. Episodic memory exists for **temporal-
+contextual recall**: "the 3 most recent sessions", "what did I do in March", "the
+session before the deploy", "the auth session in February". Those queries have
+**automatic ground truth from the timestamps**, so they're fairly auto-evaluable
+(no relevance labeling) — and the same harness runs on real usage data.
+
+Realistic dated dev work-sessions (60/seed, 3 seeds), episodic time-structural
+retrieval vs flat content `recall()` (score = fraction of the time-defined gold
+correctly retrieved):
+
+| query type | n | flat | episodic |
+|---|---|---|---|
+| recency (top-3) | 3 | 0.33 | **1.00** |
+| time-range (month) | 9 | 0.24 | **1.00** |
+| before-session | 9 | 0.00 | **1.00** |
+| topic-in-month | 18 | 0.28 | **1.00** |
+
+The value here is **categorical, not marginal**: flat retrieval is near chance and
+`before-session` is literally **0.00** — you cannot get "the session before X" from
+content similarity. The most ecologically meaningful row is **topic-in-month**
+(episodic 1.00 vs flat 0.28): when a topic recurs across months, only the time
+filter disambiguates *which* occurrence — flat returns the topic regardless of
+time. This is the concrete practical-value story the fact-QA eval couldn't show.
+
+Honest framing of *why* episodic scores 1.00: for pure time queries it queries the
+very structure that defines the gold — that's the point (the feature provides the
+structure these queries need), and the flat column proves they're unanswerable
+without it. The non-trivial result is topic-in-time, where content and time combine.
+
 ## Honest scope
 
 - Small n on the rare types (joins 30, temporal 21) — directional, not powered;
@@ -73,12 +105,26 @@ summaries never contaminate the baseline):
   an LLM summary (real summaries are noisier — so "facts" is an upper-ish bound).
 - Retrieval-only (session recall), one embedding model, on-device.
 
+## Honest scope (when/where eval)
+
+- Synthetic (realistic dev work-sessions), retrieval-only, one embedding model,
+  on-device. Gold derives from timestamps, so no labeling — and the harness runs
+  unchanged on **real Charon usage** (the time-gold is automatic there too).
+- Production needs a thin NL→time-range step ("last week" → dates); not measured
+  here. We tested retrieval *given resolved intent*; the flat baseline got the raw
+  query text — which is all flat retrieval can use, so the comparison is fair.
+- Small n on some rows (recency 3, ranges 9). The effect is categorical, not a
+  delta that needs power — but state the n.
+
 ## Verdict
 
-A genuinely first-class, referenceable episodic layer now exists and is tested.
-Its measured value is **modest and targeted** (session-gist retrieval), with two
-honest negatives (no multi-hop help; naive recency backfires) that point at the
-*next* real work: recency-among-relevant, and multi-hop/bridging retrieval for the
-joins. The point of building it behind the eval was to know which of those claims
-we can make — and the answer is "a small, real gain on session-gist queries,"
-nothing more, stated with the numbers to back it.
+A genuinely first-class, referenceable episodic layer now exists and is tested. On
+the **right construct** — temporal-contextual "when/where" queries — its value is
+**categorical**: it answers a class of queries (recency, time-range, sequence,
+topic-in-time) that flat content retrieval cannot serve at all (flat ≈ chance;
+before-session 0.00). On **semantic fact QA** its added value is, honestly, only
+**modest** (session-gist gains; no multi-hop help; naive recency backfires). The
+two takeaways are both true and both worth stating: episodic structure is the right
+tool for episodic questions and clearly useful there, and it is *not* a general
+retrieval win on semantic QA. The open follow-ups it points at: recency-among-
+relevant, multi-hop/bridging retrieval, and an NL→time-range front-end.
