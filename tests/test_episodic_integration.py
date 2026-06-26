@@ -28,6 +28,16 @@ def test_task_completion_creates_queryable_episode(tmp_path):
     tag = f"project:{Path(proj).resolve()}"
     eps = ep.list_episodes(eng, tag)
     assert len(eps) == 1 and eps[0].source_conv == "sess-1"
+
+    # Phase B: the completed task populated typed sub-events on the episode
+    events = ep.get_events(eng, eps[0].id)
+    types = [e.event_type for e in events]
+    assert "user_message" in types and "agent_message" in types
+    assert types.count("tool_call") == 3                    # Read, Edit, Bash
+    # and a specific moment is retrievable by content + type
+    hits = ep.recall_events(eng, "rate limiting", container_tag=tag, limit=5,
+                            event_type="user_message")
+    assert hits and "rate limiting" in hits[0][0].summary
     # retrievable as an event by content (resolves the bridged task_episode handle)
     hits = ep.recall_episodes(eng, "rate limiting API", container_tag=tag, limit=3)
     assert hits and hits[0][0].source_conv == "sess-1"
