@@ -426,10 +426,42 @@ def recall_events(engine, query: str, *, container_tag: str | None = None, limit
     return out
 
 
+def events_from_task(engine, episode_id: str, *, objective: str = "",
+                     tool_calls: list[dict] | None = None, response_text: str = "",
+                     container_tag: str = "default", ts: str | None = None) -> list[EpisodeEvent]:
+    """Derive typed events from a completed task's recorded data (NOT a live stream).
+
+    Emits a user_message (the objective), one tool_call per tool used, and an
+    agent_message (the response). To bound embedding volume, only the message
+    events are content-indexed; tool_call events are stored (queryable by type and
+    episode) but not embedded. Honest limit: events share the task timestamp — this
+    is completion-time reconstruction, not per-turn capture with sub-turn timing.
+    """
+    added: list[EpisodeEvent] = []
+    if objective.strip():
+        added.append(add_event(engine, episode_id, event_type="user_message", actor="user",
+                               summary=objective.strip()[:300], importance=80,
+                               container_tag=container_tag, ts=ts, index=True))
+    for tc in (tool_calls or []):
+        if not isinstance(tc, dict):
+            continue
+        name = tc.get("tool") or tc.get("name") or tc.get("tool_name") or "tool"
+        args = tc.get("arguments") or tc.get("args") or tc.get("input") or {}
+        details = (json.dumps(args)[:160] if isinstance(args, (dict, list)) else str(args)[:160])
+        added.append(add_event(engine, episode_id, event_type="tool_call", actor="tool",
+                               summary=f"used {name}", details=details, refs={"tool": name},
+                               importance=50, container_tag=container_tag, ts=ts, index=False))
+    if response_text.strip():
+        added.append(add_event(engine, episode_id, event_type="agent_message", actor="agent",
+                               summary=response_text.strip()[:300], importance=70,
+                               container_tag=container_tag, ts=ts, index=True))
+    return added
+
+
 __all__ = [
     "Episode", "EpisodeEvent", "EVENT_TYPES", "ensure_schema", "create_episode",
     "get_episode", "list_episodes", "episode_for_memory", "episode_members",
     "segment_by_conversation", "recall_episodes", "default_summarizer",
     "recent_episodes", "episodes_in_range", "episode_before", "episode_after",
-    "add_event", "get_events", "recall_events",
+    "add_event", "get_events", "recall_events", "events_from_task",
 ]

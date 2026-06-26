@@ -196,3 +196,23 @@ def test_recall_events_retrieves_specific_moment_by_content_and_type():
     assert hits and hits[0][0].event_type == "tool_result"
     typed = ep.recall_events(eng, "what did we decide", container_tag="t", limit=3, event_type="decision")
     assert typed and all(ev.event_type == "decision" for ev, _ in typed)
+
+
+def test_events_from_task_derivation():
+    eng = _engine()
+    e = _ep(eng)
+    ev = ep.events_from_task(
+        eng, e.id, objective="add rate limiting to the API",
+        tool_calls=[{"tool": "Read"}, {"tool": "Bash", "arguments": {"command": "pytest"}}],
+        response_text="Added a token-bucket limiter and tests.", container_tag="t",
+        ts="2025-02-01",
+    )
+    types = [x.event_type for x in ev]
+    assert types == ["user_message", "tool_call", "tool_call", "agent_message"]
+    stored = ep.get_events(eng, e.id)
+    assert [x.event_type for x in stored] == types          # all persisted, in order
+    # only the message events are content-indexed (volume gating); tool calls aren't
+    assert ev[0].summary_memory_id and ev[3].summary_memory_id
+    assert ev[1].summary_memory_id is None and ev[2].summary_memory_id is None
+    # the tool_call carries its tool ref
+    assert ev[2].refs == {"tool": "Bash"}
