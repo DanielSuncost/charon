@@ -32,16 +32,21 @@ TIMELINE_TOOL_DEF = {
         'properties': {
             'action': {
                 'type': 'string',
-                'enum': ['recent', 'range', 'topic', 'events', 'procedures'],
-                'description': 'recent | range | topic | events | procedures',
+                'enum': ['recent', 'range', 'topic', 'events', 'procedures',
+                         'thread', 'why', 'log_decision'],
+                'description': 'recent | range | topic | events | procedures | thread | why | log_decision',
             },
             'n': {'type': 'number', 'description': 'For recent: how many (default 5).'},
             'start': {'type': 'string', 'description': 'For range/topic: start date YYYY-MM-DD.'},
             'end': {'type': 'string', 'description': 'For range/topic: end date YYYY-MM-DD.'},
-            'query': {'type': 'string', 'description': 'For topic/events/procedures: the topic, moment, or goal.'},
+            'query': {'type': 'string', 'description': 'For topic/events/procedures/thread/why/log_decision: '
+                      'the topic, moment, goal, or decision topic.'},
             'event_type': {'type': 'string', 'description': 'For events: filter to one type '
                            '(user_message, agent_message, tool_call, tool_result, decision, '
                            'observation, system_notification).'},
+            'what': {'type': 'string', 'description': 'For log_decision: what was decided.'},
+            'why': {'type': 'string', 'description': 'For log_decision: the rationale (the WHY).'},
+            'alternatives': {'type': 'string', 'description': 'For log_decision: alternatives considered.'},
         },
         'required': ['action'],
     },
@@ -81,6 +86,7 @@ def execute_timeline(params: dict, ctx: ToolContext) -> ToolResult:
     try:
         import episodic
         import procedural
+        import threads
     except Exception as e:
         return ToolResult(content=f'Episodic/procedural memory not available: {e}', is_error=True)
 
@@ -145,6 +151,51 @@ def execute_timeline(params: dict, ctx: ToolContext) -> ToolResult:
                              f'rate {rate:.2f})')
                 lines.append('    steps: ' + ' → '.join(p.steps[:8]))
             return ToolResult(content='\n'.join(lines))
+
+        if action == 'thread':
+            topic = str(params.get('query', '')).strip()
+            if not topic:
+                return ToolResult(content='Error: thread needs a query (topic).', is_error=True)
+            items = threads.thread(eng, topic, container_tag=tag, limit=15)
+            if not items:
+                return ToolResult(content=f'No cross-agent discussion/decisions for: {topic}')
+            lines = [f'## Thread: "{topic}" — when / who / why (across agents)']
+            for it in items:
+                lines.append(f"- [{(it.ts or '')[:10]}] **{it.agent or '?'}** · {it.event_type}: {it.what[:160]}")
+                if it.why:
+                    lines.append(f"    WHY: {it.why[:220]}")
+            return ToolResult(content='\n'.join(lines))
+
+        if action == 'why':
+            topic = str(params.get('query', '')).strip()
+            if not topic:
+                return ToolResult(content='Error: why needs a query (topic/decision).', is_error=True)
+            decs = threads.why(eng, topic, container_tag=tag, limit=5)
+            if not decs:
+                return ToolResult(content=f'No recorded decisions for: {topic}')
+            lines = [f'## Why: "{topic}"']
+            for w in decs:
+                lines.append(f"- **{w['decision'][:200]}**")
+                lines.append(f"    decided by {w['agent'] or '?'} on {(w['ts'] or '')[:10]}")
+                if w['alternatives']:
+                    lines.append(f"    alternatives considered: {w['alternatives'][:160]}")
+                if w['leading_discussion']:
+                    lines.append("    led up to by: " + "; ".join(
+                        f"{t}: {s[:50]}" for t, s in w['leading_discussion']))
+            return ToolResult(content='\n'.join(lines))
+
+        if action == 'log_decision':
+            what = str(params.get('what', '')).strip()
+            if not what:
+                return ToolResult(content='Error: log_decision needs `what` (the decision).', is_error=True)
+            sess = getattr(ctx, 'conversation_id', '') or 'session'
+            epi = episodic.get_or_create_episode_for_session(
+                eng, source_conv=sess, container_tag=tag or 'default',
+                source_agent=getattr(ctx, 'agent_id', None))
+            threads.log_decision(eng, epi.id, what=what, why=str(params.get('why', '')),
+                                 alternatives=str(params.get('alternatives', '')),
+                                 topic=str(params.get('query', '')), container_tag=tag or 'default')
+            return ToolResult(content=f'Logged decision: {what}')
 
         return ToolResult(content=f'Unknown action: {action}', is_error=True)
     except Exception as e:
