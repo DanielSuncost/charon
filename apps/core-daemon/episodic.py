@@ -103,8 +103,14 @@ def default_summarizer(contents: list[str]) -> str:
 
 def create_episode(engine, summary: str, *, source_conv: str | None = None,
                    member_ids: list[str] | None = None, title: str = "", tags: str = "",
-                   container_tag: str = "default", index_summary: bool = True) -> Episode:
-    """Create an episode, link member memories, and index its summary for recall."""
+                   container_tag: str = "default", index_summary: bool = True,
+                   summary_memory_id: str | None = None) -> Episode:
+    """Create an episode, link member memories, and index its summary for recall.
+
+    If `summary_memory_id` is given, that existing memory is used as the episode's
+    retrievable handle instead of indexing a new one — used when bridging from a
+    task-episode that already added a memory (avoids double-indexing the content).
+    """
     db = engine._get_db()
     ensure_schema(db)
     member_ids = list(member_ids or [])
@@ -112,8 +118,7 @@ def create_episode(engine, summary: str, *, source_conv: str | None = None,
     now = _now()
     start_date, end_date = _date_bounds(db, member_ids)
 
-    summary_memory_id = None
-    if index_summary and summary.strip():
+    if summary_memory_id is None and index_summary and summary.strip():
         mem = engine.add(
             summary.strip(), category="episode_summary", container_tag=container_tag,
             source_conv=source_conv, event_date=end_date, check_updates=False,
@@ -272,8 +277,9 @@ def recall_episodes(engine, query: str, *, container_tag: str | None = None,
     out: list[tuple[Episode, float]] = []
     seen: set[str] = set()
     for sm in res.memories:
-        if sm.memory.category != "episode_summary":
-            continue
+        # resolve any recalled memory that is an episode's retrievable handle —
+        # works for both indexed `episode_summary` memories and bridged
+        # `task_episode` memories promoted to episodes.
         row = db.execute(
             "SELECT * FROM episodes WHERE summary_memory_id = ?", (sm.memory.id,)
         ).fetchone()
