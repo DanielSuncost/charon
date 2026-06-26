@@ -142,3 +142,57 @@ def test_episode_before_and_after():
     assert ep.episode_after(eng, eb.id, "t").source_conv == "c"
     assert ep.episode_before(eng, ea.id, "t") is None   # nothing earlier
     assert ep.episode_after(eng, ec.id, "t") is None     # nothing later
+
+
+# ── typed sub-events (finer granularity / MIRIX-style) ──────────────────────
+
+def _ep(eng):
+    m = eng.add("session body", category="event", container_tag="t", source_conv="s",
+                event_date="2025-01-01", check_updates=False)
+    return ep.create_episode(eng, "s summary", source_conv="s", member_ids=[m.id], container_tag="t")
+
+
+def test_add_and_get_typed_events_in_order():
+    eng = _engine()
+    e = _ep(eng)
+    ep.add_event(eng, e.id, event_type="user_message", actor="user",
+                 summary="asked to add rate limiting", container_tag="t")
+    ep.add_event(eng, e.id, event_type="tool_call", actor="tool",
+                 summary="ran the test suite", refs={"tool": "Bash"}, container_tag="t")
+    ep.add_event(eng, e.id, event_type="agent_message", actor="agent",
+                 summary="implemented a token bucket", container_tag="t")
+    evs = ep.get_events(eng, e.id)
+    assert [x.event_type for x in evs] == ["user_message", "tool_call", "agent_message"]
+    assert [x.seq for x in evs] == [0, 1, 2]               # ordered, monotonic
+    assert evs[1].refs == {"tool": "Bash"}
+
+
+def test_event_type_validation():
+    eng = _engine()
+    e = _ep(eng)
+    import pytest
+    with pytest.raises(ValueError):
+        ep.add_event(eng, e.id, event_type="not_a_type", summary="x", container_tag="t")
+
+
+def test_get_events_filtered_by_type_and_importance():
+    eng = _engine()
+    e = _ep(eng)
+    ep.add_event(eng, e.id, event_type="user_message", summary="a question", importance=80, container_tag="t")
+    ep.add_event(eng, e.id, event_type="observation", summary="noise", importance=10, container_tag="t")
+    ep.add_event(eng, e.id, event_type="user_message", summary="another question", importance=70, container_tag="t")
+    assert len(ep.get_events(eng, e.id, event_type="user_message")) == 2
+    assert len(ep.get_events(eng, e.id, min_importance=50)) == 2   # drops the noise
+
+
+def test_recall_events_retrieves_specific_moment_by_content_and_type():
+    eng = _engine()
+    e = _ep(eng)
+    ep.add_event(eng, e.id, event_type="tool_result", actor="tool",
+                 summary="the integration test failed with a timeout", container_tag="t")
+    ep.add_event(eng, e.id, event_type="decision", actor="agent",
+                 summary="decided to switch to an async client", container_tag="t")
+    hits = ep.recall_events(eng, "which test failed", container_tag="t", limit=3)
+    assert hits and hits[0][0].event_type == "tool_result"
+    typed = ep.recall_events(eng, "what did we decide", container_tag="t", limit=3, event_type="decision")
+    assert typed and all(ev.event_type == "decision" for ev, _ in typed)

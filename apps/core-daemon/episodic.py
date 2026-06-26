@@ -19,7 +19,8 @@ engine's `add()`/`recall()`. It does not modify the memories schema.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 
 from memory_engine import _now, _uuid  # reuse engine helpers
 
@@ -38,6 +39,31 @@ class Episode:
     member_count: int = 0
     created_at: str = ""
     updated_at: str = ""
+
+
+# Typed event kinds, aligned with the standard episodic taxonomy (and MIRIX's
+# user_message / inferred_result / system_notification event types).
+EVENT_TYPES = (
+    "user_message", "agent_message", "tool_call", "tool_result",
+    "decision", "observation", "system_notification",
+)
+
+
+@dataclass
+class EpisodeEvent:
+    id: str
+    episode_id: str
+    container_tag: str = "default"
+    ts: str = ""
+    seq: int = 0
+    event_type: str = "observation"
+    actor: str = ""              # user / agent / tool / system
+    summary: str = ""
+    details: str = ""
+    refs: dict = field(default_factory=dict)
+    importance: int = 50
+    summary_memory_id: str | None = None
+    created_at: str = ""
 
 
 def ensure_schema(db) -> None:
@@ -67,6 +93,26 @@ def ensure_schema(db) -> None:
             PRIMARY KEY (episode_id, memory_id)
         );
         CREATE INDEX IF NOT EXISTS idx_epmem_mem ON episode_members(memory_id);
+
+        -- Typed sub-events within an episode (the finer-granularity / MIRIX-style
+        -- layer): discrete user/agent/tool/system events, each retrievable.
+        CREATE TABLE IF NOT EXISTS episode_events (
+            id                TEXT PRIMARY KEY,
+            episode_id        TEXT NOT NULL,
+            container_tag     TEXT NOT NULL DEFAULT 'default',
+            ts                TEXT NOT NULL,
+            seq               INTEGER NOT NULL DEFAULT 0,
+            event_type        TEXT NOT NULL,
+            actor             TEXT NOT NULL DEFAULT '',
+            summary           TEXT NOT NULL DEFAULT '',
+            details           TEXT NOT NULL DEFAULT '',
+            refs_json         TEXT NOT NULL DEFAULT '{}',
+            importance        INTEGER NOT NULL DEFAULT 50,
+            summary_memory_id TEXT,
+            created_at        TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_epev_episode ON episode_events(episode_id, seq);
+        CREATE INDEX IF NOT EXISTS idx_epev_type ON episode_events(event_type);
         """
     )
     db.commit()
@@ -291,9 +337,99 @@ def recall_episodes(engine, query: str, *, container_tag: str | None = None,
     return out
 
 
+# ── Typed sub-events (finer granularity) ────────────────────────────────────
+
+def _row_to_event(row) -> EpisodeEvent:
+    return EpisodeEvent(
+        id=row["id"], episode_id=row["episode_id"], container_tag=row["container_tag"],
+        ts=row["ts"], seq=row["seq"], event_type=row["event_type"], actor=row["actor"],
+        summary=row["summary"], details=row["details"], refs=json.loads(row["refs_json"] or "{}"),
+        importance=row["importance"], summary_memory_id=row["summary_memory_id"],
+        created_at=row["created_at"],
+    )
+
+
+def add_event(engine, episode_id: str, *, event_type: str, summary: str, actor: str = "",
+              details: str = "", refs: dict | None = None, importance: int = 50,
+              ts: str | None = None, container_tag: str = "default",
+              index: bool = True) -> EpisodeEvent:
+    """Append a typed event to an episode. If `index`, the event summary is stored
+    as a memory so the event is content-retrievable via recall."""
+    if event_type not in EVENT_TYPES:
+        raise ValueError(f"unknown event_type {event_type!r}; expected one of {EVENT_TYPES}")
+    db = engine._get_db()
+    ensure_schema(db)
+    now = _now()
+    ts = ts or now
+    ev_id = _uuid()
+    row = db.execute("SELECT COALESCE(MAX(seq), -1) + 1 FROM episode_events WHERE episode_id = ?",
+                     (episode_id,)).fetchone()
+    seq = row[0] if row else 0
+
+    summary_memory_id = None
+    if index and summary.strip():
+        mem = engine.add(
+            f"[{event_type}] {summary.strip()}", category="episode_event",
+            container_tag=container_tag, event_date=(ts or now)[:10] or None,
+            check_updates=False,
+        )
+        summary_memory_id = mem.id
+
+    db.execute(
+        "INSERT INTO episode_events (id, episode_id, container_tag, ts, seq, event_type, "
+        "actor, summary, details, refs_json, importance, summary_memory_id, created_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (ev_id, episode_id, container_tag, ts, seq, event_type, actor, summary.strip(),
+         details, json.dumps(refs or {}), importance, summary_memory_id, now),
+    )
+    db.commit()
+    return EpisodeEvent(id=ev_id, episode_id=episode_id, container_tag=container_tag, ts=ts,
+                        seq=seq, event_type=event_type, actor=actor, summary=summary.strip(),
+                        details=details, refs=refs or {}, importance=importance,
+                        summary_memory_id=summary_memory_id, created_at=now)
+
+
+def get_events(engine, episode_id: str, *, event_type: str | None = None,
+               min_importance: int = 0) -> list[EpisodeEvent]:
+    """The typed events of an episode, in order, optionally filtered by type."""
+    db = engine._get_db()
+    ensure_schema(db)
+    q = "SELECT * FROM episode_events WHERE episode_id = ? AND importance >= ?"
+    params: list = [episode_id, min_importance]
+    if event_type:
+        q += " AND event_type = ?"
+        params.append(event_type)
+    q += " ORDER BY seq, ts"
+    return [_row_to_event(r) for r in db.execute(q, params).fetchall()]
+
+
+def recall_events(engine, query: str, *, container_tag: str | None = None, limit: int = 5,
+                  event_type: str | None = None) -> list[tuple[EpisodeEvent, float]]:
+    """Retrieve specific moments across episodes by content (and optionally type) —
+    'when did the test first fail', 'the decision about X'."""
+    db = engine._get_db()
+    ensure_schema(db)
+    res = engine.recall(query, container_tag=container_tag, limit=limit * 6)
+    out, seen = [], set()
+    for sm in res.memories:
+        row = db.execute(
+            "SELECT * FROM episode_events WHERE summary_memory_id = ?", (sm.memory.id,)
+        ).fetchone()
+        if not row or row["id"] in seen:
+            continue
+        if event_type and row["event_type"] != event_type:
+            continue
+        seen.add(row["id"])
+        out.append((_row_to_event(row), sm.score))
+        if len(out) >= limit:
+            break
+    return out
+
+
 __all__ = [
-    "Episode", "ensure_schema", "create_episode", "get_episode", "list_episodes",
-    "episode_for_memory", "episode_members", "segment_by_conversation",
-    "recall_episodes", "default_summarizer",
+    "Episode", "EpisodeEvent", "EVENT_TYPES", "ensure_schema", "create_episode",
+    "get_episode", "list_episodes", "episode_for_memory", "episode_members",
+    "segment_by_conversation", "recall_episodes", "default_summarizer",
     "recent_episodes", "episodes_in_range", "episode_before", "episode_after",
+    "add_event", "get_events", "recall_events",
 ]
