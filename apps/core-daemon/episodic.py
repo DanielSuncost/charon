@@ -30,6 +30,7 @@ class Episode:
     id: str
     container_tag: str = "default"
     source_conv: str | None = None
+    source_agent: str | None = None      # which agent owns this episode (the WHO)
     title: str = ""
     summary: str = ""
     summary_memory_id: str | None = None
@@ -74,6 +75,7 @@ def ensure_schema(db) -> None:
             id                TEXT PRIMARY KEY,
             container_tag     TEXT NOT NULL DEFAULT 'default',
             source_conv       TEXT,
+            source_agent      TEXT,
             title             TEXT NOT NULL DEFAULT '',
             summary           TEXT NOT NULL DEFAULT '',
             summary_memory_id TEXT,
@@ -115,12 +117,18 @@ def ensure_schema(db) -> None:
         CREATE INDEX IF NOT EXISTS idx_epev_type ON episode_events(event_type);
         """
     )
+    # migration: add source_agent to an older episodes table that lacks it
+    cols = {r[1] for r in db.execute("PRAGMA table_info(episodes)").fetchall()}
+    if "source_agent" not in cols:
+        db.execute("ALTER TABLE episodes ADD COLUMN source_agent TEXT")
     db.commit()
 
 
 def _row_to_episode(row) -> Episode:
+    keys = row.keys()
     return Episode(
         id=row["id"], container_tag=row["container_tag"], source_conv=row["source_conv"],
+        source_agent=(row["source_agent"] if "source_agent" in keys else None),
         title=row["title"], summary=row["summary"], summary_memory_id=row["summary_memory_id"],
         start_date=row["start_date"], end_date=row["end_date"], tags=row["tags"],
         member_count=row["member_count"], created_at=row["created_at"], updated_at=row["updated_at"],
@@ -148,6 +156,7 @@ def default_summarizer(contents: list[str]) -> str:
 
 
 def create_episode(engine, summary: str, *, source_conv: str | None = None,
+                   source_agent: str | None = None,
                    member_ids: list[str] | None = None, title: str = "", tags: str = "",
                    container_tag: str = "default", index_summary: bool = True,
                    summary_memory_id: str | None = None) -> Episode:
@@ -172,10 +181,10 @@ def create_episode(engine, summary: str, *, source_conv: str | None = None,
         summary_memory_id = mem.id
 
     db.execute(
-        "INSERT INTO episodes (id, container_tag, source_conv, title, summary, "
+        "INSERT INTO episodes (id, container_tag, source_conv, source_agent, title, summary, "
         "summary_memory_id, start_date, end_date, tags, member_count, created_at, updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-        (ep_id, container_tag, source_conv, title, summary.strip(), summary_memory_id,
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (ep_id, container_tag, source_conv, source_agent, title, summary.strip(), summary_memory_id,
          start_date, end_date, tags, len(member_ids), now, now),
     )
     if member_ids:
@@ -185,10 +194,44 @@ def create_episode(engine, summary: str, *, source_conv: str | None = None,
         )
     db.commit()
     return Episode(
-        id=ep_id, container_tag=container_tag, source_conv=source_conv, title=title,
-        summary=summary.strip(), summary_memory_id=summary_memory_id, start_date=start_date,
-        end_date=end_date, tags=tags, member_count=len(member_ids), created_at=now, updated_at=now,
+        id=ep_id, container_tag=container_tag, source_conv=source_conv, source_agent=source_agent,
+        title=title, summary=summary.strip(), summary_memory_id=summary_memory_id,
+        start_date=start_date, end_date=end_date, tags=tags, member_count=len(member_ids),
+        created_at=now, updated_at=now,
     )
+
+
+def get_or_create_episode_for_session(engine, *, source_conv: str, container_tag: str = "default",
+                                      source_agent: str | None = None, summary: str = "",
+                                      title: str = "", member_ids: list[str] | None = None,
+                                      summary_memory_id: str | None = None) -> Episode:
+    """Return the episode for `source_conv` (one per session), creating it if absent.
+
+    Lets a decision logged mid-session and the task-completion bridge converge on the
+    SAME episode instead of creating duplicates. On an existing episode, fills in a
+    missing source_agent / summary handle and links any new members.
+    """
+    db = engine._get_db()
+    ensure_schema(db)
+    row = db.execute(
+        "SELECT * FROM episodes WHERE source_conv = ? AND container_tag = ? LIMIT 1",
+        (source_conv, container_tag),
+    ).fetchone()
+    if row:
+        ep_id = row["id"]
+        if source_agent and not row["source_agent"]:
+            db.execute("UPDATE episodes SET source_agent = ? WHERE id = ?", (source_agent, ep_id))
+        if summary_memory_id and not row["summary_memory_id"]:
+            db.execute("UPDATE episodes SET summary_memory_id = ? WHERE id = ?",
+                       (summary_memory_id, ep_id))
+        for mid in (member_ids or []):
+            db.execute("INSERT OR IGNORE INTO episode_members (episode_id, memory_id) VALUES (?,?)",
+                       (ep_id, mid))
+        db.commit()
+        return get_episode(engine, ep_id)
+    return create_episode(engine, summary, source_conv=source_conv, source_agent=source_agent,
+                          member_ids=member_ids, title=title, container_tag=container_tag,
+                          summary_memory_id=summary_memory_id)
 
 
 def get_episode(engine, episode_id: str) -> Episode | None:
@@ -464,4 +507,5 @@ __all__ = [
     "segment_by_conversation", "recall_episodes", "default_summarizer",
     "recent_episodes", "episodes_in_range", "episode_before", "episode_after",
     "add_event", "get_events", "recall_events", "events_from_task",
+    "get_or_create_episode_for_session",
 ]

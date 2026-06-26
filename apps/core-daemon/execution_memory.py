@@ -429,10 +429,10 @@ def create_task_episode(
         # reusing the already-indexed memory as its retrievable handle.
         try:
             import episodic
-            _ep = episodic.create_episode(
-                engine, content, source_conv=session_id, member_ids=[mem.id],
-                container_tag=project_tag, title=record['objective'][:60],
-                summary_memory_id=mem.id,
+            _ep = episodic.get_or_create_episode_for_session(
+                engine, source_conv=session_id, source_agent=agent_id,
+                summary=content, member_ids=[mem.id], container_tag=project_tag,
+                title=record['objective'][:60], summary_memory_id=mem.id,
             )
             # Phase B: populate typed sub-events from the recorded task data
             # (objective → user_message, each tool call → tool_call, response →
