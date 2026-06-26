@@ -32,13 +32,16 @@ TIMELINE_TOOL_DEF = {
         'properties': {
             'action': {
                 'type': 'string',
-                'enum': ['recent', 'range', 'topic', 'procedures'],
-                'description': 'recent | range | topic | procedures',
+                'enum': ['recent', 'range', 'topic', 'events', 'procedures'],
+                'description': 'recent | range | topic | events | procedures',
             },
             'n': {'type': 'number', 'description': 'For recent: how many (default 5).'},
             'start': {'type': 'string', 'description': 'For range/topic: start date YYYY-MM-DD.'},
             'end': {'type': 'string', 'description': 'For range/topic: end date YYYY-MM-DD.'},
-            'query': {'type': 'string', 'description': 'For topic/procedures: the topic or goal.'},
+            'query': {'type': 'string', 'description': 'For topic/events/procedures: the topic, moment, or goal.'},
+            'event_type': {'type': 'string', 'description': 'For events: filter to one type '
+                           '(user_message, agent_message, tool_call, tool_result, decision, '
+                           'observation, system_notification).'},
         },
         'required': ['action'],
     },
@@ -113,6 +116,20 @@ def execute_timeline(params: dict, ctx: ToolContext) -> ToolResult:
                 return ToolResult(content=f'No sessions found for: {query}')
             return ToolResult(content=f'## Sessions about "{query}"\n'
                               + '\n'.join(_fmt_episode(e, s) for e, s in hits))
+
+        if action == 'events':
+            query = str(params.get('query', '')).strip()
+            if not query:
+                return ToolResult(content='Error: events needs a query.', is_error=True)
+            et = params.get('event_type') or None
+            hits = episodic.recall_events(eng, query, container_tag=tag, limit=6, event_type=et)
+            if not hits:
+                return ToolResult(content=f'No events found for: {query}')
+            lines = [f'## Events matching "{query}"']
+            for ev, score in hits:
+                when = (ev.ts or '')[:10]
+                lines.append(f'- [{when}] **{ev.event_type}** ({ev.actor or "?"}): {ev.summary[:200]}')
+            return ToolResult(content='\n'.join(lines))
 
         if action == 'procedures':
             goal = str(params.get('query', '')).strip()
