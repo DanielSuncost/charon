@@ -1,0 +1,8 @@
+{
+  "seeds": 3,
+  "topics": 6,
+  "coverage": 0.944,
+  "attribution": 1.0,
+  "ordering": 1.0,
+  "why_recall": 1.0
+}
