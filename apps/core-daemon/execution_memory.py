@@ -429,10 +429,17 @@ def create_task_episode(
         # reusing the already-indexed memory as its retrievable handle.
         try:
             import episodic
-            episodic.create_episode(
+            _ep = episodic.create_episode(
                 engine, content, source_conv=session_id, member_ids=[mem.id],
                 container_tag=project_tag, title=record['objective'][:60],
                 summary_memory_id=mem.id,
+            )
+            # Phase B: populate typed sub-events from the recorded task data
+            # (objective → user_message, each tool call → tool_call, response →
+            # agent_message). Importance-gated indexing keeps embedding volume low.
+            episodic.events_from_task(
+                engine, _ep.id, objective=objective, tool_calls=tool_calls,
+                response_text=response_text, container_tag=project_tag, ts=event_date,
             )
         except Exception:
             pass
