@@ -1020,6 +1020,13 @@ try:
 except (ImportError, Exception):
     _HAS_RECALL = False
 
+# Timeline tool — episodic + procedural memory; same deps as Recall
+try:
+    from tools.timeline_tool import TIMELINE_TOOL_DEF, execute_timeline
+    _HAS_TIMELINE = True
+except (ImportError, Exception):
+    _HAS_TIMELINE = False
+
 # Fleet tools — optional, only loads if fleet_registry is available
 try:
     from tools.fleet_tool import (
@@ -1038,7 +1045,7 @@ ALL_TOOL_DEFS = [
     SHADE_TOOL_DEF, SPAWN_BATCH_TOOL_DEF, JUDGE_LOOP_TOOL_DEF,
     SEARCH_TOOL_DEF, WEB_TOOL_DEF, PAPER_TOOL_DEF, SOURCE_DISCOVERY_TOOL_DEF, RESEARCH_TOOL_DEF, X_TOOL_DEF,
     CRON_TOOL_DEF, SKILLS_TOOL_DEF, EXECUTE_CODE_TOOL_DEF, CLARIFY_TOOL_DEF,
-] + ([BROWSER_TOOL_DEF] if _HAS_BROWSER else []) + ([RECALL_TOOL_DEF] if _HAS_RECALL else []) + (_FLEET_DEFS if _HAS_FLEET else [])
+] + ([BROWSER_TOOL_DEF] if _HAS_BROWSER else []) + ([RECALL_TOOL_DEF] if _HAS_RECALL else []) + ([TIMELINE_TOOL_DEF] if _HAS_TIMELINE else []) + (_FLEET_DEFS if _HAS_FLEET else [])
 
 TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
     'Read': execute_read,
@@ -1068,6 +1075,7 @@ TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
     'Clarify': execute_clarify,
     **(({'Browser': execute_browser} if _HAS_BROWSER else {})),
     **(({'Recall': execute_recall} if _HAS_RECALL else {})),
+    **(({'Timeline': execute_timeline} if _HAS_TIMELINE else {})),
     **(({'FleetStatus': execute_fleet_status, 'FleetSend': execute_fleet_send, 'FleetHistory': execute_fleet_history, 'FleetOnboard': execute_fleet_onboard} if _HAS_FLEET else {})),
 }
 

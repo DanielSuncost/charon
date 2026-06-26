@@ -116,10 +116,46 @@ without it. The non-trivial result is topic-in-time, where content and time comb
 - Small n on some rows (recency 3, ranges 9). The effect is categorical, not a
   delta that needs power — but state the n.
 
+## Now wired into the runtime (not just a library)
+
+The earlier honest caveat was "implemented but not integrated." That's fixed:
+
+- **Episodes are created from real sessions.** `execution_memory.create_task_episode`
+  (which already runs on every task completion) now promotes each task into a
+  first-class `Episode` (reusing the task-episode memory as its handle — no
+  double-index). So live work becomes time-queryable automatically.
+- **An agent-facing `Timeline` tool** (`tools/timeline_tool.py`, registered next to
+  `Recall`) exposes `recent` / `range` / `topic` / `procedures`. The agent (or you)
+  can ask "what did I work on recently", "sessions between X and Y", "the session
+  about caching" in-session. Integration tests cover the task→episode→query path.
+
+(Found and fixed a real bug doing this: the task-episode timestamp is a float, and
+the date-derivation crashed inside a swallowed try/except — which had been silently
+dropping the episode write.)
+
+## Procedural memory (`apps/core-daemon/procedural.py`)
+
+Closes the third leg of the semantic/episodic/**procedural** triad. A `Procedure`
+is a goal-scoped, reusable step sequence with success/failure counts:
+- **learned** explicitly (`learn_procedure`) or **distilled** from recurring
+  successful task episodes (`distill_from_episodes` — Charon already records the
+  per-task `tool_sequence`);
+- **retrieved** by goal (`recall_procedures`) via the same recall, **re-ranked by
+  relevance × success rate** — so procedures that keep working float up;
+- **reinforced** by `record_outcome(id, success)`, tying procedural memory to
+  verifiable outcomes rather than to having been written down once.
+5 unit tests (including: success-weighting reorders retrieval; distillation mines a
+recurring pattern and is idempotent). Surfaced to the agent via `Timeline procedures`.
+
+This is component-complete and tested, but **honest limit**: distillation isn't yet
+auto-run on the live episode stream (it's available as a batch call), and its value
+("does reusing procedures improve task success?") is **not yet benchmarked** — only
+the retrieval/reinforcement mechanics are tested.
+
 ## Verdict
 
-A genuinely first-class, referenceable episodic layer now exists and is tested. On
-the **right construct** — temporal-contextual "when/where" queries — its value is
+A genuinely first-class, referenceable episodic layer now exists, is **wired into
+the runtime**, and is tested. On the **right construct** — temporal-contextual "when/where" queries — its value is
 **categorical**: it answers a class of queries (recency, time-range, sequence,
 topic-in-time) that flat content retrieval cannot serve at all (flat ≈ chance;
 before-session 0.00). On **semantic fact QA** its added value is, honestly, only

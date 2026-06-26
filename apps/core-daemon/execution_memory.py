@@ -390,6 +390,11 @@ def create_task_episode(
         'input_tokens': input_tokens,
         'output_tokens': output_tokens,
         'files_touched': files_touched[:40],
+        # tool-call name sequence — raw material for procedural-memory distillation
+        'tool_sequence': [
+            (tc.get('tool') or tc.get('name') or tc.get('tool_name') or '')
+            for tc in (tool_calls or [])
+        ][:40],
     }
     path = _episodes_path(state_dir)
     with path.open('a', encoding='utf-8') as f:
@@ -404,15 +409,33 @@ def create_task_episode(
             f"Summary: {record['summary']}\n"
             f"Files: {', '.join(record['files_touched'][:12])}"
         )
-        engine.add(
+        _ts = record['ts']
+        if isinstance(_ts, (int, float)):
+            from datetime import datetime, timezone
+            event_date = datetime.fromtimestamp(_ts, timezone.utc).date().isoformat()
+        else:
+            event_date = (str(_ts) if _ts else '')[:10] or None
+        mem = engine.add(
             content,
             category='task_episode',
             tier='agent',
             container_tag=project_tag,
             source_agent=agent_id,
             source_conv=session_id,
+            event_date=event_date,
             check_updates=False,
         )
+        # Promote the task episode to a first-class, time-queryable Episode,
+        # reusing the already-indexed memory as its retrievable handle.
+        try:
+            import episodic
+            episodic.create_episode(
+                engine, content, source_conv=session_id, member_ids=[mem.id],
+                container_tag=project_tag, title=record['objective'][:60],
+                summary_memory_id=mem.id,
+            )
+        except Exception:
+            pass
     except Exception:
         pass
     return record
