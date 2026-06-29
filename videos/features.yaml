@@ -1,0 +1,109 @@
+# Charon feature reel — manifest.
+#
+# One entry per video. The /reel driver turns each into a parallel shade task
+# that writes + renders a short, brand-consistent clip via the manim-video skill.
+# Edit freely: add/remove features, tweak taglines and key_points, reorder.
+#
+# Fields:
+#   slug        kebab-case id; output lands in results/videos/<slug>/final.mp4
+#   title       on-screen feature name (shown by brand_intro)
+#   tagline     one-line subtitle for the title card
+#   seconds     target clip length (keep short: 12-18s reads best)
+#   key_points  3-5 beats the middle scenes must convey (the creative brief)
+#   capture     true  -> body is REAL TUI footage from videos/tapes/<slug>.tape
+#                        (recorded with VHS, framed between the branded intro/outro)
+#               false -> body is motion-graphics built from the brand kit
+#               Use capture for visual TUI panes; animation for abstract concepts.
+
+reel:
+  tagline: "An agent OS for your local machine."
+  order: [memory, shades, judge-loops, session-grid, conversation-rooms, harbor, autonomous, multi-provider, video]
+  # Music bed prompt (local MusicGen / cloud Suno). Ducked under narration at stitch.
+  music: "dark minimal ambient synth, hopeful, cinematic, steady pulse, no drums"
+
+features:
+  - slug: memory
+    title: "Memory"
+    tagline: "Recall by meaning, fully local."
+    seconds: 15
+    key_points:
+      - "Every conversation is indexed into a local vector database."
+      - "Recall is on-device: bge embeddings + sqlite-vec, ~10ms, no cloud."
+      - "Preferences learned once apply across all projects."
+
+  - slug: shades
+    title: "Shades"
+    tagline: "Parallel workers, scoped by contract."
+    seconds: 15
+    key_points:
+      - "An agent spawns ephemeral shades to work in parallel."
+      - "Each shade is scope-restricted — it can't touch files outside its contract."
+      - "Budget limits on tokens, time, and iterations."
+
+  - slug: judge-loops
+    title: "Judge Loops"
+    tagline: "Generate, critique, improve."
+    seconds: 15
+    key_points:
+      - "A worker proposes; a judge scores against a rubric."
+      - "The loop iterates until quality clears the bar or budget runs out."
+      - "Guards against reward hacking."
+
+  - slug: session-grid
+    title: "Session Grid"
+    tagline: "Every agent, one screen."
+    seconds: 14
+    capture: true
+    key_points:
+      - "A single TUI shows every agent session at once."
+      - "Local and remote sessions side by side."
+      - "Jump in and steer any session live."
+
+  - slug: conversation-rooms
+    title: "Conversation Rooms"
+    tagline: "Multi-agent dialogue, live."
+    seconds: 14
+    capture: true
+    key_points:
+      - "Spin up rooms of agents that talk to each other."
+      - "Roles like planner/critic or teacher/student."
+      - "Watch the dialogue unfold in real time."
+
+  - slug: harbor
+    title: "Harbor"
+    tagline: "Coordinate remote agents."
+    seconds: 14
+    capture: true
+    key_points:
+      - "Dispatch tasks to remote agent workers over SSH."
+      - "Track voyages and fleet status from the same TUI."
+      - "Local and remote agents coordinate as one fleet."
+
+  - slug: autonomous
+    title: "Autonomous Work"
+    tagline: "Scheduled and continuous."
+    seconds: 14
+    key_points:
+      - "Cron-scheduled and always-on automations."
+      - "Monitor pages, check endpoints, run recurring tasks."
+      - "Agents keep working while you're away."
+
+  - slug: multi-provider
+    title: "Multi-Provider"
+    tagline: "Your model, your choice."
+    seconds: 13
+    capture: true
+    key_points:
+      - "Local LM Studio, Claude, Codex, or any API endpoint."
+      - "Swap providers without losing context."
+      - "Different models for lead vs. worker tasks."
+
+  - slug: video
+    title: "Video"
+    tagline: "It writes the code and renders the MP4."
+    seconds: 15
+    capture: true
+    key_points:
+      - "No API call — the agent writes Manim code itself."
+      - "PLAN, CODE, RENDER, STITCH into a final MP4."
+      - "This very reel was made by Charon's own swarm."

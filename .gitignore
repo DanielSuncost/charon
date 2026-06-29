@@ -51,3 +51,6 @@ charon_job_application_answer.md
 
 # OS
 .DS_Store
+
+# Local secrets
+videos/.openrouter_key

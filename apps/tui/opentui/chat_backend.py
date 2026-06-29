@@ -3356,6 +3356,19 @@ class ChatBackend:
             {'cmd': '/automate browser-workflow every <n> <unit> steps <json>', 'desc': 'Create a multi-step browser workflow automation'},
             {'cmd': '/automate browser-workflow every <n> <unit> from <file>', 'desc': 'Create a multi-step browser workflow automation from a JSON file'},
             {'cmd': '/automate webhook <automation_id> <url>', 'desc': 'Set a webhook for automation failure/recovery alerts'},
+            {'cmd': '/skills', 'desc': 'List bundled + user skills (e.g. manim-video)'},
+            {'cmd': '/skills view manim-video', 'desc': 'Read a skill before using it'},
+            {'cmd': '/skills setup manim-video', 'desc': 'Install a skill\'s dependencies'},
+            {'cmd': '/skills setup manim-video --check', 'desc': 'Verify a skill\'s dependencies without installing'},
+            {'cmd': '/skills setup manim-video --with-latex', 'desc': 'Install skill deps including LaTeX (for math equations)'},
+            {'cmd': '/reel', 'desc': 'Generate the Charon feature video reel (parallel swarm)'},
+            {'cmd': '/reel plan <path> --reel <name>', 'desc': 'Direct a reel for any app: auto-write its feature manifest'},
+            {'cmd': '/reel build --reel <name>', 'desc': 'Render a named app reel after reviewing its manifest'},
+            {'cmd': '/reel list', 'desc': 'List the feature videos in the reel manifest'},
+            {'cmd': '/reel build', 'desc': 'Spawn shades to render all feature videos'},
+            {'cmd': '/reel build video memory', 'desc': 'Render only specific features by slug'},
+            {'cmd': '/reel stitch', 'desc': 'Stitch rendered clips into results/videos/charon-reel.mp4'},
+            {'cmd': '/reel judge video', 'desc': 'Optimize a clip with the aesthetic judge loop'},
             {'cmd': '/harvest_souls', 'desc': 'Scan sibling agent repos for abilities to assimilate'},
             {'cmd': '/harvest_souls list', 'desc': 'Show numbered findings from last scan'},
             {'cmd': '/harvest_souls evaluate', 'desc': 'Evaluate real capability gaps from the last scan'},
@@ -5451,6 +5464,14 @@ class ChatBackend:
                 return
 
             # /harvest_souls — scan sibling agent repos and interactively adopt abilities
+            if command == '/skills' or command.startswith('/skills '):
+                self._handle_skills_command(command, request_id)
+                return
+
+            if command == '/reel' or command.startswith('/reel '):
+                self._handle_reel_command(command, request_id)
+                return
+
             if command == '/harvest_souls' or command.startswith('/harvest_souls '):
                 rest = command[16:].strip() if command.startswith('/harvest_souls ') else ''
 
@@ -5803,6 +5824,202 @@ class ChatBackend:
             emit({'type': 'status', 'message': 'All selected capability clusters were already queued.', 'request_id': request_id})
         emit({'type': 'status', 'message': '', 'request_id': request_id})
         emit({'type': 'status', 'message': f'Total queued clusters: {len(adopted)} | /harvest_souls roadmap to see the plan', 'request_id': request_id})
+
+    def _handle_skills_command(self, command: str, request_id: str | None):
+        """`/skills [list|view <name>|setup <name> [flags]]` — manage bundled + user skills."""
+        def status(msg: str):
+            emit({'type': 'status', 'message': msg, 'request_id': request_id})
+
+        rest = command[len('/skills'):].strip()
+        parts = rest.split()
+        sub = parts[0] if parts else 'list'
+
+        from tools import ToolContext
+        skills_ctx = ToolContext(project_root=ROOT, agent_id=(self._active_agent_id or ''), state_dir=STATE_DIR)
+
+        if sub in ('', 'list'):
+            from tools.skills_tool import execute_skills
+            res = execute_skills({'action': 'list'}, skills_ctx)
+            for line in (res.content or '').splitlines():
+                status(line)
+            status('')
+            status('Use /skills view <name> to read a skill, or /skills setup <name> to install its deps.')
+            return
+
+        if sub == 'view':
+            if len(parts) < 2:
+                status('Usage: /skills view <name>'); return
+            from tools.skills_tool import execute_skills
+            res = execute_skills({'action': 'view', 'name': parts[1]}, skills_ctx)
+            for line in (res.content or '').splitlines():
+                status(line)
+            return
+
+        if sub == 'setup':
+            if len(parts) < 2:
+                status('Usage: /skills setup <name> [--check] [--with-latex]'); return
+            name = parts[1]
+            flags = [p for p in parts[2:] if p.startswith('-')]
+            setup_sh = ROOT / 'skills' / name / 'scripts' / 'setup.sh'
+            if not setup_sh.exists():
+                status(f'No setup script for skill: {name} ({setup_sh} not found)'); return
+            status(f'Running setup for {name}...')
+            try:
+                proc = subprocess.Popen(
+                    ['bash', str(setup_sh), *flags],
+                    cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1,
+                )
+                for line in iter(proc.stdout.readline, ''):
+                    status(line.rstrip('\n'))
+                proc.wait()
+                if proc.returncode == 0:
+                    status(f'{name}: setup complete.')
+                else:
+                    status(f'{name}: setup exited with code {proc.returncode}.')
+            except Exception as e:
+                status(f'setup failed: {e}')
+            return
+
+        status(f'Unknown /skills subcommand: {sub} (use list, view, setup)')
+
+    def _handle_reel_command(self, command: str, request_id: str | None):
+        """`/reel [build [<slug>...] | stitch | list]` — generate a cohesive
+        feature-highlight video reel via a parallel swarm of manim-video shades.
+        Manifest + brand kit live in videos/."""
+        def status(msg: str):
+            emit({'type': 'status', 'message': msg, 'request_id': request_id})
+
+        rest = command[len('/reel'):].strip()
+        parts = rest.split()
+        # Optional --reel <name> selects a named app reel (default: the Charon reel).
+        reel_name = None
+        if '--reel' in parts:
+            i = parts.index('--reel')
+            reel_name = parts[i + 1] if i + 1 < len(parts) else None
+            parts = parts[:i] + parts[i + 2:]
+        sub = parts[0] if parts else 'build'
+        slugs = parts[1:]
+
+        # Make videos/ importable regardless of daemon cwd.
+        vdir = str(ROOT / 'videos')
+        if vdir not in sys.path:
+            sys.path.insert(0, vdir)
+        try:
+            import importlib
+            import reel as reel_mod
+            importlib.reload(reel_mod)  # pick up manifest edits without restart
+            reel_mod.set_reel(reel_name)
+        except Exception as e:
+            status(f'Could not load reel driver (videos/reel.py): {e}')
+            return
+
+        if sub == 'plan':
+            target = ' '.join(slugs).strip()
+            if not target:
+                status('Usage: /reel plan <repo-path-or-description> --reel <name>'); return
+            if not reel_name:
+                status('A named reel is required: add --reel <name> (e.g. /reel plan ~/Projects/foo --reel foo)'); return
+            reel_mod.manifest_path().parent.mkdir(parents=True, exist_ok=True)
+            from tools import ToolContext
+            from tools.batch_tool import execute_spawn_batch
+            ctx = ToolContext(project_root=ROOT, agent_id=(self._active_agent_id or ''), state_dir=STATE_DIR)
+            spec = {
+                'goal': f'Direct the demo reel for {target}: choose marketable features and write the manifest.',
+                'max_concurrent': 1,
+                'constraints': ['Write ONLY the reel manifest YAML to the given path. Do NOT render, '
+                                'build, or run the reel. Stop after writing + summarizing.'],
+                'tasks': [{'title': f'plan-reel:{reel_name}', 'complexity': 'complex',
+                           'instruction': reel_mod.plan_instruction(target, reel_name)}],
+            }
+            status(f'Directing reel "{reel_name}" from {target}...')
+            res = execute_spawn_batch(spec, ctx)
+            for line in (res.content or '').splitlines():
+                status(line)
+            if not res.is_error:
+                status('')
+                status(f'When it finishes, review {reel_mod.manifest_path()} and run: '
+                       f'/reel build --reel {reel_name}')
+            return
+
+        if sub == 'list':
+            for f in reel_mod.ordered_features():
+                status(f"{f['slug']:<20} {f['title']:<22} {f.get('seconds','?')}s  — {f.get('tagline','')}")
+            return
+
+        if sub == 'stitch':
+            music = None
+            if '--music' in slugs:
+                i = slugs.index('--music')
+                music = slugs[i + 1] if i + 1 < len(slugs) and not slugs[i + 1].startswith('-') else 'auto'
+                slugs = [s for s in slugs if s != '--music' and s != music]
+            try:
+                out = reel_mod.stitch(slugs or None, music=music)
+                status(f'Reel stitched: {out}')
+            except Exception as e:
+                status(f'Stitch failed: {e}')
+            return
+
+        if sub == 'judge':
+            if not slugs:
+                status('Usage: /reel judge <slug> [target]  — optimize a clip with the aesthetic judge'); return
+            slug = slugs[0]
+            target = float(slugs[1]) if len(slugs) > 1 else 8.5
+            rubric_path = ROOT / 'videos' / 'aesthetic_rubric.md'
+            rubric = rubric_path.read_text(encoding='utf-8') if rubric_path.exists() else ''
+            rel_dir = f'results/videos/{slug}' if not reel_name else f'results/reels/{reel_name}/{slug}'
+            env_prefix = f'CHARON_REEL_NAME={reel_name} ' if reel_name else ''
+            script_path = ROOT / rel_dir / 'script.py'
+            if not script_path.exists():
+                status(f'No script.py for {slug} yet — build the clip first (/reel build {slug}).'); return
+            from tools import ToolContext
+            from tools.judge_loop_tool import execute_judge_loop
+            ctx = ToolContext(project_root=ROOT, agent_id=(self._active_agent_id or ''), state_dir=STATE_DIR)
+            params = {
+                'goal': f'Maximize the aesthetic quality of the {slug} feature video (rubric in videos/aesthetic_rubric.md).',
+                'judge_type': 'quantitative',
+                'direction': 'maximize',
+                'target_score': target,
+                'eval_command': f'{env_prefix}.venv/bin/python videos/aesthetic_judge.py {slug}',
+                'parse_mode': 'json_field',
+                'parse_field': 'score',
+                'metric_name': 'aesthetic',
+                'scope': [f'{rel_dir}/script.py'],
+                'rubric': rubric,
+                'program': (
+                    f'Improve the Manim script for the "{slug}" clip to raise its aesthetic score. '
+                    f'Before each change, read {rel_dir}/aesthetic_feedback.json '
+                    f'(the judge\'s latest score + concrete fixes) and apply the single highest-impact '
+                    f'fix. Use only brandkit.py primitives and palette. Re-render is handled by the '
+                    f'eval command. Make ONE focused change per iteration.'
+                ),
+                'max_iterations': int(slugs[2]) if len(slugs) > 2 else 8,
+            }
+            status(f'Spawning aesthetic judge loop for {slug} (target {target})...')
+            res = execute_judge_loop(params, ctx)
+            for line in (res.content or '').splitlines():
+                status(line)
+            return
+
+        if sub in ('', 'build'):
+            try:
+                spec = reel_mod.build_batch_spec(slugs or None)
+            except Exception as e:
+                status(f'Could not build batch spec: {e}')
+                return
+            from tools import ToolContext
+            from tools.batch_tool import execute_spawn_batch
+            ctx = ToolContext(project_root=ROOT, agent_id=(self._active_agent_id or ''), state_dir=STATE_DIR)
+            status(f'Launching reel: {len(spec["tasks"])} videos, max {spec["max_concurrent"]} concurrent...')
+            res = execute_spawn_batch(spec, ctx)
+            for line in (res.content or '').splitlines():
+                status(line)
+            if not res.is_error:
+                status('')
+                status('Watch progress with /batch <id>. When clips are done, run /reel stitch.')
+            return
+
+        status(f'Unknown /reel subcommand: {sub} (use build, stitch, list)')
 
     def _harvest_souls_plan(self, idx_str: str, request_id: str | None):
         """Show the implementation path for a specific ability."""

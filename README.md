@@ -173,11 +173,35 @@ Switch mid-session with `/provider`. Separate provider config for
 shades. All provider communication uses raw httpx — no SDK
 dependencies.
 
+### Video
+
+Charon can produce videos — not via an API call. An agent writes the
+code, renders the scenes, and stitches them into an MP4. The bundled
+`manim-video` skill does 3Blue1Brown-style animated explainers, product
+and launch videos, algorithm visualizations, and data stories through a
+PLAN → CODE → RENDER → STITCH → REVIEW pipeline on
+[Manim CE](https://www.manim.community/) + ffmpeg. No GPU needed.
+
+```
+/skills                       # list available skills
+/skills setup manim-video     # one-command install (macOS + Ubuntu)
+```
+
+Then just ask: *"Make a 60-second launch video for our new feature —
+dark background, amber and teal accents."* The agent discovers the skill
+via the `Skills` tool, plans the narrative, codes each scene, renders,
+and delivers the MP4. LaTeX (for animated math) is optional:
+`/skills setup manim-video --with-latex`.
+
+Skills are reusable capabilities bundled in `skills/` (shipped with
+Charon) or created by an agent in `.charon_state/skills/`. They surface
+in every agent's prompt so the right one gets used automatically.
+
 ### Tools
 
 Built-in: Read, Write, Edit, Bash, Git, Http, Search, Recall,
 UserModel, ProjectKnowledge, SpawnShade, SpawnBatch, SpawnJudgeLoop,
-Web, Browser, and more.
+Web, Browser, Skills, and more.
 
 Dynamic loader: drop a `.py` file in `.charon/tools/` and it's
 available after `/tools reload`.

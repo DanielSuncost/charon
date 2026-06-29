@@ -459,6 +459,48 @@ def _build_fleet_context() -> str:
     return '\n'.join(lines)
 
 
+def _build_skills(state_dir: Path) -> str:
+    """Layer 7c: Available skills (bundled + user) — procedural capabilities.
+
+    Lists skills so the agent proactively reaches for them. Full content is
+    fetched on demand via the Skills tool (view), keeping the prompt small.
+    """
+    import re as _re
+
+    def _scan(root: Path) -> dict[str, str]:
+        out: dict[str, str] = {}
+        if not root or not root.exists():
+            return out
+        for d in sorted(root.iterdir()):
+            sk = d / 'SKILL.md'
+            if d.is_dir() and sk.exists():
+                try:
+                    head = sk.read_text(encoding='utf-8', errors='ignore').splitlines()[:12]
+                except Exception:
+                    head = []
+                desc = ''
+                for ln in head:
+                    m = _re.match(r'\s*description:\s*["\']?(.+?)["\']?\s*$', ln)
+                    if m:
+                        desc = m.group(1)
+                        break
+                out[d.name] = desc[:120]
+        return out
+
+    bundled = _scan(Path(__file__).resolve().parents[2] / 'skills')
+    user = _scan(state_dir / 'skills') if state_dir else {}
+    names = sorted(set(bundled) | set(user))
+    if not names:
+        return ''
+
+    lines = ['## Skills', 'Reusable capabilities available to you. When a request matches one, '
+             'call Skills(view <name>) to load its full instructions before doing the work.']
+    for n in names:
+        desc = user.get(n) or bundled.get(n) or ''
+        lines.append(f'- {n}: {desc}')
+    return '\n'.join(lines)
+
+
 def _build_tools(tools: list[dict] | None = None) -> str:
     """Layer 8: Available tools + guidelines."""
     tool_defs = tools or ALL_TOOL_DEFS
@@ -608,6 +650,12 @@ def build_system_prompt(
     # Layer 7b: Fleet status (skip for shades)
     if not is_shade:
         block = _build_fleet_context()
+        if block:
+            parts.append(block)
+
+    # Layer 7c: Available skills (bundled + user procedural capabilities)
+    if not is_shade:
+        block = _build_skills(state_dir)
         if block:
             parts.append(block)
 

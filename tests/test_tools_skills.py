@@ -33,3 +33,42 @@ def test_skills_create_view_list_patch_delete(tmp_path):
     v2 = sk_mod.execute_skills({'action': 'view', 'name': 'demo-skill'}, ctx)
     assert 'charon' in v2.content
     assert not sk_mod.execute_skills({'action': 'delete', 'name': 'demo-skill'}, ctx).is_error
+
+
+def test_bundled_manim_skill_listed_and_viewable(tmp_path):
+    """The shipped manim-video skill is discoverable without any state setup."""
+    ctx = _ctx(tmp_path)
+    listing = sk_mod.execute_skills({'action': 'list'}, ctx)
+    assert 'manim-video' in listing.content
+    assert '[bundled]' in listing.content
+    v = sk_mod.execute_skills({'action': 'view', 'name': 'manim-video'}, ctx)
+    assert not v.is_error
+    assert 'source: bundled' in v.content          # provenance header
+    assert 'Directory:' in v.content                # tells agent where references live
+    assert 'Manim Video Production Pipeline' in v.content
+
+
+def test_bundled_skill_cannot_be_deleted(tmp_path):
+    ctx = _ctx(tmp_path)
+    res = sk_mod.execute_skills({'action': 'delete', 'name': 'manim-video'}, ctx)
+    assert res.is_error
+    assert 'bundled' in res.content
+
+
+def test_editing_bundled_skill_forks_into_state(tmp_path):
+    """Patching a bundled skill copies it into state; the shipped copy is untouched."""
+    ctx = _ctx(tmp_path)
+    bundled = sk_mod._bundled_root() / 'manim-video' / 'SKILL.md'
+    original = bundled.read_text(encoding='utf-8')
+    res = sk_mod.execute_skills(
+        {'action': 'patch', 'name': 'manim-video',
+         'old_string': 'Manim Video Production Pipeline',
+         'new_string': 'Charon Video Pipeline'}, ctx)
+    assert not res.is_error
+    assert 'forked' in res.content
+    # State copy reflects the edit; bundled copy is unchanged.
+    assert (tmp_path / 'state' / 'skills' / 'manim-video' / 'SKILL.md').exists()
+    assert bundled.read_text(encoding='utf-8') == original
+    view = sk_mod.execute_skills({'action': 'view', 'name': 'manim-video'}, ctx)
+    assert 'Charon Video Pipeline' in view.content
+    assert 'source: state' in view.content
