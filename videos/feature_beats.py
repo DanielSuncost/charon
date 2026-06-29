@@ -10,6 +10,7 @@ its subject, made into a still, and tilted/panned, timed to its narration line.
 from __future__ import annotations
 
 import importlib
+import os
 import subprocess
 import sys
 import time
@@ -32,47 +33,128 @@ import tilt3d
 import transitions
 import render_panel as rp
 
-# Transition per gap (intro, beat0, beat1, beat2, outro): dip-to-black for
-# editorial section breaks, dissolves between content beats.
-TRANSITION_SPECS = [('fadeblack', 0.6), ('dissolve', 0.6), ('dissolve', 0.6), ('fadeblack', 0.5)]
 from reel import GRADE_VF, _duration
 
 hero = importlib.import_module('hero')
 hero.WORK = WORK
 
-FEATURE = {'number': '04', 'title': 'Making Videos', 'kicker': 'FEATURE',
-           'subtitle': 'THE AGENTS BUILD THE FILM', 'index': 'MAKING VIDEOS',
-           'thesis': 'HOW CHARON WRITES, RENDERS, AND JUDGES ITS OWN FILMS',
-           # spoken intro that says what the video is about (not a beat line)
-           'intro_line': 'Charon makes its own videos. It plans them, renders each part, '
-                         'and checks the result.',
-           'outro_line': 'You describe the video once. The agents turn that into clips.'}
+# ── Feature registry — one config per feature video. Select with CHARON_FEATURE ──
+# Each beat: {'kind':'panel', 'yaw':..., 'panel':{...render_panel kwargs...}} or
+#            {'kind':'scene', 'name':..., 'call':'<diagram fn call on self>'}.
+FEATURES = {
+    '04': {
+        'number': '04', 'title': 'Making Videos',
+        'thesis': 'HOW CHARON WRITES, RENDERS, AND JUDGES ITS OWN FILMS',
+        'intro_line': 'Charon makes its own videos. It plans them, renders each part, and checks the result.',
+        'outro_line': 'You describe the video once. The agents turn that into clips.',
+        'transitions': [('fadeblack', 0.6), ('dissolve', 0.6), ('dissolve', 0.6), ('fadeblack', 0.5)],
+        'beats': [
+            {'kind': 'panel', 'yaw': (0.42, -0.30), 'panel': dict(
+                filename='features.yaml', label='THE DIRECTOR — PROPOSED MANIFEST',
+                caption='Reads the project and proposes the features to show.',
+                syntax='yaml', folio='01', highlight=2,
+                content=('reel:\n  app: "Charon"\n  order: [memory, shades, judge-loops, video]\n'
+                         'features:\n  - slug: memory\n    title: "Memory"\n    seconds: 15\n'
+                         '  - slug: shades\n    title: "Shades"\n    seconds: 15\n'
+                         '  - slug: video\n    title: "Making Videos"\n    seconds: 15'))},
+            {'kind': 'scene', 'name': 'Swarm',
+             'call': 'swarm_scene(self, children=["shade · plan", "shade · render", "shade · audio", "shade · judge"], hold=1.4)'},
+            {'kind': 'scene', 'name': 'JudgeLoop', 'call': 'loop_scene(self, hold=1.4)'},
+        ],
+    },
+    'memory': {
+        'number': '01', 'title': 'Memory',
+        'thesis': 'CONTEXT SAVED ON YOUR MACHINE, FOUND AGAIN BY MEANING',
+        'intro_line': 'Charon keeps useful context on your machine, and finds it again by meaning.',
+        'outro_line': 'The memory stays on your machine, and you can inspect it.',
+        'transitions': [('fadeblack', 0.6), ('dissolve', 0.6), ('dissolve', 0.6), ('dissolve', 0.6), ('fadeblack', 0.5)],
+        'beats': [
+            {'kind': 'scene', 'name': 'Pipeline',
+             'call': 'pipeline_scene(self, stages=["conversation", "embed by meaning", "local db", "ranked recall"], '
+                     'kicker="THE STORE", caption="SAVED BY MEANING, SEARCHED BY MEANING", folio="01 / 09", hold=1.5)'},
+            {'kind': 'scene', 'name': 'Local',
+             'call': 'local_scene(self, hold=1.5)'},
+            {'kind': 'scene', 'name': 'Ranked',
+             'call': 'ranked_scene(self, rows=[("the thread you meant", 0.96), ("a related note", 0.7), '
+                     '("older context", 0.5), ("unrelated", 0.26)], '
+                     'caption="THE RIGHT RESULT IS USUALLY NEAR THE TOP", folio="01 / 09", hold=1.5)'},
+            {'kind': 'scene', 'name': 'Across',
+             'call': 'fanout_scene(self, source="a saved preference", '
+                     'targets=["project · alpha", "project · beta", "project · gamma"], '
+                     'kicker="ACROSS PROJECTS", caption="A PREFERENCE SAVED ONCE CAN BE USED ELSEWHERE", '
+                     'folio="01 / 09", hold=1.5)'},
+        ],
+    },
+    'judge': {
+        'number': '03', 'title': 'Judge Loops',
+        'thesis': 'REPEAT A TASK WHILE A SCORE KEEPS IMPROVING',
+        'intro_line': 'Charon can improve a task by repeating it, whenever there is a score to chase.',
+        'outro_line': 'The loop keeps the best result it has found.',
+        'transitions': [('fadeblack', 0.6), ('dissolve', 0.6), ('dissolve', 0.6), ('fadeblack', 0.5)],
+        'beats': [
+            {'kind': 'scene', 'name': 'Loop',
+             'call': 'pipeline_scene(self, stages=["snapshot", "change files", "score", "compare"], '
+                     'kicker="THE LOOP", caption="SNAPSHOT · CHANGE · SCORE · COMPARE", folio="03 / 09", hold=1.5)'},
+            {'kind': 'scene', 'name': 'Branch',
+             'call': 'branch_scene(self, hold=1.5)'},
+            {'kind': 'scene', 'name': 'Kinds',
+             'call': 'fanout_scene(self, source="the score", '
+                     'targets=["a benchmark number", "a passing test", "a model + rubric"], '
+                     'kicker="WHAT THE SCORE CAN BE", caption="A NUMBER, A TEST, OR A MODEL RATING A RUBRIC", '
+                     'folio="03 / 09", hold=1.5)'},
+        ],
+    },
+    'fleet': {
+        'number': '05', 'title': 'The Fleet',
+        'thesis': 'EVERY SESSION, LOCAL AND REMOTE, ON ONE SCREEN',
+        'intro_line': 'Charon puts every agent session, local or remote, on one screen.',
+        'outro_line': 'All active sessions are visible on one screen.',
+        'transitions': [('fadeblack', 0.6), ('dissolve', 0.6), ('fadeblack', 0.5)],
+        'beats': [
+            {'kind': 'scene', 'name': 'Grid',
+             'call': 'grid_scene(self, hold=1.6)'},
+            {'kind': 'scene', 'name': 'Dispatch',
+             'call': 'dispatch_scene(self, hold=1.6)'},
+        ],
+    },
+    'shades': {
+        'number': '02', 'title': 'Shades',
+        'thesis': 'PARALLEL WORKERS, EACH KEPT INSIDE ITS LANE',
+        'intro_line': 'Charon can split work across many agents at once. Each one is called a shade.',
+        'outro_line': 'Many workers, each with a job, a budget, and a file boundary.',
+        'transitions': [('fadeblack', 0.6), ('dissolve', 0.6), ('dissolve', 0.6), ('fadeblack', 0.5)],
+        'beats': [
+            {'kind': 'scene', 'name': 'Swarm',
+             'call': 'swarm_scene(self, children=["shade · 01", "shade · 02", "shade · 03", "shade · 04"], '
+                     'kicker="THE FAN-OUT", caption="ONE AGENT STARTS MANY, RUNNING AT ONCE", folio="02 / 09", hold=1.4)'},
+            {'kind': 'scene', 'name': 'Contract',
+             'call': 'contract_scene(self, hold=1.4)'},
+            {'kind': 'scene', 'name': 'Budget',
+             'call': 'budget_scene(self, hold=1.4)'},
+        ],
+    },
+}
 
-# Content beats. 'panel' -> a real output frame (still, 3D-tilted). 'scene' -> an
-# animated brand diagram (manim, used directly). Each maps to a script line in order.
-BEATS = [
-    {'kind': 'panel', 'yaw': (0.42, -0.30)},   # the proposed manifest (real features.yaml)
-    {'kind': 'scene', 'name': 'Swarm'},        # animated: coordinator fans out to shades
-    {'kind': 'scene', 'name': 'JudgeLoop'},    # animated: render -> judge -> fix cycle
-]
+FEATURE = FEATURES[os.environ.get('CHARON_FEATURE', '04')]
 
-SCENES = '''\
-from editorial import *
-from diagram import *
-class VideoIntro(Scene):
-    def construct(self):
-        video_intro(self, title="%(title)s", thesis="%(thesis)s",
-                    number="%(number)s", hold=2.8)
-class Swarm(Scene):
-    def construct(self):
-        swarm_scene(self, children=["shade · plan", "shade · render", "shade · audio", "shade · judge"], hold=1.4)
-class JudgeLoop(Scene):
-    def construct(self):
-        loop_scene(self, hold=1.4)
-class Outro(Scene):
-    def construct(self):
-        outro(self, line="%(outro_line)s")
-''' % FEATURE
+
+def _gen_scenes(cfg: dict) -> str:
+    src = ['from editorial import *', 'from diagram import *',
+           'class VideoIntro(Scene):',
+           '    def construct(self):',
+           f'        video_intro(self, title="{cfg["title"]}", thesis="{cfg["thesis"]}", '
+           f'number="{cfg["number"]}", hold=2.8)']
+    for b in cfg['beats']:
+        if b['kind'] == 'scene':
+            src += [f'class {b["name"]}(Scene):', '    def construct(self):', f'        {b["call"]}']
+    src += ['class Outro(Scene):', '    def construct(self):',
+            f'        outro(self, line="{cfg["outro_line"]}")']
+    return '\n'.join(src)
+
+
+BEATS = FEATURE['beats']
+TRANSITION_SPECS = FEATURE['transitions']
+SCENES = _gen_scenes(FEATURE)
 
 
 def _run(cmd, **kw):
@@ -109,19 +191,10 @@ def _capture_dashboard() -> Path:
     return fp
 
 
-def make_panel_frame() -> Path:
-    """The one 'panel' beat: the proposed manifest (real features.yaml)."""
+def make_panel_frame(i: int, panel: dict) -> Path:
+    """Render a 'panel' beat from its config (a real artifact in window chrome)."""
     WORK.mkdir(parents=True, exist_ok=True)
-    manifest = (
-        'reel:\n  app: "Charon"\n  order: [memory, shades, judge-loops, video]\n'
-        'features:\n  - slug: memory\n    title: "Memory"\n    seconds: 15\n'
-        '  - slug: shades\n    title: "Shades"\n    seconds: 15\n'
-        '  - slug: video\n    title: "Making Videos"\n    seconds: 15'
-    )
-    return rp.render_panel(WORK / 'beat0.png', content=manifest, filename='features.yaml',
-                           label='THE DIRECTOR — PROPOSED MANIFEST',
-                           caption='Reads the project and proposes the features to show.',
-                           syntax='yaml', folio='01', highlight=2)
+    return rp.render_panel(WORK / f'panel{i}.png', **panel)
 
 
 def still_clip(png: Path, seconds: float, out: Path) -> Path:
@@ -152,7 +225,6 @@ def build() -> Path:
     WORK.mkdir(parents=True, exist_ok=True)
     lines = _script_lines(FEATURE['number'])      # beat narration (the ## NN block)
     cards = render_cards()
-    panel_frame = make_panel_frame()
 
     # The intro is voiced with its own introductory line (says what the video is
     # about); the content beats use script lines 1..N; the outro uses the last line.
@@ -164,8 +236,9 @@ def build() -> Path:
     for i, beat in enumerate(BEATS):
         vo = beat_vos[i]
         if beat['kind'] == 'panel':
+            frame = make_panel_frame(i, beat['panel'])
             dur = max(5.0, _duration(vo) + 2.6)          # generous tail
-            still = still_clip(panel_frame, dur, WORK / f'still{i}.mp4')
+            still = still_clip(frame, dur, WORK / f'still{i}.mp4')
             clip = tilt3d.render(still, WORK / f'tilt{i}.mp4', ui_w=1520,
                                  yaw0=beat['yaw'][0], yaw1=beat['yaw'][1])
         else:                                            # animated diagram scene
@@ -212,7 +285,7 @@ def build() -> Path:
     _run([FF, '-y', '-i', str(silent), '-vf',
           f'{GRADE_VF},tpad=stop_mode=clone:stop_duration={total - vid_dur:.2f}',
           '-c:v', 'libx264', '-crf', '19', '-pix_fmt', 'yuv420p', '-an', str(graded)])
-    final = OUT / 'charon-feature-04-beats.mp4'
+    final = OUT / f"charon-feature-{FEATURE['number']}-{FEATURE['title'].lower().replace(' ', '-')}.mp4"
     _run([FF, '-y', '-i', str(graded), '-i', str(voice), '-i', str(bed),
           '-filter_complex',
           '[1:a]apad,asplit=2[voice][vkey];[2:a]volume=0.5[bed];'
