@@ -75,6 +75,8 @@ persist_sessions = false   # default: ephemeral (sessions end on close)
 | `-` | split the focused pane **stacked** |
 | `<` / `>` | resize the focused split |
 | `=` | reset the layout to auto-tile |
+| `[` / `]` | switch between tabs (when more than one exists) |
+| `t` | new tab (opens a shell in a fresh tab) |
 | `z` | zoom the focused pane to fullscreen (toggle) |
 | `p` | pin/unpin the focused daemon pane (persist ↔ ephemeral); 📌 marks pinned |
 | `w` | close the focused pane (detach the view; session lives per its lifetime) |
@@ -82,6 +84,11 @@ persist_sessions = false   # default: ephemeral (sessions end on close)
 | `F6` | toggle mouse handling (app vs terminal) |
 
 Pane borders are colored by state; titles are prefixed with their workspace.
+
+**Tabs.** Each session has a tab (default `main`). Press `t` for a new tab, `[` / `]` to
+switch; the grid shows only the active tab's panes and the header shows the tab strip
+(`‹active› others`). Panes you split inherit the current tab. Workspaces (the sidebar
+grouping) are the broader container; tabs subdivide within the grid view.
 
 ---
 

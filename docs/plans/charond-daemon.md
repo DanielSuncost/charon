@@ -331,7 +331,7 @@ has to change.
 | **3** ✅ | **Persistence** | `sessions/*/scrollback.log` + `meta.json`; restore-as-exited on restart; `attach replay`; respawn. (`screen.bin` fast-restore + `seq`-gap reconnect still TODO.) **Session restore works.** | med |
 | **4** ✅ | **Agent-state detection** | Output-heuristic + timing classifier (`detect.rs`) → broadcast `status`. (Process-scan + native signals still TODO.) | low |
 | **5** ✅ | **Config + themes** | `config.toml` + `Theme` struct + built-in themes + `[themes.*]` overrides; TUI reads the theme. (Full color migration + rebindable keys are incremental.) | low |
-| **6** ◑ | **Workspaces + tabs + manual splits** | Daemon model + TUI sidebar grouping done. Manual splits: `layout.rs` engine + TUI keys (`\|`/`-`/`=`/`<`/`>`, split spawns a shell) done; mouse drag-to-resize still pending. | med |
+| **6** ✅ | **Workspaces + tabs + manual splits** | Daemon model + TUI sidebar grouping; **tabs** (`[`/`]`/`t`, grid filters by active tab); manual splits (`\|`/`-`/`=`/`<`/`>`), zoom (`z`), pin (`p`), kill (`X`). Mouse drag-to-resize is the only remaining polish. | med |
 | **7** ◑ | **Live handoff** | Graceful-drain done: `shutdown` command + `charon --daemon-upgrade` (clean restart + restore). Zero-downtime fd-passing of live PTYs deferred. | high |
 | **8** | **Additional front-ends** | Point GUI/desktop front-ends at `charond`; one runtime behind every UI. | med |
 

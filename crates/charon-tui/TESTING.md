@@ -94,6 +94,8 @@ PY
    - [ ] `<` / `>` resize the focused split; `=` resets to auto-tile.
    - [ ] Closing a pane (`w`) collapses the split; remaining panes re-fill.
    - [ ] `p` pins the focused daemon pane → 📌 appears; quit & relaunch → it persisted.
+   - [ ] `t` opens a new tab (header shows the tab strip); `[`/`]` switch tabs and the
+         grid shows only that tab's panes; a split joins the active tab.
    - [ ] `z` zooms the focused pane fullscreen (toggle).
    - [ ] `X` kills the focused daemon session (gone from grid + `--daemon-list`).
 
