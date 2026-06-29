@@ -332,7 +332,7 @@ fn build_initial_sessions(mode: &LaunchMode, outer_w: u16, outer_h: u16) -> io::
             let (_, _, rects) = compute_grid(1, outer_w, outer_h.saturating_sub(2));
             if let Some(r) = rects.first() {
                 let ephemeral = !config::active().persist_sessions;
-                let sid = daemon_client::spawn_session(&sock, cmd, r.width, r.height, ephemeral)
+                let sid = daemon_client::spawn_session(&sock, cmd, r.width, r.height, ephemeral, None)
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("daemon spawn failed: {e}")))?;
                 let title = cmd.first().map(|s| s.as_str()).unwrap_or("shell");
                 let sock_str = sock.to_string_lossy();
@@ -478,9 +478,25 @@ fn draw_header<W: Write>(stdout: &mut W, app: &App, w: u16) -> io::Result<()> {
         View::Dashboard => "",
     };
 
+    // Tab strip (F3 grid, when more than one tab exists): ‹active› others
+    let tab_suffix = if app.active_view == View::Sessions && !app.sessions.terminal_mode {
+        let tabs = grid_tabs(app);
+        if tabs.len() > 1 {
+            let strip = tabs
+                .iter()
+                .map(|t| if *t == app.sessions.active_tab { format!("‹{t}›") } else { t.clone() })
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!(" │ tabs: {strip} ([ ] switch, t new)")
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
     let header = format!(
-        " CHARON │ {} │ F1:chat │ F2:dash │ F3:sessions │ F4:groups │ Ctrl+Q:quit{} ",
-        view, extra
+        " CHARON │ {} │ F1:chat │ F2:dash │ F3:sessions │ F4:groups │ Ctrl+Q:quit{}{} ",
+        view, extra, tab_suffix
     );
     let visible: String = header.chars().take(w as usize).collect();
     let pad = (w as usize).saturating_sub(visible.chars().count());
@@ -2353,10 +2369,50 @@ fn pane_agent_id(cell: &SessionCell, payload: Option<&Value>, idx: usize) -> Str
     format!("pane:{}", idx)
 }
 
+/// The tab a pane belongs to: a daemon pane's daemon-reported tab, else "main".
+fn pane_tab(app: &App, idx: usize) -> String {
+    match app.sessions.panes.get(idx).map(|c| &c.backend_type) {
+        Some(BackendType::DaemonPane { session_id }) => app
+            .sessions
+            .daemon_sessions
+            .iter()
+            .find(|s| &s.id == session_id)
+            .map(|s| if s.tab.is_empty() { "main".to_string() } else { s.tab.clone() })
+            .unwrap_or_else(|| "main".to_string()),
+        _ => "main".to_string(),
+    }
+}
+
+/// Distinct tabs across all panes, "main" first then the rest sorted.
+fn grid_tabs(app: &App) -> Vec<String> {
+    let mut tabs: Vec<String> = Vec::new();
+    for i in 0..app.sessions.panes.len() {
+        let t = pane_tab(app, i);
+        if !tabs.contains(&t) {
+            tabs.push(t);
+        }
+    }
+    if !tabs.iter().any(|t| t == "main") {
+        tabs.insert(0, "main".to_string());
+    }
+    tabs.sort_by(|a, b| match (a.as_str(), b.as_str()) {
+        ("main", "main") => std::cmp::Ordering::Equal,
+        ("main", _) => std::cmp::Ordering::Less,
+        (_, "main") => std::cmp::Ordering::Greater,
+        _ => a.cmp(b),
+    });
+    tabs
+}
+
 fn visible_pane_indices(app: &mut App) -> Vec<usize> {
     // Zoom: show only the focused pane fullscreen.
     if app.sessions.zoom && app.sessions.focused < app.sessions.panes.len() {
         return vec![app.sessions.focused];
+    }
+    // Keep the active tab valid (it may have emptied).
+    let tabs = grid_tabs(app);
+    if !tabs.contains(&app.sessions.active_tab) {
+        app.sessions.active_tab = "main".to_string();
     }
     let allowed = visible_session_agent_ids(app);
     let matched: Vec<usize> = app.sessions.panes.iter().enumerate().filter_map(|(i, cell)| {
@@ -2369,10 +2425,18 @@ fn visible_pane_indices(app: &mut App) -> Vec<usize> {
             None
         }
     }).collect();
-    if matched.is_empty() && !allowed.is_empty() && !app.sessions.backend_filter_pending {
-        return (0..app.sessions.panes.len()).collect();
+    let mut base = if matched.is_empty() && !allowed.is_empty() && !app.sessions.backend_filter_pending {
+        (0..app.sessions.panes.len()).collect()
+    } else {
+        matched
+    };
+    // Show only the active tab's panes. Only filter when more than one tab exists,
+    // so single-tab setups behave exactly as before.
+    if grid_tabs(app).len() > 1 {
+        let active = app.sessions.active_tab.clone();
+        base.retain(|i| pane_tab(app, *i) == active);
     }
-    matched
+    base
 }
 
 fn ensure_native_self_pane(app: &mut App, server: Option<&NativeSessionServer>, outer_w: u16, outer_h: u16) -> io::Result<bool> {
@@ -2409,7 +2473,8 @@ fn split_focused_pane(app: &mut App, dir: layout::Dir, _outer_w: u16, _outer_h: 
     let sock = daemon::control_socket();
     let sock_str = sock.to_string_lossy().to_string();
     let ephemeral = !config::active().persist_sessions;
-    let new_sid = daemon_client::spawn_session(&sock, &[], 80, 24, ephemeral)
+    let tab = Some(app.sessions.active_tab.clone());
+    let new_sid = daemon_client::spawn_session(&sock, &[], 80, 24, ephemeral, tab)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("split spawn failed: {e}")))?;
     let cell = SessionCell::attach_daemon(app.sessions.panes.len() as u64, &new_sid, &new_sid, &sock_str, 80, 24)?;
     let new_uid = cell.uid;
@@ -3795,6 +3860,43 @@ fn main() -> io::Result<()> {
                                         app.sessions.layout = None;
                                         session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
                                         needs_full_redraw = true;
+                                    }
+                                    // Tabs: [ / ] switch the active tab, t creates a new tab.
+                                    KeyCode::Char('[') | KeyCode::Char(']') if app.sessions.section == SessionsSection::Grid => {
+                                        let tabs = grid_tabs(&app);
+                                        if tabs.len() > 1 {
+                                            let cur = tabs.iter().position(|t| *t == app.sessions.active_tab).unwrap_or(0);
+                                            let next = if key.code == KeyCode::Char(']') {
+                                                (cur + 1) % tabs.len()
+                                            } else {
+                                                (cur + tabs.len() - 1) % tabs.len()
+                                            };
+                                            app.sessions.active_tab = tabs[next].clone();
+                                            let visible = visible_pane_indices(&mut app);
+                                            if let Some(first) = visible.first() {
+                                                app.sessions.focused = *first;
+                                            }
+                                            session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
+                                            needs_full_redraw = true;
+                                        }
+                                    }
+                                    KeyCode::Char('t') if app.sessions.section == SessionsSection::Grid => {
+                                        let new_tab = format!("tab-{}", grid_tabs(&app).len() + 1);
+                                        daemon::ensure_running()?;
+                                        let sock = daemon::control_socket();
+                                        let sock_str = sock.to_string_lossy().to_string();
+                                        let ephemeral = !config::active().persist_sessions;
+                                        if let Ok(sid) = daemon_client::spawn_session(&sock, &[], 80, 24, ephemeral, Some(new_tab.clone())) {
+                                            app.sessions.visible_agents.insert(sid.clone());
+                                            if let Ok(cell) = SessionCell::attach_daemon(app.sessions.panes.len() as u64, &sid, &sid, &sock_str, 80, 24) {
+                                                app.sessions.panes.push(cell);
+                                                app.sessions.active_tab = new_tab;
+                                                app.sessions.layout = None; // fresh tab → auto-tile
+                                                last_daemon_poll = Instant::now() - Duration::from_secs(2);
+                                                session_rects = relayout_sessions(&mut app, outer_w, outer_h)?;
+                                                needs_full_redraw = true;
+                                            }
+                                        }
                                     }
                                     // Zoom: show the focused pane fullscreen.
                                     KeyCode::Char('z') if app.sessions.section == SessionsSection::Grid => {
