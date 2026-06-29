@@ -146,7 +146,7 @@ fn send(stream: &mut UnixStream, msg: &ClientMsg) -> io::Result<()> {
 
 /// One-shot: ask the daemon to spawn a local session and return its id.
 /// `cmd` empty → the daemon spawns the default shell.
-pub fn spawn_session(socket: &Path, cmd: &[String], cols: u16, rows: u16, ephemeral: bool) -> io::Result<String> {
+pub fn spawn_session(socket: &Path, cmd: &[String], cols: u16, rows: u16, ephemeral: bool, tab: Option<String>) -> io::Result<String> {
     let mut stream = UnixStream::connect(socket)?;
     send(&mut stream, &hello())?;
     send(
@@ -158,7 +158,7 @@ pub fn spawn_session(socket: &Path, cmd: &[String], cols: u16, rows: u16, epheme
             cwd: None,
             session: None,
             workspace: None,
-            tab: None,
+            tab,
             target: None,
             server: None,
             ephemeral,

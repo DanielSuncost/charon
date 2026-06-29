@@ -80,6 +80,8 @@ pub struct SessionsState {
     pub layout: Option<crate::layout::Node>,
     /// When true, the focused pane is shown fullscreen (zoom).
     pub zoom: bool,
+    /// Active tab in the F3 grid; the grid shows only this tab's panes.
+    pub active_tab: String,
 }
 
 impl SessionsState {
@@ -103,6 +105,7 @@ impl SessionsState {
             daemon_sessions: Vec::new(),
             layout: None,
             zoom: false,
+            active_tab: "main".to_string(),
         }
     }
 }
