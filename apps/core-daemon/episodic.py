@@ -447,13 +447,24 @@ def get_events(engine, episode_id: str, *, event_type: str | None = None,
 
 
 def recall_events(engine, query: str, *, container_tag: str | None = None, limit: int = 5,
-                  event_type: str | None = None) -> list[tuple[EpisodeEvent, float]]:
+                  event_type: str | None = None,
+                  importance_weight: float = 0.5) -> list[tuple[EpisodeEvent, float]]:
     """Retrieve specific moments across episodes by content (and optionally type) —
-    'when did the test first fail', 'the decision about X'."""
+    'when did the test first fail', 'the decision about X'.
+
+    importance_weight: the content-retrieval score is multiplied by
+    (importance/50)**importance_weight before final ranking, so events their
+    writer marked as noise (importance<50) sink and decisions (80) rise.
+    Neutral at importance 50; pass 0.0 for pure content ranking. Default 0.5
+    measured on scripts/exp_thread_reconstruction_hard.py (tuned seeds 0-2,
+    validated held-out seeds 3-7): +0.02 coverage over pure content ranking;
+    weights >1 HURT — they promote other threads' decisions, not this one's
+    events. The honest summary: importance demotes marked noise but cannot fix
+    content-level thread confusion."""
     db = engine._get_db()
     ensure_schema(db)
     res = engine.recall(query, container_tag=container_tag, limit=limit * 6)
-    out, seen = [], set()
+    candidates, seen = [], set()
     for sm in res.memories:
         row = db.execute(
             "SELECT * FROM episode_events WHERE summary_memory_id = ?", (sm.memory.id,)
@@ -463,10 +474,13 @@ def recall_events(engine, query: str, *, container_tag: str | None = None, limit
         if event_type and row["event_type"] != event_type:
             continue
         seen.add(row["id"])
-        out.append((_row_to_event(row), sm.score))
-        if len(out) >= limit:
-            break
-    return out
+        ev = _row_to_event(row)
+        score = sm.score
+        if importance_weight:
+            score *= (max(ev.importance, 1) / 50.0) ** importance_weight
+        candidates.append((ev, score))
+    candidates.sort(key=lambda t: t[1], reverse=True)
+    return candidates[:limit]
 
 
 def events_from_task(engine, episode_id: str, *, objective: str = "",

@@ -30,19 +30,23 @@ class ThreadItem:
 
 def log_decision(engine, episode_id: str, *, what: str, why: str = "",
                  alternatives: str = "", topic: str = "", actor: str = "agent",
-                 container_tag: str = "default", ts: str | None = None) -> "ep.EpisodeEvent":
+                 container_tag: str = "default", ts: str | None = None,
+                 importance: int = 80, auto: bool = False) -> "ep.EpisodeEvent":
     """Capture a decision with its rationale (the WHY) as a typed, indexed event,
     so it becomes part of the cross-agent thread for its topic. The decision is
     timestamped to its episode's date (so it orders correctly in the thread) unless
-    an explicit `ts` is given."""
+    an explicit `ts` is given. `auto=True` marks decisions heuristically extracted
+    from agent output (decision_extract) rather than explicitly logged — kept
+    auditable in details; extraction confidence arrives via `importance`."""
     if ts is None:
         e = ep.get_episode(engine, episode_id)
         ts = (e.end_date or e.start_date or e.created_at) if e else None
-    details = json.dumps({"why": why, "alternatives": alternatives, "topic": topic})
+    details = json.dumps({"why": why, "alternatives": alternatives, "topic": topic,
+                          "auto": auto})
     summary = what.strip() + (f" — because {why.strip()}" if why.strip() else "")
     return ep.add_event(engine, episode_id, event_type="decision", actor=actor,
                         summary=summary, details=details, refs={"topic": topic},
-                        importance=80, container_tag=container_tag, index=True, ts=ts)
+                        importance=importance, container_tag=container_tag, index=True, ts=ts)
 
 
 def _agent_session(engine, episode_id, cache):
@@ -53,10 +57,11 @@ def _agent_session(engine, episode_id, cache):
 
 
 def thread(engine, topic: str, *, container_tag: str | None = None,
-           limit: int = 15) -> list[ThreadItem]:
+           limit: int = 15, importance_weight: float = 0.5) -> list[ThreadItem]:
     """The cross-agent discussion/decision thread for `topic`: related events across
     ALL agents, chronological, attributed, with WHY on decisions."""
-    hits = ep.recall_events(engine, topic, container_tag=container_tag, limit=limit)
+    hits = ep.recall_events(engine, topic, container_tag=container_tag, limit=limit,
+                            importance_weight=importance_weight)
     cache: dict = {}
     items: list[ThreadItem] = []
     for ev, _score in hits:
@@ -75,11 +80,12 @@ def thread(engine, topic: str, *, container_tag: str | None = None,
 
 
 def why(engine, topic: str, *, container_tag: str | None = None,
-        limit: int = 5) -> list[dict]:
+        limit: int = 5, importance_weight: float = 0.5) -> list[dict]:
     """For a topic/decision: the decision(s), their rationale and alternatives, the
     owning agent, and the discussion that immediately preceded each (same episode)."""
     decisions = ep.recall_events(engine, topic, container_tag=container_tag,
-                                 limit=limit, event_type="decision")
+                                 limit=limit, event_type="decision",
+                                 importance_weight=importance_weight)
     cache: dict = {}
     out: list[dict] = []
     for dec, _score in decisions:
