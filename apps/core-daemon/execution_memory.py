@@ -441,6 +441,21 @@ def create_task_episode(
                 engine, _ep.id, objective=objective, tool_calls=tool_calls,
                 response_text=response_text, container_tag=project_tag, ts=event_date,
             )
+            # Auto-capture committed decisions from the agent's response so the
+            # cross-agent thread record doesn't depend on agents remembering to
+            # call log_decision. Conservative heuristic (decision_extract);
+            # auto=True keeps them auditable/filterable.
+            try:
+                import decision_extract
+                import threads
+                for d in decision_extract.extract_decisions(response_text or ""):
+                    threads.log_decision(
+                        engine, _ep.id, what=d["what"], why=d["why"],
+                        actor=agent_id, container_tag=project_tag, ts=event_date,
+                        importance=d["importance"], auto=True,
+                    )
+            except Exception:
+                pass
         except Exception:
             pass
     except Exception:

@@ -62,8 +62,24 @@ Semantic recall is the separate `Recall` tool (`tools/recall_tool.py`).
   score 1.00 but are **structural** (deterministic once retrieved) — "correctly
   implemented," not a hard capability. `why()` top-1 is 1.00 on the hard set but
   with only 12 decision candidates (one near-duplicate distractor per query) —
-  a coarse discrimination check, not a hard capability. Decision capture is via
-  explicit `log_decision` only.
+  a coarse discrimination check, not a hard capability.
+- **Decision capture: explicit `log_decision` + conservative auto-extraction.**
+  `decision_extract.py` (wired into task completion, `auto=True` in details)
+  measures P 0.87 / R 0.71 on a labeled corpus with a post-freeze held-out batch
+  (`exp_decision_extraction.py`); negated commitments are rejected outright
+  (polarity-inversion guard). On 46 real conversational responses it extracted 0
+  decisions — value on real agentic sessions is NOT yet demonstrated.
+- **Supersession is broken (measured, unfixed):** when a decision was later
+  overridden, "current choice" queries surface the stale decision ~2/3 of the
+  time at every scale tested (`exp_thread_scale.py`: current-decision acc
+  0.29–0.36). Do not claim threads answer "what are we using now."
+- **Structure ≈ flat RAG on raw coverage** (0.91 vs 0.88 at 288 threads) — an
+  honest null; structure's value is attribution/why/typing/chronology, which
+  flat storage cannot answer at all. Query latency ~25ms at 2k+ events.
+- **Real capture gaps gate all real-data claims:** live records have empty
+  `agent_id` (no WHO), the deployed daemon predates Phase B (no episodic tables,
+  no tool_sequence), and replay can't inject original timestamps. See
+  `docs/thread-memory-research.md` §2.
 - **Procedural memory: structure built and tested; VALUE is not claimed.** A value
   test is confound-prone (see §5) and none is currently asserted. Do not claim
   procedural memory improves task success.
@@ -88,6 +104,14 @@ Evals (`scripts/`, run with `PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=lo
   precision + sibling-pull-in + why-discrimination metrics, grades by exact
   (episode_id, summary) keys recorded at construction.
 - `exp_memeval_episodic.py` — episode-summary retrieval lift (mixed/small).
+- `exp_decision_extraction.py` — decision auto-extraction P/R on a labeled corpus
+  (held-out batch policy documented in the script).
+- `exp_thread_scale.py` — threads at 24/96/288 scale + decision supersession +
+  flat-RAG baseline + latency.
+- `exp_real_traces.py` — descriptive replay of real recorded tasks (no gold).
+
+Research program, public-data plan, and consolidated results:
+`docs/thread-memory-research.md`.
 
 ## 4. Roadmap — things we want to do (roughly ordered by value)
 
@@ -97,10 +121,20 @@ Evals (`scripts/`, run with `PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=lo
      (`exp_thread_reconstruction_hard.py`): coverage 0.75, precision 0.38, sibling
      pull-in 0.10. Main failure mode: low-importance noise outranks gold events —
      feeds directly into §4.5.
-   - Automatic decision extraction from agent output (today: explicit `log_decision`
-     only). Heuristic or a lightweight classifier; keep it importance-gated.
+   - ~~Automatic decision extraction from agent output.~~ **DONE** (conservative
+     heuristic: `decision_extract.py`, P 0.87 / R 0.71, polarity-guarded,
+     importance-gated, wired into `create_task_episode`). Classifier upgrade
+     still open if real-trace recall proves too low.
    - Causal/entity links (this decision → that change; topic↔entity), so threads
      become a graph, not just a time-sorted list.
+   - **NEW, top priority — supersession:** decision chains ("switch X→Y" links
+     the decision it overrides) + recency-among-relevant for decision queries.
+     Measured broken: stale decision served ~2/3 of the time
+     (`exp_thread_scale.py`). Target current-decision acc >0.8 without
+     regressing non-superseded queries.
+   - **NEW — fix real capture** (gates all real-data claims): plumb `agent_id`
+     through task completion, deploy the current daemon build, add injectable
+     ts to `create_task_episode` for faithful replay.
 2. **NL→time-range parser** ("last Tuesday", "before the refactor" → date range) so
    `Timeline` temporal/thread queries accept natural phrasing. Thin LLM step; measure
    parse accuracy separately from retrieval.
@@ -114,7 +148,11 @@ Evals (`scripts/`, run with `PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=lo
 5. **Retrieval improvements** (motivated by the nulls): confidence-weighted or
    query-routed fusion (equal-RRF doesn't help); **recency-among-relevant** ranking
    (naive global recency backfired — boosts recent distractors; `recall(recency_weight=)`
-   exists but is global).
+   exists but is global). Measured so far: `recall_events(importance_weight=0.5)`
+   is a small validated win (+0.02 hard-benchmark coverage, held-out seeds);
+   weights >1 BACKFIRE by promoting other threads' high-importance events —
+   ranking alone cannot fix content-level thread confusion (§4.1 links are the
+   structural attack).
 6. **The one valid memory *value* study (context-overflow).** Does retrieval help
    when the needed info CANNOT fit the context window (multi-session)? End-to-end QA:
    memory vs truncated-context baseline; needs an LLM reader (API). Non-confounded

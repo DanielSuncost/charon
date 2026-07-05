@@ -245,18 +245,25 @@ def build(rng, tag):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seeds", type=int, default=3)
+    ap.add_argument("--seed-offset", type=int, default=0,
+                    help="first seed (use held-out seeds when validating tuned params)")
+    ap.add_argument("--importance-weight", type=float, default=0.5,
+                    help="importance re-rank exponent (0 = pure content ranking); "
+                         "default matches the library default in episodic.recall_events")
     ap.add_argument("--out", default="results/exp_thread_reconstruction_hard.json")
     args = ap.parse_args()
+    iw = args.importance_weight
 
     cov, prec, sib, attr, order = [], [], [], [], []
     why_top1, why_top3 = [], []
     per_thread = {}
 
-    for seed in range(args.seeds):
+    for seed in range(args.seed_offset, args.seed_offset + args.seeds):
         eng, gold, all_gold_keys = build(random.Random(seed), tag=f"thrh-{seed}")
         for thread_id, g in gold.items():
             q = g["query"]
-            items = th.thread(eng, q, container_tag=f"thrh-{seed}", limit=THREAD_LIMIT)
+            items = th.thread(eng, q, container_tag=f"thrh-{seed}", limit=THREAD_LIMIT,
+                              importance_weight=iw)
             keys = [(it.episode_id, it.what) for it in items]
             gold_keys = [k for k, _a, _t in g["events"]]
             agent_of = {k: a for k, a, _t in g["events"]}
@@ -279,7 +286,8 @@ def main():
                 seq = [ts_of[k] for _it, k in matched]
                 order.append(1.0 if seq == sorted(seq) else 0.0)
             # why discrimination: does why() rank THIS thread's rationale first?
-            w = th.why(eng, q, container_tag=f"thrh-{seed}", limit=3)
+            w = th.why(eng, q, container_tag=f"thrh-{seed}", limit=3,
+                       importance_weight=iw)
             whys = [x["why"] or "" for x in w]
             why_top1.append(1.0 if whys and whys[0] == g["why"] else 0.0)
             why_top3.append(1.0 if g["why"] in whys else 0.0)
@@ -305,6 +313,7 @@ def main():
 
     report = {
         "seeds": args.seeds, "threads": n_threads, "agents": len(AGENTS),
+        "importance_weight": iw,
         "gold_events_per_thread": GOLD_PER_THREAD, "thread_limit": THREAD_LIMIT,
         "coverage": m(cov), "precision": m(prec), "sibling_pull_in": m(sib),
         "attribution": m(attr), "ordering": m(order),

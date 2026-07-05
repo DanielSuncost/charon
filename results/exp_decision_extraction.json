@@ -1,0 +1,24 @@
+{
+  "positives": 28,
+  "negatives": 36,
+  "precision": 0.87,
+  "recall": 0.714,
+  "f1": 0.784,
+  "what_span_accuracy": 1.0,
+  "why_recall": 0.667,
+  "missed_positives": [
+    "Postgres it is.",
+    "We're not going to use Kubernetes for this; docker-compose is enough.",
+    "In the end the queue won out over direct calls.",
+    "Sticking with make instead of just.",
+    "Redis is the call here.",
+    "Went back and forth on it, but JWT wins.",
+    "The consensus was to keep the monolith.",
+    "K8s is overkill, so we're keeping docker-compose."
+  ],
+  "false_positives": [
+    "We went with the assumption that traffic doubles yearly.",
+    "We agreed to disagree on formatting.",
+    "We'll use the staging cluster to reproduce the bug."
+  ]
+}
