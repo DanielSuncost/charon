@@ -53,10 +53,17 @@ Semantic recall is the separate `Recall` tool (`tools/recall_tool.py`).
   are reconstructed from the recorded task data at completion and share the task
   timestamp — no intermediate reasoning, no sub-turn timing. (Per-turn live capture
   is Phase B-max, unbuilt — see roadmap.)
-- **Cross-agent thread reconstruction: coverage 0.94** (retrieval-bound, paraphrase
-  queries, moderate synthetic benchmark). Attribution/ordering/why score 1.00 but
-  those are **structural** (deterministic once retrieved) — "correctly implemented,"
-  not a hard capability. Decision capture is via explicit `log_decision` only.
+- **Cross-agent thread reconstruction: coverage 0.94 moderate / 0.75 hard.** The
+  moderate benchmark (6 separated topics, 3 agents, no noise) is retrieval-bound at
+  0.94; the hard benchmark (12 near-duplicate sibling threads, 6 agents, interleaved
+  timelines, distractor noise) drops to **coverage 0.75, precision 0.38, sibling
+  pull-in 0.10** — low-importance noise chatter outranks gold implement/verify
+  events (`recall_events` ignores event importance; see §4.5). Attribution/ordering
+  score 1.00 but are **structural** (deterministic once retrieved) — "correctly
+  implemented," not a hard capability. `why()` top-1 is 1.00 on the hard set but
+  with only 12 decision candidates (one near-duplicate distractor per query) —
+  a coarse discrimination check, not a hard capability. Decision capture is via
+  explicit `log_decision` only.
 - **Procedural memory: structure built and tested; VALUE is not claimed.** A value
   test is confound-prone (see §5) and none is currently asserted. Do not claim
   procedural memory improves task success.
@@ -76,13 +83,20 @@ Evals (`scripts/`, run with `PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=lo
 - `exp_episodic_queries.py` — temporal "when/where" query benchmark (episodic vs flat;
   timestamp-derived gold).
 - `exp_thread_reconstruction.py` — cross-agent thread reconstruction (structural gold).
+- `exp_thread_reconstruction_hard.py` — hardened variant (§4.1): near-duplicate
+  sibling topics, 6 agents, interleaved timelines, distractor events; adds
+  precision + sibling-pull-in + why-discrimination metrics, grades by exact
+  (episode_id, summary) keys recorded at construction.
 - `exp_memeval_episodic.py` — episode-summary retrieval lift (mixed/small).
 
 ## 4. Roadmap — things we want to do (roughly ordered by value)
 
 1. **Cross-agent threads — harden the benchmark & capture.**
-   - Harder eval: overlapping/near-duplicate topics, interleaved threads, more agents,
-     distractor events within a thread → a real (lower) coverage number.
+   - ~~Harder eval: overlapping/near-duplicate topics, interleaved threads, more agents,
+     distractor events within a thread → a real (lower) coverage number.~~ **DONE**
+     (`exp_thread_reconstruction_hard.py`): coverage 0.75, precision 0.38, sibling
+     pull-in 0.10. Main failure mode: low-importance noise outranks gold events —
+     feeds directly into §4.5.
    - Automatic decision extraction from agent output (today: explicit `log_decision`
      only). Heuristic or a lightweight classifier; keep it importance-gated.
    - Causal/entity links (this decision → that change; topic↔entity), so threads
