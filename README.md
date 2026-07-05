@@ -59,8 +59,8 @@ search carries it. The FTS5 + reciprocal-rank-fusion "hybrid" adds
 nothing on abstractive questions, and version-chain update-detection
 gives no measurable retrieval gain. Single-session recall is
 near-saturated; multi-session is the hard case (recall@1 ≈0.27).
-Per-category recall@k, the negatives, and a one-command reproduce:
-[docs/memory-retrieval-eval.md](docs/memory-retrieval-eval.md).
+Reproduce with the eval scripts under `scripts/` (`exp_memory_ablation.py`,
+`exp_memeval.py`).
 
 [Three-tier design](docs/three-tier-memory.md)
 
@@ -101,9 +101,7 @@ program's output, no LLM), so it reproduces exactly. The LLM-implementer
 path — where a model proposes each change — also runs end-to-end: it
 reads a frozen checker, edits within its scope, and converges, with the
 frozen-file and rollback gates holding. Demonstrated on small tasks, not
-a benchmarked agent capability. See [the case
-study](docs/judge-loop-case-study.md) and [reward-hacking
-demo](docs/reward-hacking-demo.md).
+a benchmarked agent capability.
 
 | Judge type | Signal | Example |
 |------------|--------|---------|
@@ -243,7 +241,6 @@ full list.
 | Document | Description |
 |----------|-------------|
 | [Install](docs/install.md) | Setup on macOS and Ubuntu |
-| [Memory retrieval eval](docs/memory-retrieval-eval.md) | Per-category recall@k + measured negatives |
 | [Three-Tier Memory](docs/three-tier-memory.md) | User / project / agent context hierarchy |
 | [Procedures & Judge Loops](docs/plans/procedure-learning-and-optimization-loops.md) | Iterative optimization with pluggable scoring |
 | [Autonomous Work](docs/plans/autonomous-goal-driven-work.md) | Goal-driven self-assignment |
