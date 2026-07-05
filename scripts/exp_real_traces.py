@@ -16,7 +16,7 @@ gold labels. Known limits of the recorded data (reported below when hit):
     columns are blank.
   - `response_preview` is truncated at 1200 chars and tool_calls are recorded as
     a name sequence only → decision extraction sees partial text; event timing
-    is task-level (Phase B scope, per docs/memory-subsystem.md §2).
+    is task-level (completion-derived capture, not per-turn streaming).
 
   PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
     python scripts/exp_real_traces.py --state .charon_state

@@ -250,10 +250,8 @@ retriever could reach with the same GPT-4o reader. Both reader numbers are
 reader-/judge-dependent; the point of including them is context, not a ranking.
 
 The reproducible, no-API part is retrieval accuracy (500 questions): R@1 0.72,
-R@5 0.95, R@10 0.985. A small sample is committed under `results/longmemeval/`
-(30-question subset: R@1 0.93, R@5 0.97, ~10–18 ms per recall), reproducible with
-`bench_longmemeval.py --retrieval-only`. For the per-category breakdown and the
-measured negatives, see [memory-retrieval-eval.md](../memory-retrieval-eval.md).
+R@5 0.95, R@10 0.985 (30-question subset: R@1 0.93, R@5 0.97, ~10–18 ms per
+recall), reproducible with `bench_longmemeval.py --retrieval-only`.
 
 Caveats, stated up front:
 - LongMemEval scores are dominated by the reader model and are sensitive to

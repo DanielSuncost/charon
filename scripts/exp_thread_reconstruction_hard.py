@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-agent thread reconstruction — HARD variant (roadmap §4.1, memory-subsystem.md).
+"""Cross-agent thread reconstruction — HARD variant.
 
 The moderate benchmark (`exp_thread_reconstruction.py`, coverage 0.94) uses six
 well-separated topics, three agents, one thread per month, and no noise — retrieval
