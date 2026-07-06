@@ -172,6 +172,8 @@ def create_agent(
     visibility: str = 'user',
     parent_agent_id: str | None = None,
     require_tmux: bool | None = None,
+    specialization: str = '',
+    charter: str = '',
 ) -> dict:
     agents = load_agents()
     agent_id = next_id(agents, custom_id=agent_id)
@@ -205,6 +207,13 @@ def create_agent(
         'visibility': visibility,
         'parent_agent_id': parent_agent_id,
     }
+    if specialization.strip():
+        # User-assigned specialization is authoritative: lock it so the
+        # soft-specialization auto-labeler never overwrites it.
+        a['specialization'] = specialization.strip()
+        a['specialization_locked'] = True
+    if charter.strip():
+        a['charter'] = charter.strip()
     agents.append(a)
     save_agents(agents)
     # Also write to SQLite store
@@ -220,6 +229,43 @@ def create_agent(
 
 def list_agents() -> list[dict]:
     return load_agents()
+
+
+def assign_specialization(agent_id: str, specialization: str,
+                          charter: str | None = None) -> dict | None:
+    """Give an existing agent a user-assigned specialization (and optional role
+    charter). Locks the specialization so soft_specialization's auto-derived
+    labels never overwrite it. Pass specialization='' to clear and unlock."""
+    agents = load_agents()
+    for a in agents:
+        if a.get('id') == agent_id:
+            spec = (specialization or '').strip()
+            if spec:
+                a['specialization'] = spec
+                a['specialization_locked'] = True
+            else:
+                a.pop('specialization', None)
+                a.pop('specialization_locked', None)
+            if charter is not None:
+                if charter.strip():
+                    a['charter'] = charter.strip()
+                else:
+                    a.pop('charter', None)
+            a['last_active'] = now()
+            save_agents(agents)
+            if _use_store():
+                try:
+                    db = _get_db(STATE_DIR)
+                    _db_agent_update(
+                        db, agent_id,
+                        specialization=a.get('specialization', ''),
+                        specialization_locked=a.get('specialization_locked', False),
+                        charter=a.get('charter', ''),
+                    )
+                except Exception:
+                    pass
+            return a
+    return None
 
 
 def set_status(agent_id: str, status: str) -> dict | None:

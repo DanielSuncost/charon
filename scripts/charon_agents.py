@@ -645,6 +645,9 @@ def _chat_command_catalog() -> list[str]:
     return [
         '/help',
         '/agents',
+        '/specialist',
+        '/specialist create <template> [name]',
+        '/specialist assign <agent_id> <specialization>',
         '/thread',
         '/model',
         '/model <name>',
@@ -692,6 +695,35 @@ def _handle_chat_slash_command(msg: str, *, agent_id: str, conversation_id: str,
     text = (msg or '').strip()
     if text in ('/help', '/setup'):
         _print_chat_suggestions('/setup' if text == '/setup' else '')
+        return True
+
+    if text == '/specialist' or text.startswith('/specialist '):
+        specialists = _load_module('specialists_cli', ROOT / 'apps' / 'core-daemon' / 'specialists.py')
+        parts = text[len('/specialist'):].strip().split(None, 2)
+        if not parts or parts[0] == 'list':
+            print('Specialist templates:')
+            for key, label in specialists.list_templates().items():
+                print(f'  {key:24s} {label}')
+            active = [a for a in agent_lifecycle.list_agents() if a.get('specialization_locked')]
+            if active:
+                print('Active specialists:')
+                for a in active:
+                    print(f"  {a.get('id')}  {a.get('name', '')}  [{a.get('specialization', '')}]  {a.get('project', '')}")
+            print('Usage: /specialist create <template> [name] | /specialist assign <agent_id> <specialization>')
+            return True
+        if parts[0] == 'create' and len(parts) >= 2:
+            try:
+                a = specialists.create_specialist(
+                    parts[1], name=parts[2] if len(parts) > 2 else None, project=project)
+                print(f"Created specialist {a['id']} ({a['name']}) — {a.get('specialization', '')}")
+            except Exception as e:
+                print(f'error: {e}')
+            return True
+        if parts[0] == 'assign' and len(parts) >= 3:
+            a = agent_lifecycle.assign_specialization(parts[1], parts[2])
+            print(f"{a['id']} is now: {a.get('specialization', '')}" if a else f'Agent not found: {parts[1]}')
+            return True
+        print('Usage: /specialist [list] | create <template> [name] | assign <agent_id> <specialization>')
         return True
 
     if text == '/clarifications':

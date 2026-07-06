@@ -424,6 +424,43 @@ def _get_or_create_engine(state_dir: Path, agent: dict, task: dict):
     return engine, True
 
 
+def _promote_task_to_episode(
+    state_dir: Path,
+    agent: dict,
+    task: dict,
+    *,
+    task_id: str,
+    instruction: str,
+    summary: str,
+    tool_calls: list[dict],
+    response_text: str,
+    total_turns: int,
+    provider: str = '',
+) -> None:
+    """Promote a completed task into the episodic memory pipeline: a
+    first-class Episode with typed events (and auto-captured decisions),
+    attributed to this agent — the WHO that makes cross-agent threads and a
+    specialist's long-lived track record work. Best-effort: never raises."""
+    try:
+        from execution_memory import create_task_episode
+        create_task_episode(
+            state_dir,
+            session_id=task_id,
+            agent_id=agent.get('id', ''),
+            project_root=task.get('project') or agent.get('project') or '',
+            provider=provider,
+            objective=instruction,
+            summary=summary,
+            tool_calls=tool_calls,
+            response_text=response_text,
+            total_turns=total_turns,
+            input_tokens=0,
+            output_tokens=0,
+        )
+    except Exception:
+        pass
+
+
 def _run_task_with_engine(
     state_dir: Path,
     task: dict,
@@ -569,6 +606,16 @@ def _run_task_with_engine(
         extract_and_index_facts(state_dir, index_turns, agent_id=agent_id, conv_id=task_id)
     except ImportError:
         pass
+
+    # Episodic promotion: first-class Episode + typed events + auto-captured
+    # decisions, attributed to this agent (Phase B pipeline).
+    _promote_task_to_episode(
+        state_dir, agent, task,
+        task_id=task_id, instruction=instruction, summary=summary,
+        tool_calls=tool_calls_made, response_text=response_text,
+        total_turns=total_turns,
+        provider=str(getattr(getattr(engine, 'provider', None), 'name', '') or ''),
+    )
     record_attempt_event(
         state_dir, agent_id, task_id, attempt_id,
         'attempt_succeeded', {

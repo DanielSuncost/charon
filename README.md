@@ -3,18 +3,21 @@
 </p>
 
 <p align="center">
-  <strong>An agent operating system for your local machine.</strong>
+  <strong>An agent operating system for your local machine — staffed by long-lived specialist agents.</strong>
 </p>
 
 ---
 
-Charon is a terminal-native runtime for managing AI agents. It gives
-agents persistent memory across sessions, coordinates parallel workers
-with scope restrictions, and provides a single TUI where you can see
-and interact with every agent session — local or remote — in one place.
+Charon runs a *team* of specialists, not a chat window. You staff your
+machine with persistent agents — a release engineer, a feature engineer,
+a security engineer, an optimization engineer — each with a standing role
+charter, its own memory, and a track record that survives new sessions,
+restarts, and even provider switches: swap the model, keep the engineer.
 
 Everything runs locally. Memory is SQLite + local embeddings. No cloud
-services for recall or context. You own the data.
+services for recall or context. You own the data — and so do your
+specialists: their identity and history live in files on your disk, not
+in a provider's account.
 
 This is an active personal project. It works, it has tests, and I use
 it daily. It is not aiming at production stability for other people's
@@ -45,6 +48,26 @@ More detail: [docs/install.md](docs/install.md)
 ---
 
 ## What it does
+
+### Specialists
+
+Long-lived agents with roles you assign. A specialist carries a standing
+charter injected into every task's system prompt, accumulates working
+memory and episodic history under its own agent id, and records decisions
+with rationale that you — or any other agent — can query later: *who
+decided this, when, and why*.
+
+```
+/specialist create release-engineer
+/specialist create security-engineer
+/specialist assign AG-0007 "database reliability engineer"
+```
+
+Built-in templates: `release-engineer`, `feature-engineer`,
+`security-engineer`, `optimization-engineer` — or assign any custom
+specialization. Assigned roles are locked: the auto-labeler that tags
+generalist agents by their recent work never overwrites a specialist
+you named.
 
 ### Memory
 
