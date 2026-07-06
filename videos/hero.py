@@ -150,14 +150,16 @@ def concat(parts: list[Path], out: Path) -> Path:
 
 # ── audio ────────────────────────────────────────────────────────────
 PY = str(REPO / '.venv' / 'bin' / 'python3')
+KOKORO_SAY = str(REPO / 'videos' / 'kokoro_say.py')   # patched: fixes SineGen crash
 MLX_MODEL = 'mlx-community/Kokoro-82M-bf16'     # local neural TTS
 MLX_VOICE = 'bm_lewis'                          # British male, measured/austere
 
 
 def _kokoro_once(text: str, prefix: Path) -> Path | None:
+    # Route through kokoro_say.py, which patches mlx-audio's SineGen length bug
+    # so whole lines synthesize in one call (natural prosody, no clause-chopping).
     try:
-        _run([PY, '-m', 'mlx_audio.tts.generate', '--model', MLX_MODEL,
-              '--voice', MLX_VOICE, '--text', text, '--file_prefix', str(prefix)])
+        _run([PY, KOKORO_SAY, text, str(prefix), MLX_MODEL, MLX_VOICE])
         wav = Path(f'{prefix}_000.wav')
         return wav if wav.exists() else None
     except subprocess.CalledProcessError:
@@ -256,8 +258,17 @@ def _say_one(text: str, prefix: Path) -> Path | None:
 
 
 def _mlx_say(text: str, prefix: Path) -> Path | None:
-    """Synthesize a narration line: split into sentences, voice each, trim only the
-    end-silence of each, join with one natural pause. Preserves every word."""
+    """Synthesize a narration line as ONE Kokoro call — the model handles
+    multi-sentence lines with natural, connected prosody (its own varied pauses),
+    so we don't chop into sentences. We only trim the dead air at the very start
+    and end, leaving the internal rhythm intact.
+
+    Splitting is a *fallback* only for the rare text that trips Kokoro's
+    phoneme-length bug: per-sentence, then per-clause, preserving every word."""
+    whole = _kokoro_once(text, Path(f'{prefix}_whole'))
+    if whole:
+        return _trim_ends(whole, Path(f'{prefix}_000.wav'))
+
     import re
     sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text.strip()) if s.strip()]
     trimmed = []
@@ -270,7 +281,8 @@ def _mlx_say(text: str, prefix: Path) -> Path | None:
         out = Path(f'{prefix}_000.wav')
         _run([FF, '-y', '-i', str(trimmed[0]), '-ar', '24000', '-ac', '1', str(out)])
         return out
-    return _concat_wavs(trimmed, 0.30, Path(f'{prefix}_000.wav'))
+    # a sentence-boundary pause close to what Kokoro itself renders (~0.35s)
+    return _concat_wavs(trimmed, 0.35, Path(f'{prefix}_000.wav'))
 
 
 def narrate(out: Path) -> Path:
