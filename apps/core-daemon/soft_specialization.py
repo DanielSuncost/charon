@@ -213,6 +213,30 @@ def _get_current_specialization(state_dir: Path, agent_id: str) -> str:
     return ''
 
 
+def _is_locked(state_dir: Path, agent_id: str) -> bool:
+    """True when the specialization was assigned by the user (a long-lived
+    specialist like a release engineer) — auto-derived labels must not
+    overwrite it."""
+    try:
+        from store_adapter import get_db, agent_get
+        db = get_db(state_dir)
+        agent = agent_get(db, agent_id)
+        if agent and agent.get('specialization_locked'):
+            return True
+    except Exception:
+        pass
+    # agents.json fallback (store may be disabled)
+    try:
+        agents_file = state_dir / 'agents.json'
+        if agents_file.exists():
+            for a in json.loads(agents_file.read_text()):
+                if a.get('id') == agent_id:
+                    return bool(a.get('specialization_locked'))
+    except Exception:
+        pass
+    return False
+
+
 def _set_specialization(state_dir: Path, agent_id: str, label: str) -> None:
     """Write specialization to agent record (via extra JSON column)."""
     try:
@@ -259,6 +283,10 @@ def refresh_specialization(
     Returns the new label, or None if skipped.
     """
     if not should_refresh(agent_id):
+        return None
+
+    if _is_locked(state_dir, agent_id):
+        _last_refresh[agent_id] = time.time()
         return None
 
     summaries = _get_summaries(state_dir, agent_id)

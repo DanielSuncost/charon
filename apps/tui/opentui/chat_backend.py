@@ -5099,6 +5099,50 @@ class ChatBackend:
                 except Exception as e:
                     emit({'type': 'error', 'error': str(e), 'request_id': request_id})
                 return
+            if command == '/specialist' or command.startswith('/specialist '):
+                try:
+                    import specialists as specialists_mod
+                    import agent_lifecycle as lifecycle_mod
+                    rest = command[len('/specialist'):].strip()
+                    parts = rest.split(None, 2)
+                    if not parts or parts[0] == 'list':
+                        lines = ['Specialist templates:']
+                        for key, label in specialists_mod.list_templates().items():
+                            lines.append(f'  {key}: {label}')
+                        active = [a for a in lifecycle_mod.list_agents()
+                                  if a.get('specialization_locked')]
+                        if active:
+                            lines.append('Active specialists:')
+                            for a in active:
+                                lines.append(f"  {a.get('id')} {a.get('name', '')} "
+                                             f"[{a.get('specialization', '')}] {a.get('project', '')}")
+                        lines.append('Usage: /specialist create <template> [name] | '
+                                     '/specialist assign <agent_id> <specialization>')
+                        emit({'type': 'status', 'message': '\n'.join(lines), 'request_id': request_id})
+                    elif parts[0] == 'create' and len(parts) >= 2:
+                        a = specialists_mod.create_specialist(
+                            parts[1], name=parts[2] if len(parts) > 2 else None)
+                        emit({'type': 'status',
+                              'message': f"Created specialist {a['id']} ({a['name']}) — "
+                                         f"{a.get('specialization', '')}",
+                              'request_id': request_id})
+                    elif parts[0] == 'assign' and len(parts) >= 3:
+                        a = lifecycle_mod.assign_specialization(parts[1], parts[2])
+                        if a:
+                            emit({'type': 'status',
+                                  'message': f"{a['id']} is now: {a.get('specialization', '')}",
+                                  'request_id': request_id})
+                        else:
+                            emit({'type': 'error', 'error': f'Agent not found: {parts[1]}',
+                                  'request_id': request_id})
+                    else:
+                        emit({'type': 'status',
+                              'message': 'Usage: /specialist [list] | create <template> [name] | '
+                                         'assign <agent_id> <specialization>',
+                              'request_id': request_id})
+                except Exception as e:
+                    emit({'type': 'error', 'error': str(e), 'request_id': request_id})
+                return
             if command == '/batch' or command.startswith('/batch '):
                 batch_id = command[7:].strip() if command.startswith('/batch ') else ''
                 try:

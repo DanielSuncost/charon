@@ -86,6 +86,16 @@ def _build_identity(agent: dict, task: dict) -> str:
     if goal:
         lines.append(f'Goal: {goal}')
 
+    charter = (agent.get('charter') or '').strip()
+    if charter:
+        lines.append('')
+        lines.append('# Role charter')
+        lines.append(
+            'This is your standing charter as a long-lived specialist. It holds across '
+            'every task and session; task instructions refine it but do not replace it.'
+        )
+        lines.append(charter)
+
     lines.append('')
     lines.append(
         'You are part of Charon, a single-user agent operating system for software development. '
