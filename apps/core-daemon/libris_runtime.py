@@ -787,6 +787,7 @@ def add_claim(
     operation_id: str = '',
     confidence: str = 'medium',
     stance: str = 'supports',
+    evidence_grade: str = '',
     entity_refs: list[str] | None = None,
 ) -> dict[str, Any]:
     ensure_research_tree(state_dir, project_root)
@@ -799,6 +800,10 @@ def add_claim(
         'text': text.strip(),
         'confidence': confidence,
         'stance': stance,
+        # methodological strength of the underlying evidence, distinct from the
+        # agent's confidence: strong / moderate / weak / anecdotal / theoretical
+        # / contested. Renders as an epistemic badge on the claim.
+        'evidence_grade': (evidence_grade or '').strip().lower(),
         'entity_refs': list(entity_refs or []),
         'created_at': _now_iso(),
     }

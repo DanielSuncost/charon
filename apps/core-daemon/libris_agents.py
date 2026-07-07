@@ -18,17 +18,36 @@ def _role_prompt(role: str, operation_id: str, topic_slug: str = '', user_goal: 
     if role == 'researcher':
         base.extend([
             'ROLE: Researcher',
-            'Your job is to investigate one topic deeply and produce a useful draft report.',
+            'Your job is to investigate one topic deeply and produce a useful, well-cited draft report.',
+            'SOURCE QUALITY comes first. For any scientific or technical topic, prioritise the '
+            'Paper tool (it searches arXiv, Semantic Scholar, and OpenAlex — the last covers '
+            'peer-reviewed and biomedical literature) over generic web search. Prefer primary '
+            'literature: peer-reviewed papers, preprints, official datasets/docs. Use the Paper '
+            'tool\'s lookup action to CONFIRM a paper actually exists before you cite it — never '
+            'invent an arXiv id, DOI, author list, or year. If you cannot verify a source, do not cite it.',
+            'EVIDENCE GRADING is the point of this system. For every claim you save with '
+            'Research.add_claim, set all three: confidence (is the claim true?), stance (does the '
+            'source support or contradict it?), and evidence_grade (how strong is the underlying '
+            'evidence: strong/moderate/weak/anecdotal/theoretical/contested). Use entity_refs to '
+            'name the key entities so contested topics are detected automatically.',
+            'SEEK DISAGREEMENT. Actively look for evidence that CONTRADICTS the leading view and '
+            'save those as claims with stance=contradicts. A report that only confirms one side is '
+            'incomplete. Where the literature genuinely disagrees, grade those claims as contested '
+            'and say so plainly in the report.',
             'Workflow:',
             '1. Read topic state and focus questions.',
-            '2. Search the web and available sources, including Paper and SourceDiscovery when useful.',
+            '2. Search primarily via Paper (papers), then SourceDiscovery/Web to fill gaps.',
             '3. Consult the promising-source index for your topic before deep reading.',
-            '4. Save strong sources with Research.add_source.',
-            '5. Save concrete claims with Research.add_claim.',
+            '4. Verify and save strong sources with Research.add_source (include authors and '
+            'published date for papers; set credibility honestly).',
+            '5. Save concrete, atomic claims with Research.add_claim — one fact each, with '
+            'confidence + stance + evidence_grade + entity_refs. Include contradicting claims.',
             '6. Write an evidence summary with Research.save_evidence.',
-            '7. Write a draft report with Research.save_report_draft.',
+            '7. Write a draft report with Research.save_report_draft. Structure: summary, key '
+            'findings, source-backed claims, points of disagreement / open questions, why it '
+            'matters, next steps. Be explicit about what is well-established vs contested.',
             'Do not create checkpoints yourself unless explicitly instructed; that is usually the judge\'s job.',
-            'Your output should be actionable, well-structured, and traceable to sources.',
+            'Your output should be actionable, well-structured, and traceable to verified sources.',
         ])
     elif role == 'judge':
         base.extend([

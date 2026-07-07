@@ -148,16 +148,30 @@ RESEARCH_TOOL_DEF = {
             },
             'confidence': {
                 'type': 'string',
-                'description': 'Claim confidence.',
+                'enum': ['high', 'medium', 'low'],
+                'description': 'Your confidence that the claim is TRUE, given the evidence.',
             },
             'stance': {
                 'type': 'string',
-                'description': 'Claim stance: supports, contradicts, unclear.',
+                'enum': ['supports', 'contradicts', 'unclear'],
+                'description': 'Whether the source SUPPORTS or CONTRADICTS the claim (or is unclear).',
+            },
+            'evidence_grade': {
+                'type': 'string',
+                'enum': ['strong', 'moderate', 'weak', 'anecdotal', 'theoretical', 'contested'],
+                'description': (
+                    'Methodological STRENGTH of the underlying evidence, independent of your '
+                    'confidence: strong (e.g. RCT / meta-analysis / large replicated study), '
+                    'moderate (solid observational / single good study), weak (small / preliminary), '
+                    'anecdotal (case reports), theoretical (model/argument, not empirical), '
+                    'contested (the literature actively disagrees).'
+                ),
             },
             'entity_refs': {
                 'type': 'array',
                 'items': {'type': 'string'},
-                'description': 'Optional entity references for a claim.',
+                'description': 'Key entities the claim is about (used to detect contested topics '
+                               'where supporting and contradicting claims name the same entity).',
             },
             'markdown': {
                 'type': 'string',
@@ -721,6 +735,7 @@ def execute_research(params: dict, ctx: ToolContext) -> ToolResult:
                 operation_id=str(params.get('operation_id') or ''),
                 confidence=str(params.get('confidence') or 'medium'),
                 stance=str(params.get('stance') or 'supports'),
+                evidence_grade=str(params.get('evidence_grade') or ''),
                 entity_refs=list(params.get('entity_refs') or []),
             )
             return ToolResult(
