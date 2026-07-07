@@ -48,21 +48,37 @@ def critique_issue_count(critique_markdown: str) -> int:
 
 
 
+def _norm01(x: Any) -> float:
+    """Coerce a judge score to 0-1. Judges emit 0-10 (e.g. 7.8); the convergence
+    thresholds are 0-1. Anything >1 is treated as a 0-10 score and divided by 10.
+    (Without this, a 7.8 always read as 'good enough' and revision never fired.)"""
+    try:
+        v = float(x or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return round(v / 10.0, 4) if v > 1.0 else round(v, 4)
+
+
 def get_topic_checkpoint_metrics(state_dir: Path, project_root: Path, operation_id: str, topic_slug: str) -> dict[str, Any]:
     from libris_runtime import list_checkpoints
 
     items = list_checkpoints(state_dir, project_root, operation_id, topic_slug)
     latest = items[-1] if items else {}
     prev = items[-2] if len(items) >= 2 else {}
-    latest_score = float(latest.get('score') or 0.0) if latest else 0.0
-    prev_score = float(prev.get('score') or 0.0) if prev else 0.0
+    latest_score = _norm01(latest.get('score')) if latest else 0.0
+    prev_score = _norm01(prev.get('score')) if prev else 0.0
     score_delta = round(latest_score - prev_score, 4) if latest and prev else latest_score
+    # citation_quality is the dimension our judges most consistently ding; surface
+    # it (normalised) so the revision loop can target citations specifically.
+    latest_metrics = latest.get('metrics') or {}
+    citation_quality = _norm01(latest_metrics.get('citation_quality')) if latest_metrics else 0.0
     critique_md = _read_text(str(latest.get('critique_path') or '')) if latest else ''
     return {
         'checkpoint_count': len(items),
         'latest_score': latest_score,
         'prev_score': prev_score,
         'score_delta': score_delta,
+        'citation_quality': citation_quality,
         'latest_checkpoint_id': latest.get('checkpoint_id') or '',
         'issue_count': critique_issue_count(critique_md),
     }
@@ -94,10 +110,14 @@ def should_request_additional_revision(
     latest_score = float(metrics.get('latest_score') or 0.0)
     score_delta = float(metrics.get('score_delta') or 0.0)
     issue_count = int(metrics.get('issue_count') or 0)
+    citation_quality = float(metrics.get('citation_quality') or 0.0)
 
-    enough_quality = latest_score >= 0.84 and issue_count <= 1
+    # Weak citations are a first-class reason to revise even if the overall score
+    # is otherwise acceptable — citation quality is the most common judge ding.
+    weak_citations = citation_quality > 0.0 and citation_quality < 0.8
+    enough_quality = latest_score >= 0.84 and issue_count <= 1 and not weak_citations
     plateau = checkpoint_count >= 2 and score_delta < 0.04
-    serious_deficits = issue_count >= 2 or latest_score < 0.78
+    serious_deficits = issue_count >= 2 or latest_score < 0.78 or weak_citations
 
     should_revise = (
         checkpoint_count >= 1 and
@@ -111,6 +131,8 @@ def should_request_additional_revision(
     reasons = []
     if serious_deficits:
         reasons.append('serious_deficits')
+    if weak_citations:
+        reasons.append('weak_citations')
     if enough_quality:
         reasons.append('quality_good_enough')
     if plateau:

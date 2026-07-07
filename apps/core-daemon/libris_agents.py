@@ -45,7 +45,10 @@ def _role_prompt(role: str, operation_id: str, topic_slug: str = '', user_goal: 
             '6. Write an evidence summary with Research.save_evidence.',
             '7. Write a draft report with Research.save_report_draft. Structure: summary, key '
             'findings, source-backed claims, points of disagreement / open questions, why it '
-            'matters, next steps. Be explicit about what is well-established vs contested.',
+            'matters, next steps. Be explicit about what is well-established vs contested. '
+            'CITE INLINE: after each source-backed statement append `[cite:<source_id>]` (the id '
+            'from add_source); these render as numbered linked citations. Never write "the saved '
+            'claim states" or leave a raw src_/clm_ id in prose — always wrap it in [cite:...].',
             'Do not create checkpoints yourself unless explicitly instructed; that is usually the judge\'s job.',
             'Your output should be actionable, well-structured, and traceable to verified sources.',
         ])
@@ -62,8 +65,15 @@ def _role_prompt(role: str, operation_id: str, topic_slug: str = '', user_goal: 
             'The report must include: a summary that states the bottom line, key findings, the source-backed '
             'claims grouped sensibly, an explicit "points of disagreement / what is contested" section that '
             'reflects any contradicting claims, why it matters, and open questions. Be epistemically honest: '
-            'distinguish what is well-established from what is weak, theoretical, or contested. Cite claims by '
-            'their content; do not invent sources or facts beyond what is saved.',
+            'distinguish what is well-established from what is weak, theoretical, or contested. Do not invent '
+            'sources or facts beyond what is saved.',
+            'CITE INLINE, like a real paper. Immediately after each source-backed statement, append a citation '
+            'token `[cite:<source_id>]` using the source_id of the source that supports it (from '
+            'get_topic_state / search_sources / the claims you reviewed). Cite multiple sources as '
+            '`[cite:src_a,src_b]`. These tokens render as numbered, linked citations. NEVER write meta-prose '
+            'like "the saved claim states..." or "source src_1234 says...", and never leave a raw src_/clm_ id '
+            'visible in the prose — always wrap it in a [cite:...] token. Aim for at least one inline citation '
+            'on every factual sentence in the key-findings and claims sections.',
         ])
     elif role == 'judge':
         base.extend([
@@ -129,7 +139,15 @@ def _role_instruction(role: str, operation_id: str, topic_slug: str = '', user_g
             f'contradicting ones), an evidence markdown via Research.save_evidence, and the draft report.\n\n'
             f'The draft report should include: summary, key findings, source-backed claims, points of disagreement / '
             f'open questions, why it matters, and next research steps. Be explicit about what is well-established vs '
-            f'contested. If revising, explicitly address the judge\'s weaknesses and required fixes.'
+            f'contested.\n\n'
+            f'CITE INLINE: right after each source-backed statement, append `[cite:<source_id>]` (the source_id from '
+            f'the source you saved with add_source), e.g. `...predicts mortality [cite:src_ab12cd].` Cite multiple '
+            f'as `[cite:src_a,src_b]`. These render as numbered, linked citations. Do NOT write "the saved claim '
+            f'states" or leave raw src_/clm_ ids in the prose — always wrap them in a [cite:...] token. Every '
+            f'factual sentence in key findings and claims should carry at least one inline citation.\n\n'
+            f'If revising, explicitly address the judge\'s weaknesses and required fixes — especially any citation '
+            f'weaknesses: add an inline citation to every unsupported statement, replace weak sources with stronger '
+            f'primary literature, and verify each source resolves before citing it.'
         )
     if role == 'writer':
         return (
@@ -140,7 +158,11 @@ def _role_instruction(role: str, operation_id: str, topic_slug: str = '', user_g
             f'promptly, within your first several tool calls.\n\n'
             f'Structure: summary (state the bottom line up front), key findings, source-backed claims, an '
             f'explicit points-of-disagreement / contested section, why it matters, and open questions. Be '
-            f'epistemically honest about what is well-established vs. weak or contested. Do not invent sources.'
+            f'epistemically honest about what is well-established vs. weak or contested. Do not invent sources.\n\n'
+            f'CITE INLINE like a real paper: after each source-backed statement append `[cite:<source_id>]` '
+            f'(the source_id from the reviewed sources/claims), `[cite:src_a,src_b]` for several. These render '
+            f'as numbered linked citations. Never write "the saved claim states" or leave a raw src_/clm_ id '
+            f'visible — always wrap it in a [cite:...] token. Every factual sentence should carry one.'
         )
     if role == 'judge':
         return (
