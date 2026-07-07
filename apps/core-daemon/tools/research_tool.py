@@ -627,7 +627,15 @@ def execute_research(params: dict, ctx: ToolContext) -> ToolResult:
             title = str(params.get('title') or '').strip()
             url = str(params.get('url') or '').strip()
             if not op_id or not topic_slug or not title:
-                return ToolResult(content='Error: operation_id, topic_slug, and title are required.', is_error=True)
+                return ToolResult(
+                    content=(
+                        'Error: operation_id, topic_slug, and title are required — the '
+                        'promising-source index is per-topic. If you are the coordinator '
+                        'scouting BEFORE topics exist, do not index sources here: include '
+                        'the source URLs in each candidate topic\'s why_interesting notes '
+                        'and call save_candidate_topics instead.'
+                    ),
+                    is_error=True)
             row = index_promising_source(
                 state_dir,
                 ctx.project_root,

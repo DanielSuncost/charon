@@ -53,6 +53,17 @@ def _role_prompt(role: str, operation_id: str, topic_slug: str = '', user_goal: 
             '5. If appropriate, initialize high-value topics with Research.init_topic.',
             '6. Prefer source-diverse scouting: papers, official sources, repos, and trend surfaces.',
             'Be budget-aware: avoid spawning too many topics when the budget is tight.',
+            'IMPORTANT: during scouting no topics exist yet, so do NOT call '
+            'Research.index_promising_source (it is per-topic). Carry the best source '
+            'URLs inside each candidate topic\'s why_interesting notes; researchers will '
+            'index them once topics are initialized.',
+            'SCOUTING IS BOUNDED: use at most ~10 search/browse tool calls total. '
+            'SAVE EARLY: as soon as you can name 3-6 plausible topics — even after just '
+            'a few searches — call Research.save_candidate_topics with that shortlist. '
+            'You may call it again later to refine if budget remains. A good-enough '
+            'shortlist saved immediately beats a perfect one lost to turn/token caps.',
+            'Your run is NOT complete until you have called Research.save_candidate_topics '
+            'with your shortlist — save it even if scouting was only partially successful.',
         ])
     if operation_id:
         base.append(f'Operation ID: {operation_id}')
@@ -86,9 +97,27 @@ def _role_instruction(role: str, operation_id: str, topic_slug: str = '', user_g
         )
     return (
         f'Coordinate operation `{operation_id}` for the research goal: {user_goal}.\n\n'
-        f'Perform a broad scouting pass, then save a ranked list of candidate topics with Research.save_candidate_topics. '
+        f'FIRST, within your first few tool calls, draft 3-6 candidate topics from what you '
+        f'already know and save them with Research.save_candidate_topics (set recommended_action '
+        f'to deep_research for the strongest). THEN, if budget remains, do a bounded scouting '
+        f'pass (at most ~10 searches) and save a refined shortlist. '
         f'Only initialize topics that look genuinely promising and relevant.'
     )
+
+
+def _agent_status(agent_id: str) -> str:
+    """Registry status of an agent ('' when unknown). Used to detect that the
+    coordinator's scouting run has finished (its finally-block sets 'stopped')."""
+    if not agent_id:
+        return ''
+    try:
+        from agent_lifecycle import list_agents
+        for a in list_agents():
+            if a.get('id') == agent_id:
+                return str(a.get('status') or '')
+    except Exception:
+        pass
+    return ''
 
 
 def _collect_usage(events: list[Any]) -> tuple[int, int]:
@@ -239,10 +268,15 @@ def _run_operation_controller(
             phase='scouting', status='running',
             summary='Coordinator is scouting and waiting for candidate topics.'
         )
-        # Wait for the coordinator to possibly produce candidate topics itself.
+        # Wait for the coordinator's scouting pass. It is a real LLM run that
+        # takes minutes, so wait until it finishes (its agent record leaves
+        # 'running') or candidate topics appear — bounded by the budget checks
+        # and a hard wall cap. Falling to the clarification path after a few
+        # seconds would permanently park the operation with no resume.
         waited = 0
+        max_wait = 30 * 60
         topics = []
-        while waited < 18:
+        while waited < max_wait:
             op = get_operation_state(state_dir, project_root, operation_id)
             if not op:
                 return
@@ -253,11 +287,17 @@ def _run_operation_controller(
             topics = list(op.get('candidate_topics') or [])
             if topics:
                 break
-            # Fall back early if the coordinator has not produced candidate topics quickly.
-            if waited >= 9:
+            if op.get('stop_requested'):
+                set_operation_status(state_dir, project_root, operation_id, 'stopped', 'User requested stop.')
+                return
+            if _agent_status(coordinator.get('id', '')) != 'running':
+                # Coordinator finished (or is unknown/dead) without topics yet;
+                # one grace read in case topics landed between checks.
+                op = get_operation_state(state_dir, project_root, operation_id) or {}
+                topics = list(op.get('candidate_topics') or [])
                 break
-            time.sleep(3)
-            waited += 3
+            time.sleep(5)
+            waited += 5
 
         if not topics:
             from tools import ToolContext
