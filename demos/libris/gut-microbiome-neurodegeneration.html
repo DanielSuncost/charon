@@ -1,0 +1,252 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Does the gut microbiome causally drive neurodegenerative disease, or merely correlate with it?</title><style>
+:root{--bg:#fbfbfa;--fg:#1a1a1a;--muted:#6b6b6b;--card:#fff;--border:#e6e4df;
+--accent:#5b4bd6;--accent-soft:#efedff;--good:#1a7f5a;--warn:#b26a00;--bad:#b3261e;
+--good-soft:#e4f4ec;--warn-soft:#fbeede;--bad-soft:#fbe6e4;--radius:12px;
+--maxw:920px;--mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+--sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
+@media (prefers-color-scheme:dark){:root{--bg:#16161a;--fg:#e9e9ec;--muted:#9a9aa2;
+--card:#1e1e24;--border:#2e2e37;--accent:#a99bff;--accent-soft:#26243a;
+--good:#4bd39a;--warn:#e0a44a;--bad:#ff6b5e;--good-soft:#16302447;--warn-soft:#3a2c1447;--bad-soft:#3a1c1a47}}
+:root[data-theme=dark]{--bg:#16161a;--fg:#e9e9ec;--muted:#9a9aa2;--card:#1e1e24;
+--border:#2e2e37;--accent:#a99bff;--accent-soft:#26243a;--good:#4bd39a;--warn:#e0a44a;
+--bad:#ff6b5e;--good-soft:#16302447;--warn-soft:#3a2c1447;--bad-soft:#3a1c1a47}
+:root[data-theme=light]{--bg:#fbfbfa;--fg:#1a1a1a;--muted:#6b6b6b;--card:#fff;
+--border:#e6e4df;--accent:#5b4bd6;--accent-soft:#efedff;--good:#1a7f5a;--warn:#b26a00;
+--bad:#b3261e;--good-soft:#e4f4ec;--warn-soft:#fbeede;--bad-soft:#fbe6e4}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
+line-height:1.6;font-size:16px}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:32px 20px 96px}
+header.report-head{border-bottom:1px solid var(--border);padding-bottom:24px;margin-bottom:8px}
+.eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:600}
+h1{font-size:2rem;line-height:1.2;margin:.3em 0}
+.question{font-size:1.1rem;color:var(--muted);margin:.5em 0 1em}
+.meta-row{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:13px;color:var(--muted)}
+.meta-row b{color:var(--fg)}
+h2{font-size:1.5rem;margin:2em 0 .5em;padding-top:.3em}
+h3{font-size:1.18rem;margin:1.6em 0 .4em}
+h4{font-size:1.02rem;margin:1.3em 0 .3em}
+p{margin:.7em 0}a{color:var(--accent)}
+code{font-family:var(--mono);background:var(--accent-soft);padding:.1em .35em;border-radius:5px;font-size:.9em}
+ul,ol{padding-left:1.4em}li{margin:.25em 0}
+blockquote{border-left:3px solid var(--accent);margin:.8em 0;padding:.2em 1em;color:var(--muted)}
+hr{border:none;border-top:1px solid var(--border);margin:2em 0}
+.badge{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;
+border:1px solid var(--border);white-space:nowrap;line-height:1.5}
+.badge-conf-high{background:var(--good-soft);color:var(--good);border-color:transparent}
+.badge-conf-medium{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.badge-conf-low,.badge-conf-unknown{background:var(--bad-soft);color:var(--bad);border-color:transparent}
+.badge-stance-supports{background:var(--good-soft);color:var(--good);border-color:transparent}
+.badge-stance-contradicts{background:var(--bad-soft);color:var(--bad);border-color:transparent}
+.badge-stance-unclear{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.badge-grade-strong{background:var(--good-soft);color:var(--good);border-color:transparent}
+.badge-grade-moderate{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.badge-grade-weak,.badge-grade-anecdotal{background:var(--bad-soft);color:var(--bad);border-color:transparent}
+.badge-grade-contested{background:var(--bad-soft);color:var(--bad);border-color:transparent;font-weight:700}
+.badge-grade-theoretical{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.badge-verified{background:var(--good-soft);color:var(--good);border-color:transparent}
+.badge-unverified{background:var(--bad-soft);color:var(--bad);border-color:transparent}
+.badge-type,.badge-cred-high,.badge-cred-medium,.badge-cred-low,.badge-cred-unknown{color:var(--muted)}
+.legend{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+padding:16px 20px;margin:20px 0;font-size:13px}
+.legend h4{margin:0 0 10px}.legend-grid{display:flex;flex-wrap:wrap;gap:8px 20px}
+.legend-item{display:flex;align-items:center;gap:6px}
+.epi-tiles{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}
+.tile{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+padding:12px 18px;min-width:110px}
+.tile .n{font-size:1.6rem;font-weight:700;line-height:1}
+.tile .l{font-size:12px;color:var(--muted);margin-top:4px}
+.topic{margin:2.5em 0;border-top:2px solid var(--border);padding-top:1em}
+.claims-wrap{margin:1.5em 0}
+.claim{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--muted);
+border-radius:var(--radius);padding:14px 18px;margin:12px 0}
+.claim-supports{border-left-color:var(--good)}
+.claim-contradicts{border-left-color:var(--bad)}
+.claim-unclear{border-left-color:var(--accent)}
+.claim-text{font-size:.98rem}
+.claim-badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.claim-cite{font-size:.8em;color:var(--accent);text-decoration:none;font-weight:600;vertical-align:super}
+.claim-refs{margin-top:8px}
+.tag{display:inline-block;font-size:11px;color:var(--muted);background:var(--accent-soft);
+padding:1px 7px;border-radius:5px;margin:2px 3px 0 0}
+.cites{list-style:none;padding:0;margin:1em 0}
+.cite{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)}
+.cite-num{color:var(--muted);font-family:var(--mono);font-size:.85em;flex-shrink:0}
+.cite-title{font-weight:600;font-size:.95rem}
+.cite-authors,.cite-meta{font-size:.82rem;color:var(--muted)}
+.judge{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin:1.5em 0}
+.scorecard{width:100%;border-collapse:collapse;font-size:.9rem}
+.scorecard td{padding:6px 8px;border-bottom:1px solid var(--border)}
+.scorecard .score{font-weight:700;text-align:right;width:48px}
+.meter{background:var(--border);border-radius:999px;height:7px;overflow:hidden;min-width:120px}
+.meter-fill{background:var(--accent);height:100%}
+.critique{margin-top:12px;font-size:.92rem}
+.critique summary{cursor:pointer;font-weight:600;color:var(--accent)}
+.theme-toggle{position:fixed;top:16px;right:16px;background:var(--card);border:1px solid var(--border);
+color:var(--fg);border-radius:999px;width:38px;height:38px;cursor:pointer;font-size:16px}
+.foot{margin-top:3em;padding-top:1.5em;border-top:1px solid var(--border);font-size:13px;color:var(--muted)}
+details.report-src{margin:1em 0}details.report-src summary{cursor:pointer;color:var(--muted);font-size:.9em}
+@media(max-width:600px){h1{font-size:1.5rem}.wrap{padding:20px 14px 72px}}
+</style></head><body><button id="tt" class="theme-toggle" title="Toggle theme">◐</button><div class="wrap"><header class="report-head"><div class="eyebrow">Libris · autonomous research</div><h1>Does the gut microbiome causally drive neurodegenerative disease, or merely correlate with it?</h1><p class="question">Gut microbiome and neurodegeneration: causation vs. correlation</p><div class="meta-row"><span><b>8</b> sources</span><span><b>8</b> graded claims</span><span><b>1</b> topic(s)</span><span><b>729,226</b> tokens</span><span><b>$0.11</b></span><span>rendered 2026-07-07</span></div></header><div class="epi-tiles"><div class="tile"><div class="n">7</div><div class="l">high-confidence claims</div></div><div class="tile"><div class="n">1</div><div class="l">medium-confidence</div></div><div class="tile"><div class="n">0</div><div class="l">low-confidence</div></div><div class="tile"><div class="n">1</div><div class="l">contradicting claims</div></div><div class="tile"><div class="n">3</div><div class="l">contested entities</div></div></div><div class="legend"><h4>How to read this report</h4><div class="legend-grid"><span class="legend-item"><span class="badge badge-conf-high">confidence: high</span> well-supported</span><span class="legend-item"><span class="badge badge-conf-medium">confidence: medium</span> plausible, partial support</span><span class="legend-item"><span class="badge badge-conf-low">confidence: low</span> weak / single-source</span><span class="legend-item"><span class="badge badge-stance-supports">supports</span> evidence for</span><span class="legend-item"><span class="badge badge-stance-contradicts">contradicts</span> evidence against</span><span class="legend-item"><span class="badge badge-verified">verified</span> citation resolved</span></div><p style="margin:.7em 0 0;color:var(--muted)">Every claim traces to a numbered citation. Epistemic grades are assigned by the research agents and, where shown, checked by an independent judge.</p></div><section class="topic"><p class="question">Gut-brain-axis claims are widely publicised, but the causal evidence is dominated by mouse models while human data is largely correlational — an ideal case for grading evidence strength and separating hype from established fact.</p><ul><li>What interventional evidence (gnotobiotic mice, fecal transplant) supports a causal microbiome role in Parkinson's or Alzheimer's?</li><li>How strong is the human evidence, and is it causal or correlational?</li><li>What are the proposed mechanisms (alpha-synuclein, short-chain fatty acids, neuroinflammation) and how well supported are they?</li><li>Where is the field over-claiming relative to the evidence?</li></ul><h1>Gut microbiome and neurodegeneration: causation vs. correlation</h1>
+<h2>Summary: bottom line</h2>
+<p>The saved evidence supports a <strong>cautious causal-contribution model</strong>, not a strong claim that gut microbiome changes are a primary or sufficient cause of Parkinson's disease (PD) or Alzheimer's disease (AD). The strongest causal evidence is <strong>preclinical</strong>: germ-free/antibiotic and fecal microbiota transfer experiments in disease-model animals show that microbiota can modulate alpha-synuclein motor/neuroinflammatory phenotypes in PD models and amyloid/cognition-related phenotypes in AD models. These experiments move the field beyond mere correlation by showing that changing or transferring microbiota can change disease-relevant phenotypes in controlled systems.</p>
+<p>However, the <strong>human evidence is much weaker for disease modification</strong>. Human metagenomic and preclinical AD studies show reproducible associations between microbiome composition/function and neurodegenerative status, but they are observational and cannot establish directionality. Human interventions currently show, at most, symptom-level or gastrointestinal benefits: a probiotic/prebiotic RCT in PD supports improvement of constipation, while a double-blind randomized FMT trial in PD did <strong>not</strong> improve the primary motor/nonmotor clinical outcome at 6 months. Overall, gut microbiome changes are plausibly part of the gut-brain-axis biology of neurodegeneration, but whether they are an upstream driver, amplifier, biomarker, or consequence in humans remains unresolved.</p>
+<h2>Key findings</h2>
+<ol>
+<li><strong>Animal experiments provide the strongest causal evidence.</strong> Germ-free housing, antibiotics, recolonization, and disease-patient FMT experiments show microbiota-dependent effects on PD- and AD-relevant phenotypes.</li>
+<li><strong>Human observational studies support association, not causation.</strong> Large PD metagenomics and AD/preclinical AD microbiome studies identify dysbiosis and pathway differences, but cannot distinguish cause, consequence, medication effects, diet, constipation, disease stage, or other confounders.</li>
+<li><strong>Human interventional evidence is limited and mixed.</strong> Microbiome-directed interventions can affect gastrointestinal outcomes in PD, but the saved FMT RCT did not show improvement on its primary motor/nonmotor clinical endpoint.</li>
+<li><strong>The most defensible causal claim is modulation/amplification, not sole causation.</strong> The microbiome appears capable of influencing neuroinflammatory, amyloid, alpha-synuclein, and behavioral phenotypes in models, but translation to human disease modification is not established.</li>
+<li><strong>PD evidence is somewhat stronger mechanistically than AD evidence in the saved set</strong>, because it includes convergent alpha-synuclein mouse model evidence plus human PD metagenomics and an FMT RCT. AD evidence includes strong animal-transfer and germ-free findings, but human evidence remains largely biomarker/association-level.</li>
+</ol>
+<h2>Source-backed claims</h2>
+<h3>1. Parkinson's disease: preclinical causal evidence is strong, but model-bound</h3>
+<p>Saved claims support that microbiota can causally modulate disease-relevant phenotypes in alpha-synuclein PD models:</p>
+<ul>
+<li><strong>Gut microbiota were required for full expression of motor deficits and neuroinflammation in an alpha-synuclein overexpression mouse model.</strong> The saved claim states: “In an α-synuclein overexpression mouse model of Parkinson's disease, the gut microbiota was required for the full expression of motor deficits and neuroinflammation.” This is strong preclinical evidence because the exposure—the presence/absence of microbiota—was experimentally manipulated.</li>
+<li><strong>Reducing or eliminating microbiota reduced PD-like phenotypes in transgenic alpha-synuclein mice.</strong> The saved claim states: “In a transgenic alpha-synuclein mouse model of Parkinson's disease, reducing or eliminating gut microbiota (germ-free housing or antibiotics) reduced motor deficits...” This supports a causal role for microbiota in amplifying or enabling pathology in that model.</li>
+<li><strong>PD-patient microbiota worsened motor dysfunction when transferred into susceptible mice.</strong> The saved claim states: “Fecal microbiota from Parkinson's disease patients worsened motor dysfunction when transplanted into alpha-synuclein-overexpressing mice compared with microbiota...” This is especially relevant to causality because disease-associated human microbiota were transferred into a controlled host background and altered phenotype.</li>
+</ul>
+<p>Interpretation: These findings support a real causal capacity of gut microbiota to affect PD-like phenotypes under experimental conditions. But they do not prove that microbiome changes initiate idiopathic PD in humans. The host genotype/model, alpha-synuclein overexpression, controlled housing, diet, and microbial communities may not generalize to human disease onset or progression.</p>
+<h3>2. Parkinson's disease: human association is robust but non-causal</h3>
+<p>The saved human metagenomic claim states: “Large human Parkinson's disease fecal metagenomics finds broad dysbiosis and functional pathway differences, but the study is observational and cannot establish...” This supports the idea that PD is associated with gut microbial compositional and functional differences.</p>
+<p>Interpretation: This evidence is useful for hypothesis generation and biomarker discovery, but it cannot resolve directionality. PD itself, constipation, altered diet, medication exposure, reduced mobility, age, geography, and comorbidities could all shape the microbiome. Therefore, observational dysbiosis should not be treated as proof that dysbiosis causes PD.</p>
+<h3>3. Parkinson's disease: human interventions show limited clinical translation so far</h3>
+<p>Two saved interventional claims are especially important:</p>
+<ul>
+<li><strong>Probiotic/prebiotic RCT:</strong> “A randomized trial of probiotics plus prebiotic fiber in Parkinson's disease targeted constipation and supports microbiome-directed improvement of a gastrointestinal...” This supports the narrower claim that microbiome-directed therapy can improve a PD-associated gastrointestinal symptom.</li>
+<li><strong>FMT RCT:</strong> “In a double-blind randomized Parkinson's disease trial, single-dose colonoscopic FMT did not improve the primary motor/nonmotor clinical outcome at 6 months...” This directly tempers disease-modification claims.</li>
+</ul>
+<p>Interpretation: The human intervention evidence does not yet demonstrate that altering the microbiome changes core PD progression or major neurological outcomes. The probiotic/prebiotic result is compatible with symptomatic gut benefit. The negative primary FMT endpoint argues against overclaiming near-term clinical efficacy, though it does not rule out different donors, dosing, routes, timing, patient selection, or longer follow-up.</p>
+<h3>4. Alzheimer's disease: animal evidence supports causal modulation of amyloid and cognition-related phenotypes</h3>
+<p>The saved AD animal evidence includes germ-free/recolonization and AD-patient microbiota transfer findings:</p>
+<ul>
+<li><strong>Germ-free APPPS1 mice had reduced amyloid pathology.</strong> The saved claim states: “APPPS1 transgenic mice raised germ-free had markedly reduced cerebral amyloid-beta pathology compared with conventionally colonized controls...”</li>
+<li><strong>Absence of gut microbiota reduced cerebral Aβ amyloid pathology, and recolonization changed pathology.</strong> The saved claim states: “In APPPS1 Alzheimer's-model mice, absence of gut microbiota reduced cerebral Aβ amyloid pathology, and recolonization with microbiota from conventionally raised...”</li>
+<li><strong>AD-patient microbiota transfer induced cognition-related deficits and hippocampal neurogenesis changes.</strong> The saved claims state: “Transplanting fecal microbiota from Alzheimer's patients into microbiota-depleted young rats induced deficits in cognition-related behaviours and hippocampal...” and “Transplanting fecal microbiota from Alzheimer's disease patients into microbiota-depleted young adult rats induced deficits in cognition-related behaviours and...”</li>
+</ul>
+<p>Interpretation: These findings support causal modulation of AD-relevant biology by microbiota in animal systems. The patient-to-animal transfer evidence is important because it suggests that human AD-associated microbiota can carry phenotype-relevant information. Still, this remains preclinical and does not prove that microbiome changes are a primary cause of human AD.</p>
+<h3>5. Alzheimer's disease: human evidence remains association/biomarker-level</h3>
+<p>The saved human AD claim states: “Human Alzheimer's/preclinical AD microbiome studies support biomarker-level association between microbiome composition and AD pathology or cognitive status, but...” This is consistent with a role for the microbiome as a correlate or biomarker of disease state.</p>
+<p>Interpretation: Human AD microbiome associations may reflect causal mechanisms, downstream effects of neurodegeneration, diet and lifestyle changes, inflammation, medications, frailty, or institutionalization. Without longitudinal, interventional, or genetically informed evidence, these studies cannot establish directionality.</p>
+<h3>6. Overall field assessment: plausible mechanism, limited clinical proof</h3>
+<p>A saved synthesis claim states: “The Parkinson's gut-brain axis literature has strong mechanistic plausibility and animal evidence, but translation to clinic remains limited by heterogeneity...” This is the best high-level characterization of the evidence base.</p>
+<p>Interpretation: The field has moved beyond simple descriptive microbiome differences, but it remains far from proving that microbiome manipulation is a reliable disease-modifying therapy for PD or AD in humans.</p>
+<h2>Points of disagreement / what is contested</h2>
+<ol>
+<li><strong>Causal driver vs. disease correlate or consequence.</strong></li>
+</ol>
+<ul>
+<li>Supporting causal evidence: germ-free, antibiotic, recolonization, and FMT-to-animal experiments show microbiota can alter disease-relevant phenotypes.</li>
+<li>Contrary/limiting evidence: human metagenomic and AD/preclinical AD studies are observational; they cannot determine whether dysbiosis precedes disease, follows disease, or reflects confounding factors.</li>
+</ul>
+<ol>
+<li><strong>Preclinical efficacy vs. human clinical translation.</strong></li>
+</ol>
+<ul>
+<li>Supporting evidence: animal PD and AD models show microbiota-dependent changes in motor deficits, neuroinflammation, amyloid pathology, cognition-related behaviors, and hippocampal neurogenesis.</li>
+<li>Contrary/limiting evidence: the saved double-blind randomized PD FMT trial found no improvement in the primary motor/nonmotor clinical outcome at 6 months. This creates a direct tension between animal causal effects and current human disease-modification evidence.</li>
+</ul>
+<ol>
+<li><strong>Symptom treatment vs. neurodegenerative disease modification.</strong></li>
+</ol>
+<ul>
+<li>Supporting evidence: a randomized probiotic plus prebiotic fiber trial in PD supports microbiome-directed improvement of constipation.</li>
+<li>Limitation: constipation improvement does not establish altered alpha-synuclein pathology, neurodegeneration, or disease progression.</li>
+</ul>
+<ol>
+<li><strong>Generalizability of animal models.</strong></li>
+</ol>
+<ul>
+<li>Animal experiments are stronger for causality because they manipulate microbiota directly.</li>
+<li>But they are model-bound: transgenic alpha-synuclein and APPPS1 amyloid models may capture only parts of PD/AD biology, and germ-free conditions are artificial. Effects in these systems may represent amplification of vulnerability rather than natural human disease initiation.</li>
+</ul>
+<ol>
+<li><strong>Disease specificity and microbial signatures.</strong></li>
+</ol>
+<ul>
+<li>Human studies report dysbiosis and functional pathway differences, but the saved evidence does not establish a disease-specific microbial cause. Microbiome signatures may vary by cohort, geography, diet, medication exposure, sequencing method, and disease stage.</li>
+</ul>
+<h2>Evidence-strength assessment</h2>
+<ul>
+<li><strong>Strongest evidence for causality:</strong> preclinical germ-free/antibiotic/recolonization/FMT experiments in PD and AD models. These show that microbiota manipulation can change disease-relevant phenotypes.</li>
+<li><strong>Moderate evidence for relevance to humans:</strong> transfer of fecal microbiota from PD or AD patients into animals, because it links human disease-associated communities to experimental phenotypes.</li>
+<li><strong>Weak-to-moderate evidence for human causal disease modification:</strong> current human interventional data. The probiotic/prebiotic PD trial supports gastrointestinal symptom benefit, not neurodegeneration modification; the PD FMT RCT was negative on its primary clinical endpoint.</li>
+<li><strong>Association-only evidence:</strong> human PD metagenomics and human AD/preclinical AD microbiome studies. These are important but cannot settle causality.</li>
+</ul>
+<h2>Why it matters</h2>
+<p>If microbiome changes causally contribute to neurodegeneration, they could become modifiable therapeutic targets: diet, prebiotics, probiotics, postbiotics, antibiotics, bacteriophages, metabolite supplementation, or FMT-like ecological interventions might reduce risk or slow progression. A causal role could also improve early diagnosis if microbial signatures precede clinical disease.</p>
+<p>But if dysbiosis is mainly a consequence or correlate, then microbiome interventions may improve gastrointestinal symptoms or general health without altering neurodegenerative trajectories. Overstating causality could misdirect patients, trials, and funding toward interventions that are biologically plausible but clinically ineffective. The distinction matters especially because PD and AD patients may be vulnerable to unproven commercial microbiome therapies.</p>
+<h2>Open questions</h2>
+<ol>
+<li><strong>Temporality:</strong> Do microbiome changes precede PD or AD pathology, or do they emerge after prodromal symptoms, constipation, diet changes, medication exposure, or frailty?</li>
+<li><strong>Human disease modification:</strong> Can any microbiome intervention reproducibly slow motor, cognitive, biomarker, or imaging progression in randomized human trials?</li>
+<li><strong>Patient selection:</strong> Are microbiome effects strongest in specific subgroups, such as constipation-dominant PD, prodromal PD, early AD, inflammatory phenotypes, or patients with particular baseline microbial/metabolite profiles?</li>
+<li><strong>Mechanisms:</strong> Which microbial functions matter most—short-chain fatty acids, bile acids, endotoxin/inflammation, immune priming, tryptophan metabolism, gut permeability, vagal signaling, or direct effects on protein aggregation?</li>
+<li><strong>Dose, donor, and durability:</strong> For FMT-like interventions, do donor characteristics, route, dose, repeat administration, engraftment, and follow-up duration determine whether neurological effects appear?</li>
+<li><strong>Model validity:</strong> Which animal findings replicate across models, sexes, facilities, diets, and microbial communities, and which are artifacts of germ-free or transgenic systems?</li>
+<li><strong>AD vs. PD differences:</strong> Are microbiome mechanisms shared across neurodegenerative diseases, or does each disease involve distinct microbial functions and host pathways?</li>
+</ol>
+<h2>Overall conclusion</h2>
+<p>The best-supported conclusion is that the gut microbiome can <strong>causally modulate neurodegeneration-relevant phenotypes in experimental models</strong>, especially in alpha-synuclein PD models and amyloid/cognition-related AD models. In humans, however, the evidence remains mostly associative, and the available intervention evidence does not yet establish reliable neurological disease modification. The gut microbiome is therefore a plausible contributor and amplifier within the gut-brain axis, but current evidence does not justify treating it as a proven primary cause of Parkinson's or Alzheimer's disease.</p><div class="judge"><div class="score-overall">Overall judge score: <strong>7.0</strong></div><table class="scorecard"><tr><td>relevance</td><td class="score">9</td><td><div class="meter"><div class="meter-fill" style="width:90.0%"></div></div></td></tr><tr><td>citation quality</td><td class="score">4</td><td><div class="meter"><div class="meter-fill" style="width:40.0%"></div></div></td></tr><tr><td>actionability</td><td class="score">7</td><td><div class="meter"><div class="meter-fill" style="width:70.0%"></div></div></td></tr><tr><td>novelty</td><td class="score">6</td><td><div class="meter"><div class="meter-fill" style="width:60.0%"></div></div></td></tr><tr><td>user fit</td><td class="score">9</td><td><div class="meter"><div class="meter-fill" style="width:90.0%"></div></div></td></tr></table><details class="critique"><summary>Judge critique</summary><h1>Judge critique: Gut microbiome and neurodegeneration causation vs. correlation</h1>
+<h2>Overall assessment</h2>
+<p>This is a well-aligned, appropriately cautious draft that directly answers the user's causal-vs-correlational question. Its main strength is epistemic discipline: it separates animal causal-manipulation evidence from human observational associations and from human interventional outcomes. It clearly states that evidence is strongest for preclinical causal modulation and weak for proven human disease modification.</p>
+<p>The main weakness is provenance/citation presentation. The draft repeatedly refers to “saved claims” rather than naming studies, authors, years, designs, sample sizes, endpoints, and effect directions. That makes the reasoning directionally sound but hard to audit. The report also needs more granularity on human intervention trials, especially the FMT RCT and probiotic/prebiotic trial, and should explicitly distinguish PD vs AD evidence quality in a compact evidence table.</p>
+<h2>Scores</h2>
+<p>| Dimension | Score / 10 | Rationale | |---|---:|---| | Relevance | 9 | Directly addresses causality vs correlation, PD and AD, gut-brain-axis mechanisms, animal vs human evidence, and intervention vs association. | | Citation quality | 4 | Uses internally saved claim snippets but lacks formal citations, paper names, authors, years, sample sizes, trial registration/context, and links. Some claims are truncated with ellipses, reducing auditability. | | Actionability | 7 | Provides clear bottom line and open questions; could be more actionable with a “what evidence would change the conclusion” section and prioritized next studies/trial criteria. | | Novelty | 6 | The synthesis is thoughtful but mostly standard field consensus: strong animal plausibility, weak human disease-modification evidence. More novelty would come from mechanistic comparison, intervention failure analysis, or causal-inference framework. | | User fit | 9 | Fits the user request very well: cautious, explicit about evidence strength, and avoids hype. |</p>
+<p><strong>Overall checkpoint score: 7.0 / 10.</strong></p>
+<h2>What works well</h2>
+<ol>
+<li><strong>Correct causal framing.</strong> The report does not conflate microbiome differences with causation. It makes the key distinction: experimental manipulation in animals can support causal modulation, while human cross-sectional microbiome studies cannot establish directionality.</li>
+</ol>
+<ol>
+<li><strong>Appropriate strength-of-evidence language.</strong> The conclusion that microbiome changes are plausible contributors/amplifiers rather than proven primary causes is the right level of confidence. The report says clearly that human evidence for disease modification is weak.</li>
+</ol>
+<ol>
+<li><strong>Good intervention emphasis.</strong> The report includes the decisive translational tension: probiotic/prebiotic effects in PD appear gastrointestinal/symptomatic, while a double-blind FMT RCT did not improve the primary motor/nonmotor endpoint at 6 months. This directly responds to the user's request to weigh interventions, not just associations.</li>
+</ol>
+<ol>
+<li><strong>Useful separation of PD and AD.</strong> The draft recognizes that PD has somewhat stronger mechanistic/interventional coverage in the saved evidence than AD, especially because PD includes alpha-synuclein model work plus a human FMT RCT.</li>
+</ol>
+<ol>
+<li><strong>Good caveats around animal models.</strong> It appropriately notes germ-free artificiality, transgenic model limitations, controlled housing/diet effects, and the difference between amplification in susceptible models and initiating idiopathic human disease.</li>
+</ol>
+<h2>Major limitations to fix</h2>
+<ol>
+<li><strong>Citation/provenance quality is too low for a final research answer.</strong> The draft relies on “saved claim states...” wording and truncated claim snippets. A final report should identify the actual studies behind the claims. For each major evidence pillar, add at least: author/year, disease/model, intervention/exposure, comparator, sample size if available, endpoint, and result. This is especially important because the user asked for evidence strength; without study details, the strength assessment is not fully verifiable.</li>
+</ol>
+<ol>
+<li><strong>Human trial evidence needs more detail.</strong> The report says the FMT RCT was negative on the primary endpoint, but does not describe secondary outcomes, adverse events, engraftment/microbiome changes, donor strategy, single vs repeated dosing, route, cohort size, inclusion criteria, or whether constipation/nonmotor signals appeared. The probiotic/prebiotic trial similarly needs endpoints and whether any neurological outcomes were measured. These details determine how strongly negative or merely inconclusive the trial evidence is.</li>
+</ol>
+<ol>
+<li><strong>AD human intervention evidence appears underdeveloped.</strong> The report correctly says AD human evidence is mostly association/biomarker-level, but should explicitly say whether any AD probiotic/FMT/diet trials with cognitive or biomarker endpoints were considered and absent, weak, or out of scope. The current version may leave readers wondering whether the researcher searched for human AD interventions.</li>
+</ol>
+<ol>
+<li><strong>Mechanistic pathways are listed but not evaluated.</strong> The open questions mention SCFAs, bile acids, endotoxin/inflammation, immune priming, tryptophan metabolism, gut permeability, vagal signaling, and protein aggregation, but the main body does not weigh which mechanisms have direct experimental support versus speculation. A short mechanism table would improve usefulness.</li>
+</ol>
+<ol>
+<li><strong>Observational confounding could be sharpened.</strong> The report lists confounders, but should add disease-specific examples: PD constipation can precede diagnosis and itself alters transit/microbiota; dopaminergic medications and COMT/MAO-B inhibitors may affect gut physiology; AD diet, frailty, institutionalization, antibiotics, and caregiver-dependent diet can drive microbiome differences.</li>
+</ol>
+<ol>
+<li><strong>Needs a compact hierarchy of evidence.</strong> The report would benefit from an evidence-grade matrix by disease and evidence type: observational human, longitudinal/prodromal human, animal germ-free/antibiotic, patient-to-animal FMT, human probiotic/prebiotic, human FMT, biomarkers/progression. This would make the causal inference transparent.</li>
+</ol>
+<h2>Evidence-strength judgment</h2>
+<p>The report's substantive conclusion is sound: <strong>evidence for causal contribution is strong only in controlled animal models; evidence for human causal disease modification is weak.</strong> Human observational associations should be treated as association-only. Human intervention evidence, as presented, does not justify claims that microbiome manipulation slows PD or AD progression. At most it supports GI symptom improvement in PD and mechanistic plausibility.</p>
+<p>I would not strengthen the causal conclusion unless the final report adds longitudinal human evidence showing microbiome changes precede disease/pathology, randomized trials with neurological/biomarker progression benefits, or causal-inference evidence such as Mendelian randomization supported by coherent mechanisms.</p>
+<h2>Actionable next steps for researcher</h2>
+<ol>
+<li>Replace “saved claim” language with formal source citations for every key claim.</li>
+<li>Add an evidence table with columns: disease, evidence type, study/model, intervention/exposure, endpoint, causal-inference strength, limitations, bottom-line interpretation.</li>
+<li>Expand the human interventional section: FMT RCT design/results; probiotic/prebiotic RCT design/results; note whether AD intervention trials exist and what they show.</li>
+<li>Add a “what would prove causality in humans?” section: prospective prodromal cohorts, repeated microbiome sampling before diagnosis, biomarker endpoints, randomized disease-modification trials, engraftment-confirmed interventions, and mediation analyses.</li>
+<li>Add a short mechanism table separating experimentally supported mechanisms from plausible but unproven pathways.</li>
+<li>Include explicit final recommendations for claims language, e.g. “can modulate disease-relevant phenotypes in models,” “may contribute or amplify in humans,” and “not proven as a primary cause or disease-modifying target.”</li>
+</ol>
+<h2>Final recommendation</h2>
+<p>Accept this checkpoint as a strong conceptual synthesis, but do not treat it as final without citation hardening and trial-detail expansion. The evidence is weak where it matters most clinically: human causal disease modification.</p></details></div><h3>Graded claims</h3><div class="claims-wrap"><div class="claim claim-supports"><div class="claim-text">In an α-synuclein overexpression mouse model of Parkinson's disease, the gut microbiota was required for the full expression of motor deficits and neuroinflammation; microbial metabolites and patient-derived microbiota could worsen disease phenotypes in mice. <a class="claim-cite" href="#src-1">[1]</a></div><div class="claim-badges"><span class="badge badge-conf-high">confidence: high</span><span class="badge badge-stance-supports">supports</span><span class="badge badge-grade-moderate">Moderate evidence</span><span class="badge badge-grade-contested">contested entity</span></div><div class="claim-refs"><span class="tag">Parkinson&#x27;s disease</span> <span class="tag">gut microbiota</span> <span class="tag">alpha-synuclein</span> <span class="tag">germ-free mice</span> <span class="tag">short-chain fatty acids</span></div></div><div class="claim claim-supports"><div class="claim-text">In APPPS1 Alzheimer's-model mice, absence of gut microbiota reduced cerebral Aβ amyloid pathology, and recolonization with microbiota from conventionally raised APPPS1 mice increased Aβ pathology more than wild-type microbiota. <a class="claim-cite" href="#src-2">[2]</a></div><div class="claim-badges"><span class="badge badge-conf-high">confidence: high</span><span class="badge badge-stance-supports">supports</span><span class="badge badge-grade-moderate">Moderate evidence</span></div><div class="claim-refs"><span class="tag">Alzheimer&#x27;s disease</span> <span class="tag">APPPS1 mice</span> <span class="tag">gut microbiota</span> <span class="tag">Aβ amyloid</span> <span class="tag">germ-free mice</span></div></div><div class="claim claim-supports"><div class="claim-text">Large human Parkinson's disease fecal metagenomics finds broad dysbiosis and functional pathway differences, but the study is observational and cannot establish whether dysbiosis is a cause, consequence, medication effect, diet effect, or disease-stage correlate. <a class="claim-cite" href="#src-3">[3]</a></div><div class="claim-badges"><span class="badge badge-conf-high">confidence: high</span><span class="badge badge-stance-supports">supports</span><span class="badge badge-grade-moderate">Moderate evidence</span><span class="badge badge-grade-contested">contested entity</span></div><div class="claim-refs"><span class="tag">Parkinson&#x27;s disease</span> <span class="tag">human gut microbiome</span> <span class="tag">metagenomics</span> <span class="tag">observational association</span></div></div><div class="claim claim-supports"><div class="claim-text">A randomized trial of probiotics plus prebiotic fiber in Parkinson's disease targeted constipation and supports microbiome-directed improvement of a gastrointestinal symptom, not disease modification of neurodegeneration. <a class="claim-cite" href="#src-4">[4]</a></div><div class="claim-badges"><span class="badge badge-conf-high">confidence: high</span><span class="badge badge-stance-supports">supports</span><span class="badge badge-grade-moderate">Moderate evidence</span><span class="badge badge-grade-contested">contested entity</span></div><div class="claim-refs"><span class="tag">Parkinson&#x27;s disease</span> <span class="tag">probiotics</span> <span class="tag">prebiotic fiber</span> <span class="tag">constipation</span> <span class="tag">randomized trial</span></div></div><div class="claim claim-supports"><div class="claim-text">Human Alzheimer's/preclinical AD microbiome studies support biomarker-level association between microbiome composition and AD pathology or cognitive status, but do not by themselves demonstrate causal contribution to amyloid, tau, or cognitive decline. <a class="claim-cite" href="#src-5">[5]</a></div><div class="claim-badges"><span class="badge badge-conf-medium">confidence: medium</span><span class="badge badge-stance-supports">supports</span><span class="badge badge-grade-weak">Weak evidence</span></div><div class="claim-refs"><span class="tag">Alzheimer&#x27;s disease</span> <span class="tag">preclinical Alzheimer&#x27;s disease</span> <span class="tag">human gut microbiome</span> <span class="tag">observational association</span></div></div><div class="claim claim-supports"><div class="claim-text">Transplanting fecal microbiota from Alzheimer's patients into microbiota-depleted young rats induced deficits in cognition-related behaviours and hippocampal neurogenesis, giving cross-species interventional evidence that human AD-associated microbiota can transmit relevant phenotypes in animals. <a class="claim-cite" href="#src-6">[6]</a></div><div class="claim-badges"><span class="badge badge-conf-high">confidence: high</span><span class="badge badge-stance-supports">supports</span><span class="badge badge-grade-moderate">Moderate evidence</span><span class="badge badge-grade-contested">contested entity</span></div><div class="claim-refs"><span class="tag">Alzheimer&#x27;s disease</span> <span class="tag">fecal microbiota transplantation</span> <span class="tag">hippocampal neurogenesis</span> <span class="tag">cognition</span> <span class="tag">rats</span></div></div><div class="claim claim-contradicts"><div class="claim-text">In a double-blind randomized Parkinson's disease trial, single-dose colonoscopic FMT did not improve the primary motor/nonmotor clinical outcome at 6 months versus placebo and caused more gastrointestinal adverse events, contradicting any claim that current FMT is proven disease-modifying therapy for PD. <a class="claim-cite" href="#src-7">[7]</a></div><div class="claim-badges"><span class="badge badge-conf-high">confidence: high</span><span class="badge badge-stance-contradicts">contradicts</span><span class="badge badge-grade-moderate">Moderate evidence</span><span class="badge badge-grade-contested">contested entity</span></div><div class="claim-refs"><span class="tag">Parkinson&#x27;s disease</span> <span class="tag">fecal microbiota transplantation</span> <span class="tag">randomized trial</span> <span class="tag">clinical efficacy</span></div></div><div class="claim claim-supports"><div class="claim-text">The Parkinson's gut-brain axis literature has strong mechanistic plausibility and animal evidence, but translation to clinic remains limited by heterogeneity, confounding, donor/intervention variability, and lack of definitive disease-modifying human trial evidence. <a class="claim-cite" href="#src-8">[8]</a></div><div class="claim-badges"><span class="badge badge-conf-high">confidence: high</span><span class="badge badge-stance-supports">supports</span><span class="badge badge-grade-contested">Contested</span><span class="badge badge-grade-contested">contested entity</span></div><div class="claim-refs"><span class="tag">Parkinson&#x27;s disease</span> <span class="tag">gut-brain axis</span> <span class="tag">clinical translation</span> <span class="tag">microbiome interventions</span></div></div></div><h3>Citations</h3><ol class="cites"><li id="src-1" class="cite"><span class="cite-num">[1]</span><div class="cite-body"><div class="cite-title"><a href="https://doi.org/10.1016/j.cell.2016.11.018" target="_blank" rel="noopener">Gut Microbiota Regulate Motor Deficits and Neuroinflammation in a Model of Parkinson&#x27;s Disease</a> <span class="badge badge-type">paper</span> <span class="badge badge-cred-high">cred: high</span> <span class="badge badge-verified">verified</span></div><div class="cite-authors">Timothy R. Sampson, Debelius et al.</div><div class="cite-meta">paper · 2016-12-01</div></div></li><li id="src-2" class="cite"><span class="cite-num">[2]</span><div class="cite-body"><div class="cite-title"><a href="https://doi.org/10.1038/srep41802" target="_blank" rel="noopener">Reduction of Abeta amyloid pathology in APPPS1 transgenic mice in the absence of gut microbiota</a> <span class="badge badge-type">paper</span> <span class="badge badge-cred-high">cred: high</span> <span class="badge badge-verified">verified</span></div><div class="cite-authors">T. Harach, N. Marungruang, N. Duthilleul et al.</div><div class="cite-meta">paper · 2017-02-08</div></div></li><li id="src-3" class="cite"><span class="cite-num">[3]</span><div class="cite-body"><div class="cite-title"><a href="https://doi.org/10.1038/s41467-022-34667-x" target="_blank" rel="noopener">Metagenomics of Parkinson&#x27;s disease implicates the gut microbiome in multiple disease mechanisms</a> <span class="badge badge-type">paper</span> <span class="badge badge-cred-high">cred: high</span> <span class="badge badge-verified">verified</span></div><div class="cite-authors">Zachary D. Wallen, Ayse Demirkan, Guy Twa et al.</div><div class="cite-meta">paper · 2022-12-01</div></div></li><li id="src-4" class="cite"><span class="cite-num">[4]</span><div class="cite-body"><div class="cite-title"><a href="https://doi.org/10.1212/WNL.0000000000003127" target="_blank" rel="noopener">Probiotics and prebiotic fiber for constipation associated with Parkinson disease: An RCT</a> <span class="badge badge-type">paper</span> <span class="badge badge-cred-high">cred: high</span> <span class="badge badge-verified">verified</span></div><div class="cite-authors">Michela Barichella, Claudio Pacchetti, Carlotta Bolliri et al.</div><div class="cite-meta">paper · 2016-09-20</div></div></li><li id="src-5" class="cite"><span class="cite-num">[5]</span><div class="cite-body"><div class="cite-title"><a href="https://doi.org/10.1126/scitranslmed.abo2984" target="_blank" rel="noopener">Gut microbiome composition may be an indicator of preclinical Alzheimer&#x27;s disease</a> <span class="badge badge-type">paper</span> <span class="badge badge-cred-high">cred: high</span> <span class="badge badge-verified">verified</span></div><div class="cite-authors">Ferreiro et al.</div><div class="cite-meta">paper · 2023</div></div></li><li id="src-6" class="cite"><span class="cite-num">[6]</span><div class="cite-body"><div class="cite-title"><a href="https://doi.org/10.1093/brain/awad303" target="_blank" rel="noopener">Microbiota from Alzheimer&#x27;s patients induce deficits in cognition and hippocampal neurogenesis</a> <span class="badge badge-type">paper</span> <span class="badge badge-cred-high">cred: high</span> <span class="badge badge-verified">verified</span></div><div class="cite-authors">Stefanie Grabrucker, Moira Marizzoni, Edina Silajdžić et al.</div><div class="cite-meta">paper · 2023-10-18</div></div></li><li id="src-7" class="cite"><span class="cite-num">[7]</span><div class="cite-body"><div class="cite-title"><a href="https://doi.org/10.1001/jamaneurol.2024.2305" target="_blank" rel="noopener">Fecal Microbiota Transplantation for Treatment of Parkinson Disease: A Randomized Clinical Trial</a> <span class="badge badge-type">paper</span> <span class="badge badge-cred-high">cred: high</span> <span class="badge badge-verified">verified</span></div><div class="cite-authors">Filip Scheperjans, Reeta Levo, Berta Bosch et al.</div><div class="cite-meta">paper · 2024-09-01</div></div></li><li id="src-8" class="cite"><span class="cite-num">[8]</span><div class="cite-body"><div class="cite-title"><a href="https://doi.org/10.1038/s41582-022-00681-2" target="_blank" rel="noopener">The microbiome-gut-brain axis in Parkinson disease — from basic research to the clinic</a> <span class="badge badge-type">paper</span> <span class="badge badge-cred-high">cred: high</span> <span class="badge badge-verified">verified</span></div><div class="cite-authors">Tan et al.</div><div class="cite-meta">paper · 2022</div></div></li></ol></section><div class="foot">Generated by Libris, Charon's autonomous multi-agent research system. Claims and citations are produced by AI research agents and graded for confidence and stance; treat this as a well-sourced starting point, not a substitute for reading the primary literature. Citations marked “unverified” could not be resolved automatically and warrant manual checking.</div></div><script>
+(function(){var r=document.documentElement,k='libris-theme',s=localStorage.getItem(k);
+if(s)r.setAttribute('data-theme',s);
+document.getElementById('tt').addEventListener('click',function(){
+var cur=r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+var nx=cur==='dark'?'light':'dark';r.setAttribute('data-theme',nx);localStorage.setItem(k,nx);});})();
+</script></body></html>
