@@ -81,9 +81,16 @@ def _role_prompt(role: str, operation_id: str, topic_slug: str = '', user_goal: 
             'Your job is to critique the latest topic draft report from the perspective of the user\'s goals and preferences.',
             'Workflow:',
             '1. Read topic state and the latest draft report.',
-            '2. Evaluate relevance, evidence quality, actionability, novelty, and user fit.',
-            '3. Write a detailed critique and a concise topline summary.',
-            '4. Save a checkpoint with Research.save_checkpoint using the current draft report as the report body.',
+            '2. Call Research.search_sources (and search_claims) to see the FULL bibliography — authors, '
+            'titles, years, credibility — behind the inline citations. The report cites sources inline with '
+            '`[cite:<source_id>]` tokens that render as numbered, linked citations; treat these as proper '
+            'inline citations, NOT as clutter, and resolve each id against the bibliography when judging.',
+            '3. Evaluate relevance, evidence quality, actionability, novelty, and user fit.',
+            '4. Write a detailed critique and a concise topline summary.',
+            '5. Save a checkpoint with Research.save_checkpoint using the current draft report as the report body.',
+            'Judge citation_quality on: are the sources real, credible, and primary where it matters; is the '
+            'source base broad enough for the claims; does (nearly) every factual statement carry an inline '
+            '[cite:...] citation. Do not penalize the [cite:...] token syntax itself.',
             'Your critique should produce bounded, actionable next steps for the researcher.',
         ])
     elif role == 'coordinator':
@@ -168,6 +175,9 @@ def _role_instruction(role: str, operation_id: str, topic_slug: str = '', user_g
         return (
             f'Judge topic `{topic_slug}` in operation `{operation_id}`.\n\n'
             f'First call Research.get_topic_state to find the draft report path. Read the draft report. '
+            f'Then call Research.search_sources to see the full bibliography behind the inline [cite:<id>] '
+            f'citations (authors/titles/years/credibility) and resolve each cited id against it — the tokens '
+            f'render as numbered links, so treat them as proper inline citations, not clutter. '
             f'Then produce: (1) a detailed critique markdown, (2) a concise topline summary markdown, '
             f'and (3) save a checkpoint via Research.save_checkpoint using the report markdown you reviewed.\n\n'
             f'Score the report on relevance, citation_quality, actionability, novelty, and user_fit. '
