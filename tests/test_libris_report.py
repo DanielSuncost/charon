@@ -108,6 +108,25 @@ def test_render_operation_full(tmp_path):
     assert '>False<' not in html and '{tiles' not in html
 
 
+def test_apply_cite_tokens():
+    src_num = {'src_a': 1, 'src_b': 2}
+    # single, multiple, and unknown tokens
+    out = lr._apply_cite_tokens('Fact one [cite:src_a]. Fact two [cite:src_a,src_b]. Stale [cite:src_x].', src_num)
+    assert '<sup class="cite-ref">[<a href="#src-1">1</a>]</sup>' in out
+    assert '[<a href="#src-1">1</a>, <a href="#src-2">2</a>]' in out
+    assert 'src_x' not in out and '[cite:' not in out  # unknown dropped, no raw tokens leak
+
+
+def test_cite_tokens_render_in_report_body(tmp_path):
+    op_dir = _build_operation(tmp_path)
+    # inject a cite token into the draft body referencing the known source
+    dr = op_dir / 'topics' / 'skill-vs-language' / 'draft-report.md'
+    dr.write_text(dr.read_text() + '\n\nDopamine encodes RPE in skill learning [cite:src_a].\n')
+    html = lr.render_operation(op_dir, title='x')
+    assert 'cite-ref' in html and 'href="#src-1"' in html
+    assert '[cite:src_a]' not in html  # token was converted, not left raw
+
+
 def test_render_handles_empty_operation(tmp_path):
     op_dir = tmp_path / 'research' / 'operations' / 'rop_empty'
     op_dir.mkdir(parents=True)

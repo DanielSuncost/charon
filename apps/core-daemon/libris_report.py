@@ -282,6 +282,26 @@ def _source_citation(src: dict, num: int, verified: dict | None) -> str:
     )
 
 
+_CITE_TOKEN = re.compile(r'\[cite:\s*([a-zA-Z0-9_,\s-]+?)\s*\]')
+
+
+def _apply_cite_tokens(html_str: str, src_num: dict) -> str:
+    """Replace inline `[cite:src_id]` / `[cite:src_a,src_b]` tokens (written by the
+    research/writer agents, who know source_ids but not render-time numbers) with
+    numbered superscript links into the citations panel. Unknown ids are dropped
+    so a stale token never renders as raw text."""
+    def repl(m):
+        links = []
+        for sid in (s.strip() for s in m.group(1).split(',')):
+            n = src_num.get(sid)
+            if n:
+                links.append(f'<a href="#src-{n}">{n}</a>')
+        if not links:
+            return ''
+        return '<sup class="cite-ref">[' + ', '.join(links) + ']</sup>'
+    return _CITE_TOKEN.sub(repl, html_str)
+
+
 def _claim_card(claim: dict, src_num: dict, contested: set[str]) -> str:
     conf = str(claim.get('confidence') or 'unknown').lower()
     conf = 'medium' if conf == 'moderate' else conf
@@ -309,9 +329,10 @@ def _claim_card(claim: dict, src_num: dict, contested: set[str]) -> str:
         ref_str = ('<div class="claim-refs">'
                    + ' '.join(f'<span class="tag">{html.escape(r)}</span>' for r in refs[:6])
                    + '</div>')
+    claim_text = _apply_cite_tokens(_inline(claim.get("text") or ""), src_num)
     return (
         f'<div class="claim claim-{stance_key}">'
-        f'<div class="claim-text">{_inline(claim.get("text") or "")} {cite}</div>'
+        f'<div class="claim-text">{claim_text} {cite}</div>'
         f'<div class="claim-badges">{"".join(badges)}</div>'
         f'{ref_str}</div>'
     )
@@ -410,6 +431,9 @@ border-radius:var(--radius);padding:14px 18px;margin:12px 0}
 .claim-text{font-size:.98rem}
 .claim-badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .claim-cite{font-size:.8em;color:var(--accent);text-decoration:none;font-weight:600;vertical-align:super}
+.cite-ref{font-size:.72em;font-weight:600;line-height:0}
+.cite-ref a{color:var(--accent);text-decoration:none}
+.cite-ref a:hover{text-decoration:underline}
 .claim-refs{margin-top:8px}
 .tag{display:inline-block;font-size:11px;color:var(--muted);background:var(--accent-soft);
 padding:1px 7px;border-radius:5px;margin:2px 3px 0 0}
@@ -491,7 +515,10 @@ def render_html(data: dict, *, title: str = '', verified: dict | None = None,
             cites_html.append(_source_citation(s, i, verified))
         contested = set(epi['contested'])
         claim_cards = ''.join(_claim_card(c, src_num, contested) for c in topic['claims'])
-        report_html = markdown_to_html(topic['report_md']) if topic['report_md'] else '<p><em>No report body was saved for this topic.</em></p>'
+        if topic['report_md']:
+            report_html = _apply_cite_tokens(markdown_to_html(topic['report_md']), src_num)
+        else:
+            report_html = '<p><em>No report body was saved for this topic.</em></p>'
         why = f'<p class="question">{_inline(topic["why"])}</p>' if topic['why'] else ''
         fq = ''
         if topic['focus_questions']:
