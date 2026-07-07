@@ -49,6 +49,22 @@ def _role_prompt(role: str, operation_id: str, topic_slug: str = '', user_goal: 
             'Do not create checkpoints yourself unless explicitly instructed; that is usually the judge\'s job.',
             'Your output should be actionable, well-structured, and traceable to verified sources.',
         ])
+    elif role == 'writer':
+        base.extend([
+            'ROLE: Report Writer',
+            'The research for this topic is already done: sources and graded claims are saved. Your ONLY '
+            'job is to synthesise them into a clear, well-structured draft report and SAVE it. Do not do '
+            'new web/paper research — work from the saved artifacts.',
+            'Workflow: (1) Research.get_topic_state to see the topic and any existing draft; '
+            '(2) Research.search_claims and Research.list_promising_sources / search_sources to review the '
+            'saved evidence; (3) write a structured report and save it with Research.save_report_draft. '
+            'Do this within your first several tool calls — saving the draft is the whole point.',
+            'The report must include: a summary that states the bottom line, key findings, the source-backed '
+            'claims grouped sensibly, an explicit "points of disagreement / what is contested" section that '
+            'reflects any contradicting claims, why it matters, and open questions. Be epistemically honest: '
+            'distinguish what is well-established from what is weak, theoretical, or contested. Cite claims by '
+            'their content; do not invent sources or facts beyond what is saved.',
+        ])
     elif role == 'judge':
         base.extend([
             'ROLE: Judge',
@@ -114,6 +130,17 @@ def _role_instruction(role: str, operation_id: str, topic_slug: str = '', user_g
             f'The draft report should include: summary, key findings, source-backed claims, points of disagreement / '
             f'open questions, why it matters, and next research steps. Be explicit about what is well-established vs '
             f'contested. If revising, explicitly address the judge\'s weaknesses and required fixes.'
+        )
+    if role == 'writer':
+        return (
+            f'Write the draft report for topic `{topic_slug}` in operation `{operation_id}`.\n\n'
+            f'The research is DONE — sources and graded claims are already saved. Do NOT run new research. '
+            f'Review the saved evidence with Research.get_topic_state and Research.search_claims, then '
+            f'synthesise a structured draft report and save it with Research.save_report_draft — do this '
+            f'promptly, within your first several tool calls.\n\n'
+            f'Structure: summary (state the bottom line up front), key findings, source-backed claims, an '
+            f'explicit points-of-disagreement / contested section, why it matters, and open questions. Be '
+            f'epistemically honest about what is well-established vs. weak or contested. Do not invent sources.'
         )
     if role == 'judge':
         return (
@@ -756,7 +783,7 @@ def _run_libris_role(
         op = get_operation_state(state_dir, project_root, operation_id)
         policy = (op.get('model_policy') or {}) if op else {}
         role_policy = str(policy.get(role) or '').strip().lower()
-        complexity = 'complex' if role in ('coordinator', 'judge') else 'normal'
+        complexity = 'complex' if role in ('coordinator', 'judge', 'writer') else 'normal'
         if role_policy in ('strong', 'best', 'high'):
             complexity = 'complex'
         elif role_policy in ('cheap', 'cheap_local', 'local', 'fast'):
@@ -783,7 +810,7 @@ def _run_libris_role(
         # A deep research pass reads and verifies many sources before it can save
         # a report; the engine's default 50-turn cap is too low and truncates the
         # run before anything is persisted. Give researchers/judges more headroom.
-        role_max_turns = {'researcher': 140, 'judge': 80, 'coordinator': 60}.get(role, 60)
+        role_max_turns = {'researcher': 140, 'judge': 80, 'coordinator': 60, 'writer': 30}.get(role, 60)
 
         engine = ConversationEngine(
             provider=provider,
@@ -816,7 +843,7 @@ def _run_libris_role(
         )
 
         instruction = _role_instruction(role, operation_id, topic_slug, user_goal)
-        phase_name = 'scouting' if role == 'coordinator' else 'drafting' if role == 'researcher' else 'evaluating' if role == 'judge' else 'working'
+        phase_name = 'scouting' if role == 'coordinator' else 'drafting' if role == 'researcher' else 'writing' if role == 'writer' else 'evaluating' if role == 'judge' else 'working'
         emit_agent_phase(
             state_dir, project_root, operation_id,
             agent_id=agent.get('id', ''), role=role,
