@@ -110,15 +110,21 @@ def test_webhook_alert_delivery_and_recovery_reconcile(tmp_path, monkeypatch):
 
     run_due_automations_once(state_dir, now_ts=time.time() + 5)
 
-    deadline = time.time() + 2
+    # The automation runs on a background daemon thread and delivers the webhook
+    # as part of that run. Wait for BOTH the run record and the delivery before
+    # asserting — breaking on runs_tail alone races the webhook thread, and a
+    # tight deadline is flaky under full-suite CPU contention (was 2s → CI flake).
+    deadline = time.time() + 10
     latest = {}
     while time.time() < deadline:
         latest = get_automation_state(state_dir, doc['automation_id'])
-        if latest.get('runs_tail'):
+        if latest.get('runs_tail') and delivered.get('payload'):
             break
         time.sleep(0.02)
 
+    assert latest.get('runs_tail'), 'automation run did not record in time'
     assert latest['runs_tail'][-1]['ok'] is False
+    assert delivered.get('payload'), 'webhook was not delivered in time'
     assert delivered['payload']['automation_id'] == doc['automation_id']
     assert delivered['payload']['state'] == 'failure'
 

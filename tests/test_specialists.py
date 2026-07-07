@@ -6,8 +6,27 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
+
+
+@pytest.fixture(autouse=True)
+def _restore_polluted_modules():
+    """These tests reload agent_lifecycle/specialists into sys.modules bound to a
+    temp state dir. Restore the originals afterwards so later tests in the suite
+    don't import a module pointing at a deleted tmp_path."""
+    names = ('agent_lifecycle', 'specialists', 'soft_specialization')
+    saved = {n: sys.modules.get(n) for n in names}
+    try:
+        yield
+    finally:
+        for n, mod in saved.items():
+            if mod is not None:
+                sys.modules[n] = mod
+            else:
+                sys.modules.pop(n, None)
 
 
 def _fresh_lifecycle(tmp_path):
