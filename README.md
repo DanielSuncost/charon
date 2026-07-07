@@ -182,6 +182,24 @@ The agent proposes goals inferred from conversation, plans steps, works
 through them with git checkpoints, and verifies completion. Set time
 and token budgets. Interrupt anytime.
 
+### Autonomous Research (Libris)
+
+```
+/libris research the role of reinforcement learning in the brain during skill vs language learning
+```
+
+Libris is a multi-agent research swarm: a coordinator scouts topics,
+researchers investigate them against the live scholarly literature
+(arXiv, Semantic Scholar, OpenAlex), and a judge critiques the drafts.
+Every claim is graded for **confidence** and **evidence strength**, and
+contradicting evidence is surfaced rather than smoothed over. Results
+render to a self-contained, citation-linked HTML report.
+
+**See real output:** three fully-cited demo reports on frontier science
+questions (RL in the brain, gut microbiome & neurodegeneration, epigenetic
+aging clocks) are in [demos/libris/](demos/libris/) — 27/27 citations
+verified against CrossRef.
+
 ### Multi-Provider
 
 ```bash
