@@ -98,12 +98,19 @@ def _role_instruction(role: str, operation_id: str, topic_slug: str = '', user_g
         return (
             f'Work topic `{topic_slug}` in operation `{operation_id}`.\n\n'
             f'First call Research.get_topic_state to inspect the topic. If checkpoints already exist, read the latest critique and summary before revising. '
-            f'If the topic state includes follow_up_tasks, treat them as required fixes and address them explicitly in the next draft. '
-            f'Then perform one disciplined research pass: use Web search/extract, Paper, SourceDiscovery, or Browser as needed, '
-            f'consult the promising-source index, save meaningful sources, save claims, write an evidence markdown artifact, '
-            f'and save a structured draft report.\n\n'
-            f'The draft report should include: summary, key findings, source-backed claims, why it matters, open questions, and next research steps. '
-            f'If revising, explicitly address the judge\'s weaknesses and required fixes.'
+            f'If the topic state includes follow_up_tasks, treat them as required fixes and address them explicitly in the next draft.\n\n'
+            f'SAVE AS YOU GO — do not batch all saving for the end. The moment you find a solid source, call '
+            f'Research.add_source immediately; the moment you can state a fact, call Research.add_claim (with '
+            f'confidence, stance, evidence_grade, entity_refs). You have a limited number of tool calls, so '
+            f'interleave saving with reading. Aim to finish your reading within roughly 25-30 searches/reads, '
+            f'then STOP researching and spend your remaining turns writing.\n\n'
+            f'You MUST finish by calling Research.save_report_draft — a run that ends without a saved draft is a '
+            f'failed run. Before you stop, make sure you have saved: at least a handful of sources, several graded '
+            f'claims (including any contradicting ones), an evidence markdown via Research.save_evidence, and the '
+            f'draft report. If you are running low on turns, save a shorter draft rather than none.\n\n'
+            f'The draft report should include: summary, key findings, source-backed claims, points of disagreement / '
+            f'open questions, why it matters, and next research steps. Be explicit about what is well-established vs '
+            f'contested. If revising, explicitly address the judge\'s weaknesses and required fixes.'
         )
     if role == 'judge':
         return (
@@ -770,6 +777,11 @@ def _run_libris_role(
         base_prompt = build_system_prompt(state_dir=state_dir, agent=agent_doc, task=task_doc)
         system_prompt = base_prompt + '\n\n' + _role_prompt(role, operation_id, topic_slug, user_goal)
 
+        # A deep research pass reads and verifies many sources before it can save
+        # a report; the engine's default 50-turn cap is too low and truncates the
+        # run before anything is persisted. Give researchers/judges more headroom.
+        role_max_turns = {'researcher': 140, 'judge': 80, 'coordinator': 60}.get(role, 60)
+
         engine = ConversationEngine(
             provider=provider,
             model=model,
@@ -785,6 +797,7 @@ def _run_libris_role(
             runtime_role='background_agent',
             parent_agent_id=agent.get('parent_agent_id', ''),
             max_tokens=16384,
+            max_turns=role_max_turns,
         )
 
         append_operation_event(state_dir, project_root, operation_id, f'{role}_spawned', {
