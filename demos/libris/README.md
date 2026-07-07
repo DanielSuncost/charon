@@ -13,10 +13,21 @@ sources across the three reports resolve to real papers with matching titles**
 (no hallucinated references). Any source that could not be verified is flagged in
 the report rather than removed.
 
+## View them online
+
+GitHub shows `.html` as source, so use one of these to see them rendered:
+
+- **Instant (no setup):** [**open the demos index**](https://raw.githack.com/DanielSuncost/charon/master/demos/libris/index.html)
+  via raw.githack.com — renders the pushed HTML directly.
+- **GitHub Pages:** once enabled for this repo (Settings → Pages → Deploy from
+  `master`, root), they live at
+  `https://danielsuncost.github.io/charon/demos/libris/`.
+
 ## The reports
 
-Open the `.html` files in a browser — each is a single self-contained page
-(no assets, works offline, light/dark aware).
+`index.html` is a landing page linking all three. Each report is a single
+self-contained page (no assets, works offline, light/dark aware) — download and
+open locally, or use a link above.
 
 | Report | Question | Sources | Graded claims | Contested |
 |--------|----------|:-------:|:-------------:|:---------:|

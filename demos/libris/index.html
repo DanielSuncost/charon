@@ -1,0 +1,138 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Libris research demos</title><style>
+:root{--bg:#fbfbfa;--fg:#1a1a1a;--muted:#6b6b6b;--card:#fff;--border:#e6e4df;
+--accent:#5b4bd6;--accent-soft:#efedff;--good:#1a7f5a;--warn:#b26a00;--bad:#b3261e;
+--good-soft:#e4f4ec;--warn-soft:#fbeede;--bad-soft:#fbe6e4;--radius:12px;
+--maxw:920px;--mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+--sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
+@media (prefers-color-scheme:dark){:root{--bg:#16161a;--fg:#e9e9ec;--muted:#9a9aa2;
+--card:#1e1e24;--border:#2e2e37;--accent:#a99bff;--accent-soft:#26243a;
+--good:#4bd39a;--warn:#e0a44a;--bad:#ff6b5e;--good-soft:#16302447;--warn-soft:#3a2c1447;--bad-soft:#3a1c1a47}}
+:root[data-theme=dark]{--bg:#16161a;--fg:#e9e9ec;--muted:#9a9aa2;--card:#1e1e24;
+--border:#2e2e37;--accent:#a99bff;--accent-soft:#26243a;--good:#4bd39a;--warn:#e0a44a;
+--bad:#ff6b5e;--good-soft:#16302447;--warn-soft:#3a2c1447;--bad-soft:#3a1c1a47}
+:root[data-theme=light]{--bg:#fbfbfa;--fg:#1a1a1a;--muted:#6b6b6b;--card:#fff;
+--border:#e6e4df;--accent:#5b4bd6;--accent-soft:#efedff;--good:#1a7f5a;--warn:#b26a00;
+--bad:#b3261e;--good-soft:#e4f4ec;--warn-soft:#fbeede;--bad-soft:#fbe6e4}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
+line-height:1.6;font-size:16px}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:32px 20px 96px}
+header.report-head{border-bottom:1px solid var(--border);padding-bottom:24px;margin-bottom:8px}
+.eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);font-weight:600}
+h1{font-size:2rem;line-height:1.2;margin:.3em 0}
+.question{font-size:1.1rem;color:var(--muted);margin:.5em 0 1em}
+.meta-row{display:flex;flex-wrap:wrap;gap:8px 16px;font-size:13px;color:var(--muted)}
+.meta-row b{color:var(--fg)}
+h2{font-size:1.5rem;margin:2em 0 .5em;padding-top:.3em}
+h3{font-size:1.18rem;margin:1.6em 0 .4em}
+h4{font-size:1.02rem;margin:1.3em 0 .3em}
+p{margin:.7em 0}a{color:var(--accent)}
+code{font-family:var(--mono);background:var(--accent-soft);padding:.1em .35em;border-radius:5px;font-size:.9em}
+ul,ol{padding-left:1.4em}li{margin:.25em 0}
+blockquote{border-left:3px solid var(--accent);margin:.8em 0;padding:.2em 1em;color:var(--muted)}
+hr{border:none;border-top:1px solid var(--border);margin:2em 0}
+.badge{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;
+border:1px solid var(--border);white-space:nowrap;line-height:1.5}
+.badge-conf-high{background:var(--good-soft);color:var(--good);border-color:transparent}
+.badge-conf-medium{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.badge-conf-low,.badge-conf-unknown{background:var(--bad-soft);color:var(--bad);border-color:transparent}
+.badge-stance-supports{background:var(--good-soft);color:var(--good);border-color:transparent}
+.badge-stance-contradicts{background:var(--bad-soft);color:var(--bad);border-color:transparent}
+.badge-stance-unclear{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.badge-grade-strong{background:var(--good-soft);color:var(--good);border-color:transparent}
+.badge-grade-moderate{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.badge-grade-weak,.badge-grade-anecdotal{background:var(--bad-soft);color:var(--bad);border-color:transparent}
+.badge-grade-contested{background:var(--bad-soft);color:var(--bad);border-color:transparent;font-weight:700}
+.badge-grade-theoretical{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.badge-verified{background:var(--good-soft);color:var(--good);border-color:transparent}
+.badge-unverified{background:var(--bad-soft);color:var(--bad);border-color:transparent}
+.badge-type,.badge-cred-high,.badge-cred-medium,.badge-cred-low,.badge-cred-unknown{color:var(--muted)}
+.legend{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+padding:16px 20px;margin:20px 0;font-size:13px}
+.legend h4{margin:0 0 10px}.legend-grid{display:flex;flex-wrap:wrap;gap:8px 20px}
+.legend-item{display:flex;align-items:center;gap:6px}
+.epi-tiles{display:flex;flex-wrap:wrap;gap:12px;margin:16px 0}
+.tile{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+padding:12px 18px;min-width:110px}
+.tile .n{font-size:1.6rem;font-weight:700;line-height:1}
+.tile .l{font-size:12px;color:var(--muted);margin-top:4px}
+.topic{margin:2.5em 0;border-top:2px solid var(--border);padding-top:1em}
+.claims-wrap{margin:1.5em 0}
+.claim{background:var(--card);border:1px solid var(--border);border-left:4px solid var(--muted);
+border-radius:var(--radius);padding:14px 18px;margin:12px 0}
+.claim-supports{border-left-color:var(--good)}
+.claim-contradicts{border-left-color:var(--bad)}
+.claim-unclear{border-left-color:var(--accent)}
+.claim-text{font-size:.98rem}
+.claim-badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.claim-cite{font-size:.8em;color:var(--accent);text-decoration:none;font-weight:600;vertical-align:super}
+.claim-refs{margin-top:8px}
+.tag{display:inline-block;font-size:11px;color:var(--muted);background:var(--accent-soft);
+padding:1px 7px;border-radius:5px;margin:2px 3px 0 0}
+.cites{list-style:none;padding:0;margin:1em 0}
+.cite{display:flex;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)}
+.cite-num{color:var(--muted);font-family:var(--mono);font-size:.85em;flex-shrink:0}
+.cite-title{font-weight:600;font-size:.95rem}
+.cite-authors,.cite-meta{font-size:.82rem;color:var(--muted)}
+.judge{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 20px;margin:1.5em 0}
+.scorecard{width:100%;border-collapse:collapse;font-size:.9rem}
+.scorecard td{padding:6px 8px;border-bottom:1px solid var(--border)}
+.scorecard .score{font-weight:700;text-align:right;width:48px}
+.meter{background:var(--border);border-radius:999px;height:7px;overflow:hidden;min-width:120px}
+.meter-fill{background:var(--accent);height:100%}
+.critique{margin-top:12px;font-size:.92rem}
+.critique summary{cursor:pointer;font-weight:600;color:var(--accent)}
+.theme-toggle{position:fixed;top:16px;right:16px;background:var(--card);border:1px solid var(--border);
+color:var(--fg);border-radius:999px;width:38px;height:38px;cursor:pointer;font-size:16px}
+.foot{margin-top:3em;padding-top:1.5em;border-top:1px solid var(--border);font-size:13px;color:var(--muted)}
+details.report-src{margin:1em 0}details.report-src summary{cursor:pointer;color:var(--muted);font-size:.9em}
+@media(max-width:600px){h1{font-size:1.5rem}.wrap{padding:20px 14px 72px}}
+
+.hero{max-width:var(--maxw);margin:0 auto;padding:8px 0 4px}
+.rcards{display:flex;flex-direction:column;gap:16px;margin:24px 0}
+.rcard{display:block;text-decoration:none;color:var(--fg);background:var(--card);
+border:1px solid var(--border);border-radius:var(--radius);padding:20px 22px;transition:border-color .15s,transform .15s}
+.rcard:hover{border-color:var(--accent);transform:translateY(-1px)}
+.rcard-title{font-size:1.25rem;font-weight:700;color:var(--accent)}
+.rcard-q{margin:.3em 0;font-size:1.02rem}
+.rcard-stats{font-size:.85rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.rcard-why{font-size:.9rem;color:var(--muted);margin-top:.5em;font-style:italic}
+</style></head><body><button id="tt" class="theme-toggle" title="Toggle theme">◐</button>
+<div class="wrap">
+<header class="report-head">
+<div class="eyebrow">Libris · autonomous research · Charon</div>
+<h1>Libris research demos</h1>
+<p class="question">Real, fully-cited research reports produced by <a href="https://github.com/DanielSuncost/charon">Charon's</a> autonomous multi-agent research system — each investigates a contested frontier-science question against the live scholarly literature and grades every claim for confidence and evidence strength.</p>
+<div class="meta-row"><span><b>27</b> sources</span><span><b>29</b> graded claims</span><span><b>27/27</b> citations verified against CrossRef/arXiv</span></div>
+</header>
+<div class="rcards"><a class="rcard" href="rl-brain-skill-vs-language.html">
+      <div class="rcard-title">Reinforcement learning in the human brain</div>
+      <div class="rcard-q">Does the brain use reinforcement learning for motor skill learning and language learning?</div>
+      <div class="rcard-stats">7 sources · 9 graded claims · 2 contested</div>
+      <div class="rcard-why">skill learning is textbook dopaminergic RL; the language case is genuinely contested</div>
+    </a><a class="rcard" href="gut-microbiome-neurodegeneration.html">
+      <div class="rcard-title">Gut microbiome &amp; neurodegeneration</div>
+      <div class="rcard-q">Does the gut microbiome causally drive neurodegenerative disease, or merely correlate with it?</div>
+      <div class="rcard-stats">8 sources · 8 graded claims · 3 contested</div>
+      <div class="rcard-why">causal evidence is dominated by mouse models while human data is correlational</div>
+    </a><a class="rcard" href="epigenetic-aging-clocks-causality.html">
+      <div class="rcard-title">Epigenetic aging clocks</div>
+      <div class="rcard-q">Do DNA-methylation aging clocks measure a causal aging process, or track correlates?</div>
+      <div class="rcard-stats">12 sources · 12 graded claims · judge 7.8/10</div>
+      <div class="rcard-why">central to longevity, sold to consumers, yet causality is unresolved</div>
+    </a></div>
+<div class="legend"><h4>How each report grades its claims</h4><div class="legend-grid">
+<span class="legend-item"><span class="badge badge-conf-high">confidence: high</span> well-supported</span>
+<span class="legend-item"><span class="badge badge-stance-contradicts">contradicts</span> evidence against</span>
+<span class="legend-item"><span class="badge badge-grade-strong">Strong evidence</span> methodological strength</span>
+<span class="legend-item"><span class="badge badge-verified">verified</span> citation resolved</span>
+</div><p style="margin:.7em 0 0;color:var(--muted)">Confidence (is it true?), stance (does the source support or contradict?), and evidence grade (how strong is the underlying evidence?) are independent axes. Contradicting and contested claims are surfaced, not smoothed over.</p></div>
+<div class="foot">Generated by Libris. These are AI-produced research reports — a well-sourced starting point, not a substitute for the primary literature. Citations were verified for existence and title match; not every number was independently fact-checked.</div>
+</div>
+<script>
+(function(){var r=document.documentElement,k='libris-theme',s=localStorage.getItem(k);
+if(s)r.setAttribute('data-theme',s);
+document.getElementById('tt').addEventListener('click',function(){
+var cur=r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+var nx=cur==='dark'?'light':'dark';r.setAttribute('data-theme',nx);localStorage.setItem(k,nx);});})();
+</script></body></html>

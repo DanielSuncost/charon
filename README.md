@@ -197,8 +197,9 @@ render to a self-contained, citation-linked HTML report.
 
 **See real output:** three fully-cited demo reports on frontier science
 questions (RL in the brain, gut microbiome & neurodegeneration, epigenetic
-aging clocks) are in [demos/libris/](demos/libris/) — 27/27 citations
-verified against CrossRef.
+aging clocks) — 27/27 citations verified against CrossRef. Browse them
+rendered at the [**demos index**](https://raw.githack.com/DanielSuncost/charon/master/demos/libris/index.html),
+or see [demos/libris/](demos/libris/).
 
 ### Multi-Provider
 
