@@ -1,12 +1,6 @@
 """Tests for Hermes memory bridge."""
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "core-daemon"))
 
 from memory_bridge import import_hermes, hermes_available, _parse_section_entries
 

@@ -1,9 +1,6 @@
 """Tests for the judge-loop driver — the heartbeat-driven controller that
 advances loops one step per tick using a pluggable implementer."""
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'apps' / 'core-daemon'))
 
 from judge_engine import create_loop, load_loop, save_loop
 from checkpoint_manager import CheckpointManager
@@ -41,8 +38,10 @@ def _new_loop(state_dir, work, **kw):
 
 
 def test_advance_loop_drives_to_target(tmp_path):
-    work = tmp_path / 'project'; work.mkdir()
-    state = tmp_path / 'state'; state.mkdir()
+    work = tmp_path / 'project'
+    work.mkdir()
+    state = tmp_path / 'state'
+    state.mkdir()
     (work / 'score.txt').write_text('100\n')
 
     config = _new_loop(state, work, target_score=200.0)
@@ -81,8 +80,10 @@ def test_advance_loop_drives_to_target(tmp_path):
 
 
 def test_advance_loop_stops_on_budget(tmp_path):
-    work = tmp_path / 'project'; work.mkdir()
-    state = tmp_path / 'state'; state.mkdir()
+    work = tmp_path / 'project'
+    work.mkdir()
+    state = tmp_path / 'state'
+    state.mkdir()
     (work / 'score.txt').write_text('50\n')
 
     config = _new_loop(state, work, target_score=10_000.0, max_iterations=3)
@@ -101,8 +102,10 @@ def test_advance_loop_stops_on_budget(tmp_path):
 
 
 def test_advance_loop_noop_implementer_counts_failure(tmp_path):
-    work = tmp_path / 'project'; work.mkdir()
-    state = tmp_path / 'state'; state.mkdir()
+    work = tmp_path / 'project'
+    work.mkdir()
+    state = tmp_path / 'state'
+    state.mkdir()
     (work / 'score.txt').write_text('100\n')
 
     config = _new_loop(state, work)
@@ -116,8 +119,10 @@ def test_advance_loop_noop_implementer_counts_failure(tmp_path):
 
 
 def test_tick_picks_up_created_loop_and_runs_baseline(tmp_path):
-    work = tmp_path / 'project'; work.mkdir()
-    state = tmp_path / 'state'; state.mkdir()
+    work = tmp_path / 'project'
+    work.mkdir()
+    state = tmp_path / 'state'
+    state.mkdir()
     (work / 'score.txt').write_text('100\n')
 
     config = _new_loop(state, work, target_score=200.0)
@@ -137,8 +142,10 @@ def test_tick_picks_up_created_loop_and_runs_baseline(tmp_path):
 def test_rollback_removes_files_added_in_discarded_iteration(tmp_path):
     """A file CREATED during a regressed iteration must not leak into the
     best-known state after rollback."""
-    work = tmp_path / 'project'; work.mkdir()
-    state = tmp_path / 'state'; state.mkdir()
+    work = tmp_path / 'project'
+    work.mkdir()
+    state = tmp_path / 'state'
+    state.mkdir()
     (work / 'score.txt').write_text('100\n')
 
     config = _new_loop(state, work, target_score=10_000.0, max_iterations=5)
@@ -176,8 +183,10 @@ def test_advance_loop_frozen_violation_caught_and_restored(tmp_path):
     see (a raw write, standing in for a shell command) must be caught by the
     engine-level frozen gate, rolled back, and the frozen file restored — while
     the loop keeps its previously-kept best."""
-    work = tmp_path / 'project'; work.mkdir()
-    state = tmp_path / 'state'; state.mkdir()
+    work = tmp_path / 'project'
+    work.mkdir()
+    state = tmp_path / 'state'
+    state.mkdir()
     (work / 'score.txt').write_text('100\n')
     (work / 'locked.py').write_text('V = 1\n')
 
@@ -217,8 +226,10 @@ def test_advance_loop_frozen_violation_caught_and_restored(tmp_path):
 
 
 def test_tick_skips_paused_loops(tmp_path):
-    work = tmp_path / 'project'; work.mkdir()
-    state = tmp_path / 'state'; state.mkdir()
+    work = tmp_path / 'project'
+    work.mkdir()
+    state = tmp_path / 'state'
+    state.mkdir()
     (work / 'score.txt').write_text('100\n')
 
     config = _new_loop(state, work)

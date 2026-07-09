@@ -2,11 +2,6 @@ import asyncio
 import base64
 import json
 import time
-from pathlib import Path
-import sys
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
 
 from providers.httpx_codex import HttpxCodexProvider
 

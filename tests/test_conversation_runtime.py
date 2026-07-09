@@ -5,10 +5,6 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE_DAEMON = ROOT / 'apps' / 'core-daemon'
-# conversation_runtime imports sibling modules (conversation_participants, ...)
-# from apps/core-daemon, so make that importable regardless of test order.
-if str(CORE_DAEMON) not in sys.path:
-    sys.path.insert(0, str(CORE_DAEMON))
 MOD_PATH = CORE_DAEMON / 'conversation_runtime.py'
 
 spec = importlib.util.spec_from_file_location('conversation_runtime', MOD_PATH)

@@ -7,13 +7,11 @@ write-scope, the engine scores/keeps/rolls back, and the loop converges — with
 the frozen file untouched.
 """
 import os
-import sys
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
 
 pytestmark = pytest.mark.skipif(
     os.environ.get('CHARON_RUN_LIVE') != '1',
@@ -40,8 +38,10 @@ def test_live_loop_converges_with_real_implementer(tmp_path):
     if not provider or not ready:
         pytest.skip('no shade provider configured in .charon_state')
 
-    work = tmp_path / 'project'; work.mkdir()
-    cfgstate = tmp_path / 'state'; cfgstate.mkdir()
+    work = tmp_path / 'project'
+    work.mkdir()
+    cfgstate = tmp_path / 'state'
+    cfgstate.mkdir()
     (work / 'solver.py').write_text("def transform(n):\n    return 0  # TODO\n")
     (work / 'check.py').write_text(CHECK)
 

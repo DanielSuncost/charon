@@ -9,8 +9,6 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-
 
 @pytest.fixture(autouse=True)
 def _restore_polluted_modules():
@@ -140,7 +138,8 @@ def test_task_promotion_creates_attributed_episode(tmp_path):
     import episodic as ep
     import threads as th
 
-    state = tmp_path / 'state'; state.mkdir()
+    state = tmp_path / 'state'
+    state.mkdir()
     proj = str(tmp_path / 'proj')
     agent = {'id': 'AG-REL-1', 'name': 'rel-01', 'project': proj}
     task = {'id': 'task-77', 'project': proj}

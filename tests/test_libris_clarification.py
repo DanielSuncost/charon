@@ -3,9 +3,6 @@ import importlib.util
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE_DAEMON = ROOT / 'apps' / 'core-daemon'
-if str(CORE_DAEMON) not in sys.path:
-    sys.path.insert(0, str(CORE_DAEMON))
 TOOLS_PATH = ROOT / 'apps' / 'core-daemon' / 'tools' / '__init__.py'
 CL_PATH = ROOT / 'apps' / 'core-daemon' / 'tools' / 'clarify_tool.py'
 RUNTIME_PATH = ROOT / 'apps' / 'core-daemon' / 'libris_runtime.py'

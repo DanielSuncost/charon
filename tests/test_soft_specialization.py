@@ -1,13 +1,9 @@
 """Tests for soft_specialization module."""
 import json
-import sys
 import time
-from pathlib import Path
 
-import pytest
 
 # Ensure core-daemon is importable
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'apps' / 'core-daemon'))
 
 from soft_specialization import (
     derive_label_heuristic,
@@ -16,7 +12,6 @@ from soft_specialization import (
     refresh_specialization,
     should_refresh,
     _last_refresh,
-    _MIN_TASKS,
     REFRESH_INTERVAL_SEC,
 )
 

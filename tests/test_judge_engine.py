@@ -1,17 +1,8 @@
 """Tests for judge_engine.py — iterative optimization loops with scoring."""
-import json
-import math
-import os
-import sys
 import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'apps' / 'core-daemon'))
 
 from judge_engine import (
-    JudgeLoopConfig, JudgeVerdict, Iteration, Convergence,
-    QuantitativeJudge, CorrectnessJudge, AestheticJudge, CompositeJudge,
+    JudgeLoopConfig, Iteration, QuantitativeJudge, CorrectnessJudge, AestheticJudge, CompositeJudge,
     create_judge, check_convergence, is_improvement,
     build_iteration_prompt, format_status,
     create_loop, run_baseline, run_iteration,

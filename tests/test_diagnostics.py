@@ -1,9 +1,4 @@
 """Tests for the TUI-safe diagnostics helper."""
-import json
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'apps' / 'core-daemon'))
 
 import diagnostics
 

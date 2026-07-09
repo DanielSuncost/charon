@@ -1,9 +1,6 @@
 """Tests for the procedural memory layer (procedural.py)."""
-import sys
 import tempfile
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'apps' / 'core-daemon'))
 
 from memory_engine import MemoryEngine
 import procedural as pr

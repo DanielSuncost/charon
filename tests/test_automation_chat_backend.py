@@ -1,9 +1,3 @@
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'tui' / 'opentui'))
-
 from chat_backend import ChatBackend, _parse_interval_phrase, _natural_language_to_cron
 
 

@@ -1,9 +1,4 @@
 """Tests for the Web search and extraction tool."""
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
 
 from tools import ToolContext
 from tools.web_tool import execute_web, html_to_text, _search_ddg

@@ -4,9 +4,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DAEMON = ROOT / 'apps' / 'core-daemon'
-sys.path.insert(0, str(DAEMON))
-sys.path.insert(0, str(ROOT))
-
 
 def _load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)

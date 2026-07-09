@@ -1,11 +1,6 @@
 """Libris HTML report renderer: markdown conversion, epistemic model, and a
 full render over a synthetic operation directory."""
 import json
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
 
 import libris_report as lr
 

@@ -1,13 +1,8 @@
 """Tests for Charon agent tools."""
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
 
 from tools import (
     execute_read, execute_write, execute_edit, execute_bash,
-    execute_tool, ToolContext, ToolResult, truncate_output,
+    execute_tool, ToolContext, truncate_output,
     ALL_TOOL_DEFS, TOOL_EXECUTORS,
 )
 

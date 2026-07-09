@@ -3,10 +3,6 @@ import importlib.util
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE = ROOT / 'apps' / 'core-daemon'
-if str(CORE) not in sys.path:
-    sys.path.insert(0, str(CORE))
-
 TOOLS_PATH = ROOT / 'apps' / 'core-daemon' / 'tools' / '__init__.py'
 CRON_PATH = ROOT / 'apps' / 'core-daemon' / 'tools' / 'cron_tool.py'
 

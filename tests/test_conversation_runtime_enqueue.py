@@ -3,13 +3,11 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-DAEMON = ROOT / 'apps' / 'core-daemon'
-sys.path.insert(0, str(DAEMON))
-sys.path.insert(0, str(ROOT))
-
 import store_adapter
 from libs.store import task_get
+
+ROOT = Path(__file__).resolve().parents[1]
+DAEMON = ROOT / 'apps' / 'core-daemon'
 
 
 def _load(name, path):

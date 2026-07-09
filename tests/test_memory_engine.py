@@ -1,15 +1,10 @@
 """Tests for the semantic memory engine."""
 from __future__ import annotations
 
-import sys
-import tempfile
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "core-daemon"))
-
-from memory_engine import MemoryEngine, Memory, RecallResult, embed_one
+from memory_engine import MemoryEngine
 
 
 @pytest.fixture
@@ -71,7 +66,7 @@ class TestBasicOperations:
 class TestDeduplication:
     def test_near_duplicate_rejected(self, engine):
         engine.add("User prefers dark mode in all editors")
-        mem2 = engine.add("User prefers dark mode in all editors")  # exact dup
+        engine.add("User prefers dark mode in all editors")  # exact dup
         assert engine.count() == 1
 
     def test_different_content_accepted(self, engine):
@@ -102,7 +97,7 @@ class TestKnowledgeUpdates:
 
     def test_update_edge_created(self, engine):
         # Use very similar phrasing to trigger version detection
-        mem1 = engine.add("User's personal best 5K time is 27 minutes and 12 seconds")
+        engine.add("User's personal best 5K time is 27 minutes and 12 seconds")
         mem2 = engine.add("User's personal best 5K time is 25 minutes and 50 seconds")
         fetched2 = engine.get(mem2.id)
         has_chain = fetched2.parent_id is not None

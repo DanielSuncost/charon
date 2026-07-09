@@ -1,13 +1,8 @@
 """Tests for conversation engine steering and follow-up queues."""
-import sys
 import asyncio
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-
-from conversation_engine import ConversationEngine, EngineEvent
-from providers import ModelInfo, StreamDelta, ToolCall, Message
+from conversation_engine import ConversationEngine
+from providers import ModelInfo, StreamDelta, ToolCall
 
 
 # ── Mock provider that returns tool calls then text ─────────────────

@@ -4,10 +4,6 @@ import json
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE_DAEMON = ROOT / 'apps' / 'core-daemon'
-if str(CORE_DAEMON) not in sys.path:
-    sys.path.insert(0, str(CORE_DAEMON))
-
 MOD_PATH = ROOT / 'apps' / 'core-daemon' / 'shade_orchestrator.py'
 
 spec = importlib.util.spec_from_file_location('shade_orchestrator', MOD_PATH)

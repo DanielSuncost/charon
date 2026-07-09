@@ -1,9 +1,4 @@
 """Tests for compaction with file tracking."""
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
 
 from conversation_engine import _extract_file_ops, _format_file_ops
 from providers import Message, ToolCall

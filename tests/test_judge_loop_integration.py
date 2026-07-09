@@ -1,14 +1,10 @@
 """Integration test — full judge loop: create → baseline → iterate → converge."""
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'apps' / 'core-daemon'))
 
 import pytest
 from judge_engine import (
     create_loop, run_baseline, run_iteration, check_convergence,
     save_loop, load_loop, format_status,
-    QuantitativeJudge, CorrectnessJudge, create_judge,
+    create_judge,
 )
 from checkpoint_manager import CheckpointManager
 
@@ -253,8 +249,10 @@ class TestFrozenGate:
     """A frozen-path modification must be rejected and rolled back before scoring."""
 
     def test_frozen_modification_rejected(self, tmp_path):
-        work = tmp_path / 'project'; work.mkdir()
-        state = tmp_path / 'state'; state.mkdir()
+        work = tmp_path / 'project'
+        work.mkdir()
+        state = tmp_path / 'state'
+        state.mkdir()
         (work / 'score.txt').write_text('100\n')
         (work / 'locked.py').write_text('ORIGINAL = 1\n')
 
@@ -281,7 +279,8 @@ class TestFrozenGate:
         assert (work / 'locked.py').read_text() == 'ORIGINAL = 1\n'
 
     def test_stochastic_judges_get_measured_min_delta(self, tmp_path):
-        state = tmp_path / 'state'; state.mkdir()
+        state = tmp_path / 'state'
+        state.mkdir()
         det = create_loop(state, goal='g', project=str(tmp_path), agent_id='a',
                           judge_type='quantitative', eval_command='echo 1')
         aes = create_loop(state, goal='g', project=str(tmp_path), agent_id='a',

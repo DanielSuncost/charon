@@ -1,13 +1,7 @@
 """Tests for model registry and batch orchestrator."""
-import json
-import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-sys.path.insert(0, str(ROOT))
-
-from model_registry import load_registry, save_registry, DEFAULT_REGISTRY
+from model_registry import load_registry, save_registry
 from batch_orchestrator import (
     create_batch, get_batch, list_batches, summarize_batch,
     get_next_batch_tasks, mark_batch_task_started,

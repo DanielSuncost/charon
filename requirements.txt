@@ -1,3 +1,5 @@
+# NOTE: pyproject.toml is the canonical dependency list.
+# This file exists for CI and plain-pip installs; keep it in sync.
 httpx>=0.28
 playwright>=1.50
 sqlite-vec>=0.1.6

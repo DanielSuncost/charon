@@ -1,13 +1,7 @@
 """Tests for checkpoint_manager.py — shadow git snapshots."""
-import os
-import sys
-import shutil
 import pytest
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'apps' / 'core-daemon'))
-
-from checkpoint_manager import CheckpointManager, Checkpoint
+from checkpoint_manager import CheckpointManager
 
 
 @pytest.fixture

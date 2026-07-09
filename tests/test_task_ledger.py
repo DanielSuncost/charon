@@ -1,11 +1,5 @@
 """Tests for the task ledger."""
 import json
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-sys.path.insert(0, str(ROOT))
 
 import store_adapter
 from task_ledger import get_agent_ledger, get_agent_ledger_summary, format_ledger_text

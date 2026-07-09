@@ -2,19 +2,12 @@
 from __future__ import annotations
 
 import sqlite3
-import sys
-from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-sys.path.insert(0, str(ROOT / 'libs'))
-
 from context_store import ContextStore
 from context_assembler import (
-    ContextAssembler, AssembleResult,
-    _format_summary_xml, _build_recall_guidance,
+    ContextAssembler, _format_summary_xml, _build_recall_guidance,
 )
 from providers import Message, ToolCall
 
@@ -41,12 +34,12 @@ class FakeDB:
         if row is None:
             return None
         cols = [d[0] for d in cur.description]
-        return dict(zip(cols, row))
+        return dict(zip(cols, row, strict=False))
 
     def fetchall(self, sql, params=()):
         cur = self.conn.execute(sql, params)
         cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
+        return [dict(zip(cols, row, strict=False)) for row in cur.fetchall()]
 
 
 @pytest.fixture
@@ -133,7 +126,7 @@ class TestAssembler:
 
     def test_fresh_tail_always_included(self, db):
         """Even when over budget, fresh tail is never dropped."""
-        for i in range(10):
+        for _ in range(10):
             ContextStore.persist_message(
                 db, 'agent-1',
                 Message(role='user', content='x' * 400))
