@@ -11,7 +11,6 @@ import ast
 import json
 import re
 import subprocess
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -354,7 +353,7 @@ def get_charon_capabilities(charon_root: Path) -> dict:
             pass
 
     # Extract commands from chat_backend._command_catalog
-    backend = charon_root / 'apps' / 'tui' / 'opentui' / 'chat_backend.py'
+    backend = charon_root / 'apps' / 'tui' / 'opentui' / 'backend' / 'commands_mixin.py'
     if backend.exists():
         try:
             text = backend.read_text(errors='replace')
@@ -886,9 +885,6 @@ def generate_registry_doc(
         commands = data.get('commands', [])
         analysis = data.get('analysis', [])
         arch_notes = data.get('architecture', '')
-
-        # Count new abilities
-        new_count = sum(1 for a in analysis if not a.get('charon_has', True))
 
         lines.append(f'## {agent_name}')
         lines.append('')

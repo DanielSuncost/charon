@@ -1,10 +1,4 @@
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'tui' / 'opentui'))
-
-import chat_backend
+from backend import common
 from chat_backend import ChatBackend
 
 
@@ -20,8 +14,8 @@ def test_automate_list_filtered_outputs(monkeypatch, tmp_path):
     backend = ChatBackend()
     emitted = []
 
-    monkeypatch.setattr(chat_backend, 'emit', lambda event: emitted.append(event))
-    monkeypatch.setattr(chat_backend, 'STATE_DIR', tmp_path / 'state')
+    monkeypatch.setattr(common, 'emit', lambda event: emitted.append(event))
+    monkeypatch.setattr(common, 'STATE_DIR', tmp_path / 'state')
 
     from automation_runtime import create_automation
 
@@ -29,7 +23,7 @@ def test_automate_list_filtered_outputs(monkeypatch, tmp_path):
     project_root.mkdir()
 
     cron_doc = create_automation(
-        chat_backend.STATE_DIR,
+        common.STATE_DIR,
         project_root,
         title='Weekday check',
         goal='weekday cron check',
@@ -39,7 +33,7 @@ def test_automate_list_filtered_outputs(monkeypatch, tmp_path):
         action={'url': 'https://example.com'},
     )
     cont_doc = create_automation(
-        chat_backend.STATE_DIR,
+        common.STATE_DIR,
         project_root,
         title='Always-on check',
         goal='continuous check',
