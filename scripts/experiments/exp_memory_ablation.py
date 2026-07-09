@@ -10,7 +10,7 @@ detection (is_latest chains) change recall on the category it's meant to help?
 No API: pure on-device retrieval (bge-base + sqlite-vec + FTS5).
 
   PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
-    python scripts/exp_memory_ablation.py --per-type 10 --topk 5
+    python scripts/experiments/exp_memory_ablation.py --per-type 10 --topk 5
 """
 import argparse
 import json
@@ -21,7 +21,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 from memory_engine import MemoryEngine, embed_one  # noqa: E402
@@ -32,7 +32,7 @@ DATA = ROOT / "data" / "longmemeval" / "longmemeval_s_cleaned.json"
 def _index(engine, item, check_updates=False):
     id2sid = {}
     for session, date, sid in zip(item["haystack_sessions"], item["haystack_dates"],
-                                  item["haystack_session_ids"]):
+                                  item["haystack_session_ids"], strict=False):
         dn = date.split(" ")[0].replace("/", "-") if date else None
         for ti, turn in enumerate(session):
             c = turn.get("content", "")
@@ -51,7 +51,8 @@ def _sessions_from_ids(ids, id2sid):
     for mid in ids:
         sid = id2sid.get(mid)
         if sid and sid not in seen:
-            seen.add(sid); out.append(sid)
+            seen.add(sid)
+            out.append(sid)
     return out
 
 
@@ -72,7 +73,8 @@ def retrieve_modes(engine, item, id2sid, topk_turns=40):
     for sm in rec.memories:
         sid = id2sid.get(sm.memory.id) or sm.memory.source_conv
         if sid and sid not in seen:
-            seen.add(sid); hyb_sessions.append(sid)
+            seen.add(sid)
+            hyb_sessions.append(sid)
     return {"vector_only": vec, "fts_only": fts, "hybrid_rrf": hyb_sessions}
 
 
@@ -90,7 +92,7 @@ def main():
     for q in data:
         by_type[q["question_type"]].append(q)
     sample = []
-    for t, qs in by_type.items():
+    for _t, qs in by_type.items():
         sample.extend(qs[:args.per_type])
 
     # main ablation: per type -> mode -> k -> [recall]
@@ -135,7 +137,8 @@ def main():
             for sm in rec.memories:
                 sid = id2sid.get(sm.memory.id) or sm.memory.source_conv
                 if sid and sid not in seen:
-                    seen.add(sid); ranked.append(sid)
+                    seen.add(sid)
+                    ranked.append(sid)
             for k in KS:
                 r = _recall_at_k(ranked, gold, k)
                 if r is not None:

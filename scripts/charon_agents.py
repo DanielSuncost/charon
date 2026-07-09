@@ -82,7 +82,7 @@ def cmd_create(args):
         )
     except RuntimeError as e:
         print(f'create failed: {e}')
-        raise SystemExit(2)
+        raise SystemExit(2) from e
     print(f"{a['id']}\t{a['mode']}\t{a['status']}\t{a['name']}\t{a.get('role')}")
 
 
@@ -100,7 +100,7 @@ def cmd_spawn_shade(args):
         )
     except RuntimeError as e:
         print(f'shade spawn failed: {e}')
-        raise SystemExit(2)
+        raise SystemExit(2) from e
     print(f"{a['id']}\t{a['name']}\tparent={a.get('parent_agent_id')}")
 
 
@@ -478,7 +478,7 @@ def _chat_read_input(prompt_text: str = "you> ") -> str:
             match_middle=True,
         )
         session = PromptSession(completer=completer)
-        setattr(_chat_read_input, '_session', session)
+        _chat_read_input._session = session
 
     return session.prompt(
         prompt_text,
@@ -616,7 +616,7 @@ def _utc_now_iso() -> str:
 
 
 def _terminal_hyperlink(url: str, label: str) -> str:
-    return f"]8;;{url}{label}]8;;"
+    return f"\x1b]8;;{url}{label}\x1b]8;;"
 
 
 def _open_in_browser(url: str) -> None:
@@ -1158,8 +1158,8 @@ def main():
     retire.add_argument('shade_agent_id')
     retire.set_defaults(func=cmd_retire_shade)
 
-    l = sub.add_parser('list')
-    l.set_defaults(func=cmd_list)
+    lst = sub.add_parser('list')
+    lst.set_defaults(func=cmd_list)
 
     t = sub.add_parser('task')
     t.add_argument('agent_id')

@@ -15,7 +15,7 @@ against ground truth derived from the construction:
 No LLM judge, no floored baseline, no legibility confound — gold is structural.
 
   PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
-    python scripts/exp_thread_reconstruction.py --seeds 3
+    python scripts/experiments/exp_thread_reconstruction.py --seeds 3
 """
 import argparse
 import json
@@ -25,7 +25,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 from memory_engine import MemoryEngine  # noqa: E402

@@ -82,8 +82,8 @@ search carries it. The FTS5 + reciprocal-rank-fusion "hybrid" adds
 nothing on abstractive questions, and version-chain update-detection
 gives no measurable retrieval gain. Single-session recall is
 near-saturated; multi-session is the hard case (recall@1 ≈0.27).
-Reproduce with the eval scripts under `scripts/` (`exp_memory_ablation.py`,
-`exp_memeval.py`).
+Reproduce with the eval scripts under `scripts/experiments/`
+(`exp_memory_ablation.py`, `exp_memeval.py`).
 
 [Three-tier design](docs/three-tier-memory.md)
 

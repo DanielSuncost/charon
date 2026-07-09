@@ -31,8 +31,10 @@ CHECK = (
 def main():
     state = Path(__file__).resolve().parents[1] / ".charon_state"
     tmp = Path(tempfile.mkdtemp(prefix="jl_live_"))
-    work = tmp / "project"; work.mkdir()
-    cfgstate = tmp / "state"; cfgstate.mkdir()
+    work = tmp / "project"
+    work.mkdir()
+    cfgstate = tmp / "state"
+    cfgstate.mkdir()
     (work / "solver.py").write_text("def transform(n):\n    return 0  # TODO: count primes <= n\n")
     (work / "check.py").write_text(CHECK)
 

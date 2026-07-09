@@ -81,8 +81,10 @@ sys.exit(0 if ok == total else 1)
 def main():
     state = ROOT / ".charon_state"
     tmp = Path(tempfile.mkdtemp(prefix="jl_opt_"))
-    work = tmp / "project"; work.mkdir()
-    cfgstate = tmp / "state"; cfgstate.mkdir()
+    work = tmp / "project"
+    work.mkdir()
+    cfgstate = tmp / "state"
+    cfgstate.mkdir()
     (work / "solver.py").write_text(SOLVER)
     (work / "bench.py").write_text(BENCH)
     (work / "test_correct.py").write_text(TEST)

@@ -12,13 +12,13 @@ not our LLM quality.
 
 Usage:
     # Full pipeline (retrieve + read with GPT-4o):
-    python scripts/bench_longmemeval.py --reader-provider openai --reader-model gpt-4o
+    python scripts/experiments/bench_longmemeval.py --reader-provider openai --reader-model gpt-4o
 
     # Retrieval-only (outputs retrieval metrics, no reader LLM needed):
-    python scripts/bench_longmemeval.py --retrieval-only
+    python scripts/experiments/bench_longmemeval.py --retrieval-only
 
     # Smoke test (2 questions):
-    python scripts/bench_longmemeval.py --limit 2 --retrieval-only
+    python scripts/experiments/bench_longmemeval.py --limit 2 --retrieval-only
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 DATA_URL = "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json"
@@ -43,7 +43,7 @@ def download_data():
     if DATA_FILE.exists():
         return
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"Downloading LongMemEval_S...")
+    print("Downloading LongMemEval_S...")
     import httpx
     resp = httpx.get(DATA_URL, follow_redirects=True, timeout=120)
     resp.raise_for_status()
@@ -78,7 +78,7 @@ def index_and_retrieve(item: dict, engine_class, limit: int = 30) -> dict:
 
     # Index: every user turn, tagged with its session ID
     turn_to_session = {}
-    for si, (session, date, sid) in enumerate(zip(sessions, dates, session_ids)):
+    for _si, (session, date, sid) in enumerate(zip(sessions, dates, session_ids, strict=False)):
         date_normalized = date.split(" ")[0].replace("/", "-") if date else None
         for ti, turn in enumerate(session):
             content = turn.get("content", "")
@@ -316,7 +316,7 @@ def format_retrieved_sessions(item: dict, ranked_session_ids: list[str], topk: i
     selected.sort(key=lambda x: x[0])
 
     parts = []
-    for date, idx, sid in selected:
+    for date, idx, _sid in selected:
         session = item["haystack_sessions"][idx]
         session_lines = [f"[{date}]"]
         for turn in session:
@@ -354,7 +354,7 @@ def run_benchmark(args):
         from memory_engine import MemoryEngine
 
         print(f"═══ Stage 1: Retrieval ({total} questions) ═══")
-        print(f"Memory engine: embedding-only indexing + hybrid recall")
+        print("Memory engine: embedding-only indexing + hybrid recall")
         print()
 
         retrieval_results = {}
@@ -381,7 +381,6 @@ def run_benchmark(args):
         retrieval_time = time.monotonic() - t0_total
 
         # Retrieval metrics
-        import numpy as np
         metrics = evaluate_retrieval(data, retrieval_results)
         print(f"\n═══ Retrieval Results ({retrieval_time:.0f}s total) ═══")
         for k, v in metrics["overall"].items():
@@ -449,11 +448,11 @@ def run_benchmark(args):
             for h in hypotheses:
                 f.write(json.dumps(h) + "\n")
 
-    print(f"\n═══ Done ═══")
+    print("\n═══ Done ═══")
     print(f"Hypotheses: {hyp_file}")
-    print(f"\nTo evaluate:")
-    print(f"  export OPENAI_API_KEY=...")
-    print(f"  cd /tmp/LongMemEval/src/evaluation")
+    print("\nTo evaluate:")
+    print("  export OPENAI_API_KEY=...")
+    print("  cd /tmp/LongMemEval/src/evaluation")
     print(f"  python evaluate_qa.py gpt-4o {hyp_file} {DATA_FILE}")
 
 

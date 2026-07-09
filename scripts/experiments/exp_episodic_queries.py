@@ -17,7 +17,7 @@ serve time queries (no content overlap with "last Tuesday"), so this measures a
 capability gap, not a tuning delta.
 
   PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
-    python scripts/exp_episodic_queries.py --seeds 3
+    python scripts/experiments/exp_episodic_queries.py --seeds 3
 """
 import argparse
 import json
@@ -28,7 +28,7 @@ import tempfile
 from collections import defaultdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 from memory_engine import MemoryEngine  # noqa: E402
@@ -89,7 +89,8 @@ def flat_sessions(engine, query, tag, id2sid, limit=5):
         if sm.memory.category == "episode_summary":
             continue
         if sid and sid not in seen:
-            seen.add(sid); out.append(sid)
+            seen.add(sid)
+            out.append(sid)
     return out
 
 
@@ -104,7 +105,6 @@ def main():
     for seed in range(args.seeds):
         rng = random.Random(seed)
         sessions = gen_sessions(rng, n=60)
-        by_sid = {s["sid"]: s for s in sessions}
         tag = f"wk-{seed}"
         eng = MemoryEngine(Path(tempfile.mkdtemp()))
         # index turns; create one episode per session with member ids + dates
@@ -114,7 +114,8 @@ def main():
             for ti, text in enumerate(s["turns"]):
                 mem = eng.add(text, category="event", container_tag=tag,
                               event_date=s["date"], source_conv=s["sid"], source_turn=ti)
-                id2sid[mem.id] = s["sid"]; mids.append(mem.id)
+                id2sid[mem.id] = s["sid"]
+                mids.append(mem.id)
             ep.create_episode(eng, " ".join(s["turns"][:-1]), source_conv=s["sid"],
                               member_ids=mids, container_tag=tag, title=s["sid"])
 
@@ -175,7 +176,8 @@ def main():
         print(f"{qt:20}{n:>4}{f:>9.2f}{e:>11.2f}")
         report[qt] = {"n": n, "flat": f, "episodic": e}
     print("\n(score = fraction of the time-defined gold correctly retrieved)")
-    out = Path(args.out); out.parent.mkdir(parents=True, exist_ok=True)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2))
     print(f"wrote {out}")
     return 0

@@ -9,7 +9,7 @@ temporal ordering. Because the data is authored with ground truth, we can crank
 distractors/joins and watch which retrieval regime breaks.
 
   PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
-    python scripts/exp_memeval.py --seeds 3
+    python scripts/experiments/exp_memeval.py --seeds 3
 """
 import argparse
 import json
@@ -20,9 +20,9 @@ from pathlib import Path
 import random
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "scripts" / "experiments"))
 
 from memory_engine import MemoryEngine, embed_one  # noqa: E402
 from memeval_gen import Gen, PRESETS, validate  # noqa: E402
@@ -37,7 +37,8 @@ def _rank_sessions(pairs, id2sid):
     for mid in pairs:
         sid = id2sid.get(mid)
         if sid and sid not in seen:
-            seen.add(sid); out.append(sid)
+            seen.add(sid)
+            out.append(sid)
     return out
 
 
@@ -109,7 +110,8 @@ def main():
     print("\n=== hybrid recall@k by difficulty × question type "
           "(n = questions across seeds) ===")
     hdr = f"{'difficulty':10}{'type':20}{'n':>4}" + "".join(f"  R@{k}" for k in KS)
-    print(hdr); print("-" * len(hdr))
+    print(hdr)
+    print("-" * len(hdr))
     for diff in DIFFICULTIES:
         for t in types:
             n = n_q[(diff, t)]
@@ -135,7 +137,8 @@ def main():
             for mode in ("vector", "fts", "hybrid")
             if cell[(diff, "multi_session_join", mode, 3)]}
 
-    out = Path(args.out); out.parent.mkdir(parents=True, exist_ok=True)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2))
     print(f"\nwrote {out}")
     return 0

@@ -60,11 +60,14 @@ def main():
     state = ROOT / ".charon_state"
     provider, model, ready = create_provider_and_model(state)
     if not ready:
-        print("no provider configured in .charon_state"); return 1
+        print("no provider configured in .charon_state")
+        return 1
 
     tmp = Path(tempfile.mkdtemp(prefix="jl_aes_"))
-    work = tmp / "project"; work.mkdir()
-    cfgstate = tmp / "state"; cfgstate.mkdir()
+    work = tmp / "project"
+    work.mkdir()
+    cfgstate = tmp / "state"
+    cfgstate.mkdir()
     (work / "help.txt").write_text(HELP)
     (work / "check_help.py").write_text(CHECK)
 
@@ -87,7 +90,8 @@ def main():
     for tick in range(1, cfg.max_iterations + 1):
         summary = shade_implementer(state, cfg, work)
         if summary is None:
-            print(f"{tick:<5}(implementer returned None)"); break
+            print(f"{tick:<5}(implementer returned None)")
+            break
         cfg, it = run_iteration(cfg, judge, work, change_summary=str(summary)[:48],
                                 checkpoint_mgr=cp)
         sc = f"{it.score}" if it.score is not None else "n/a"

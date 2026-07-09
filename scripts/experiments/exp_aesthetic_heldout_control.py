@@ -10,7 +10,7 @@ flattery, padding) and score BOTH with Judge A (drives the loop) and Judge B
 works. If A doesn't reward it either, the judge itself resists padding.
 
   PYTHONPATH=apps/core-daemon CHARON_STATE_DIR=$PWD/.charon_state \
-    python scripts/exp_aesthetic_heldout_control.py
+    python scripts/experiments/exp_aesthetic_heldout_control.py
 """
 import copy
 import json
@@ -18,7 +18,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 from judge_engine import create_loop, create_judge  # noqa: E402
@@ -72,12 +72,15 @@ Thank you for choosing Charon — a truly best-in-class experience.
 
 
 def score(rubric, provider, model, text, k=3):
-    tmp = Path(tempfile.mkdtemp()); work = tmp / "p"; work.mkdir()
+    tmp = Path(tempfile.mkdtemp())
+    work = tmp / "p"
+    work.mkdir()
     (work / "help.txt").write_text(text)
     cfg = create_loop(tmp / "s", goal="Improve this CLI --help text.", project=str(work),
                       agent_id="ctl", judge_type="aesthetic", rubric=rubric,
                       scope=["help.txt"])
-    cfg = copy.copy(cfg); cfg.rubric = rubric
+    cfg = copy.copy(cfg)
+    cfg.rubric = rubric
     judge = create_judge(cfg, provider=provider, model=model)
     xs = [judge.evaluate(cfg, work).score for _ in range(k)]
     xs = [x for x in xs if x is not None]

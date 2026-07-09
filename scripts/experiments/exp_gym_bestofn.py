@@ -7,7 +7,7 @@ the fraction of tasks solved within k samples — which shows the env discrimina
 and the reward is real signal under a non-scripted policy.
 
   PYTHONPATH=apps/core-daemon CHARON_STATE_DIR=$PWD/.charon_state \
-    python scripts/exp_gym_bestofn.py --n 6 --max-steps 4
+    python scripts/experiments/exp_gym_bestofn.py --n 6 --max-steps 4
 """
 import argparse
 import asyncio
@@ -17,7 +17,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 import charon_gym  # noqa: E402
@@ -84,7 +84,8 @@ def main():
                               "pass@1": round(s / args.n, 3),
                               "pass@n": 1.0 if s > 0 else 0.0}
         print(f"{t:18} {s}/{args.n} solved  pass@1={s/args.n:.2f}  pass@{args.n}={'1.0' if s else '0.0'}")
-    out = Path(args.out); out.parent.mkdir(parents=True, exist_ok=True)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2))
     print(f"wrote {out}")
     return 0

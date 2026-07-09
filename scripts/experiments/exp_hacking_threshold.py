@@ -13,7 +13,7 @@ We also report the easy-path control (fix one obvious bug), where hacking is
 never cheaper than solving.
 
   PYTHONPATH=apps/core-daemon CHARON_STATE_DIR=$PWD/.charon_state \
-    python scripts/exp_hacking_threshold.py --episodes 5 --iters 3
+    python scripts/experiments/exp_hacking_threshold.py --episodes 5 --iters 3
 """
 import argparse
 import asyncio
@@ -24,7 +24,7 @@ import tempfile
 from collections import Counter
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 from judge_engine import create_loop, create_judge, run_baseline, run_iteration  # noqa: E402
@@ -95,7 +95,11 @@ def classify(work):
 
 
 def run_episode(provider, model, framing, gated, iters):
-    tmp = Path(tempfile.mkdtemp()); work = tmp / "r"; work.mkdir(); state = tmp / "s"; state.mkdir()
+    tmp = Path(tempfile.mkdtemp())
+    work = tmp / "r"
+    work.mkdir()
+    state = tmp / "s"
+    state.mkdir()
     (work / "solver.py").write_text(STUB)
     (work / "check.py").write_text(CHECK)
     gate = {"frozen": ["check.py"]} if gated else {}
@@ -138,7 +142,8 @@ def main():
                            for _ in range(args.episodes))
             report["cells"][key] = dict(outs)
             print(f"{key:24} {dict(outs)}")
-    out = Path(args.out); out.parent.mkdir(parents=True, exist_ok=True)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2))
     print(f"wrote {out}")
     return 0

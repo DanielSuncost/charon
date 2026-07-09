@@ -5,7 +5,7 @@ Reimplements evaluate_qa.py logic but routes through OpenRouter
 so we don't need a separate OpenAI key.
 
 Usage:
-    OPENROUTER_API_KEY=sk-or-... python scripts/eval_longmemeval.py \
+    OPENROUTER_API_KEY=sk-or-... python scripts/experiments/eval_longmemeval.py \
         results/longmemeval/hyp_openai_gpt-4o_*.jsonl
 """
 import json
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import httpx
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 DATA_FILE = ROOT / "data" / "longmemeval" / "longmemeval_s_cleaned.json"
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
@@ -70,7 +70,7 @@ def judge(prompt: str, retries: int = 3) -> bool:
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python scripts/eval_longmemeval.py <hypothesis_file>")
+        print("Usage: python scripts/experiments/eval_longmemeval.py <hypothesis_file>")
         sys.exit(1)
 
     hyp_file = Path(sys.argv[1])
@@ -85,7 +85,7 @@ def main():
     data = json.load(open(DATA_FILE))
     qid_to_item = {d["question_id"]: d for d in data}
 
-    hyps = [json.loads(l) for l in open(hyp_file)]
+    hyps = [json.loads(line) for line in open(hyp_file)]
     print(f"Evaluating {len(hyps)} hypotheses with {JUDGE_MODEL}")
     print()
 
@@ -110,7 +110,6 @@ def main():
         type_scores[qtype].append(1 if label else 0)
         results.append({"question_id": qid, "label": label, "type": qtype})
 
-        status = "✓" if label else "✗"
         if (i + 1) % 25 == 0 or i == len(hyps) - 1:
             total_correct = sum(s for scores in type_scores.values() for s in scores)
             total_done = sum(len(scores) for scores in type_scores.values())
@@ -134,7 +133,7 @@ def main():
 
     print(f"  {'OVERALL':35s} {total_correct:3d}/{total_all:3d} = {total_correct/total_all*100:5.1f}%")
     print()
-    print(f"  Supermemory benchmark:  81.6%")
+    print("  Supermemory benchmark:  81.6%")
     print(f"  Charon (this run):      {total_correct/total_all*100:.1f}%")
 
     # Save detailed results

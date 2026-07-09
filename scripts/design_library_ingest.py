@@ -56,7 +56,6 @@ def infer_title(raw_text: str, fallback: str) -> str:
 def next_example_id(source_id: str, captured_at: str, raw_text: str) -> str:
     date_part = captured_at[:10].replace("-", "_")
     source_part = source_id.replace("src_", "")
-    slug = slugify(raw_text)
     prefix = f"ex_{source_part}_{date_part}"
     existing = sorted(EXAMPLES_INBOX.glob(f"{prefix}_*.json"))
     seq = len(existing) + 1

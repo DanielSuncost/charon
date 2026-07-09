@@ -14,7 +14,7 @@ Also tests recency-weighting on knowledge_update (the latest-value failure: stal
 and current both retrievable; does a recency bonus surface the current one?).
 
   PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
-    python scripts/exp_memeval_episodic.py --seeds 3
+    python scripts/experiments/exp_memeval_episodic.py --seeds 3
 """
 import argparse
 import json
@@ -25,9 +25,9 @@ import tempfile
 from collections import defaultdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "scripts" / "experiments"))
 
 from memory_engine import MemoryEngine  # noqa: E402
 import episodic as ep  # noqa: E402
@@ -79,7 +79,8 @@ def _ranked_sessions(engine, query, tag, id2sid, sum2sid=None, recency_weight=0.
     for sm in res.memories:
         sid = id2sid.get(sm.memory.id) or (sum2sid or {}).get(sm.memory.id)
         if sid and sid not in seen:
-            seen.add(sid); out.append(sid)
+            seen.add(sid)
+            out.append(sid)
     return out
 
 
@@ -143,7 +144,8 @@ def main():
 
     print("\n=== session recall@k by type — baseline vs episodic (n = Qs across difficulty×seed) ===")
     hdr = f"{'type':20}{'n':>4}  " + "  ".join(f"{c:>17}" for c in ['baseline', 'episodic_session', 'episodic_facts'])
-    print(hdr); print("-" * len(hdr))
+    print(hdr)
+    print("-" * len(hdr))
     report = {"seeds": args.seeds, "ks": KS, "by_type": {}}
     for t in TYPES:
         n = nq[t]
@@ -164,7 +166,8 @@ def main():
     report["knowledge_update_recency"] = {
         cond: {f"recall@{k}": mean(ku[(cond,k)]) for k in KS} for cond in ["no_recency", "recency"]}
 
-    out = Path(args.out); out.parent.mkdir(parents=True, exist_ok=True)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2))
     print(f"\nwrote {out}")
     return 0
