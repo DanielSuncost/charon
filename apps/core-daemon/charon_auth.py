@@ -198,7 +198,7 @@ def _exchange_code_form(provider: OAuthProvider, code: str, verifier: str) -> di
         return json.loads(raw)
     except urllib.error.HTTPError as e:
         error_body = e.read().decode('utf-8', errors='replace')
-        raise RuntimeError(f'Token exchange failed (HTTP {e.code}): {error_body[:300]}')
+        raise RuntimeError(f'Token exchange failed (HTTP {e.code}): {error_body[:300]}') from e
 
 
 def _exchange_code_json(provider: OAuthProvider, code: str, verifier: str, state: str | None = None) -> dict:
@@ -245,7 +245,7 @@ def _exchange_code_json(provider: OAuthProvider, code: str, verifier: str, state
         return json.loads(raw)
     except urllib.error.HTTPError as e:
         error_body = e.read().decode('utf-8', errors='replace')
-        raise RuntimeError(f'Token exchange failed (HTTP {e.code}): {error_body[:300]}')
+        raise RuntimeError(f'Token exchange failed (HTTP {e.code}): {error_body[:300]}') from e
 
 
 def login_oauth(

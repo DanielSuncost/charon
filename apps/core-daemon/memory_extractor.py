@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
 from typing import Any
 
 
@@ -267,7 +266,7 @@ def extract_all_sessions(
 ) -> list[dict]:
     """Extract facts from all sessions in order. For benchmark use."""
     all_facts = []
-    for session, date in zip(sessions, dates):
+    for session, date in zip(sessions, dates, strict=False):
         facts = extract_facts_sync(session, date, llm_call=llm_call)
         for fact in facts:
             fact["_session_date"] = date

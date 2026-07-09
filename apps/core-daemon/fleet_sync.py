@@ -3,11 +3,9 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import subprocess
 import threading
 import time
-from pathlib import Path
 
 from fleet_registry import load_fleet
 

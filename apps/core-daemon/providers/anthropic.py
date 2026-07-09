@@ -5,7 +5,7 @@ import json
 import os
 from typing import Any, AsyncIterator
 
-from . import AssistantResponse, Message, ModelInfo, StreamDelta, ToolCall, Usage
+from . import Message, ModelInfo, StreamDelta, ToolCall, Usage
 
 try:
     import anthropic

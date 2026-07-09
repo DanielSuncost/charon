@@ -9,11 +9,9 @@ Usage:
 from __future__ import annotations
 
 import json
-import os
 import secrets
 import subprocess
 import threading
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -155,7 +153,6 @@ def _handle_recall(request: dict, state_dir: Path, write_fn: Callable[[str], Non
     limit = request.get("limit", 10)
     request_id = request.get("request_id", "")
     voyage_id = request.get("voyage_id", "")
-    container_tag = request.get("container_tag")
 
     memories = []
     confidence = 0.0
@@ -273,7 +270,7 @@ def dispatch_voyage(
         return ""
 
     # Build manifest
-    emit(f"Building voyage manifest...")
+    emit("Building voyage manifest...")
     manifest = _build_manifest(
         voyage_id, instruction, server_id, agent_name,
         project_root, state_dir, timeout, agent_type,

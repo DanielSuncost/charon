@@ -4,20 +4,23 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from conversation_engine import ConversationEngine
 
 # SQLite store adapter (optional — gracefully degrades to JSON)
 try:
     from store_adapter import (
         get_db as _get_db,
         agent_profile_upsert as _db_profile_upsert,
-        agent_profile_get as _db_profile_get,
+        agent_profile_get as _db_profile_get,  # noqa: F401 — availability probe: full adapter API must import
         agent_memory_upsert as _db_memory_upsert,
-        agent_memory_get as _db_memory_get,
+        agent_memory_get as _db_memory_get,  # noqa: F401 — availability probe
         agent_inbox_append as _db_inbox_append,
         agent_attempt_append as _db_attempt_append,
         onboarding_get as _db_onboarding_get,

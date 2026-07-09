@@ -187,10 +187,11 @@ def tick_judge_loops(state_dir: Path, *, implementer: "Implementer | None" = Non
 
     impl = implementer
     if impl is None:
-        impl = lambda cfg, wd: shade_implementer(state_dir, cfg, wd)
+        def impl(cfg, wd):
+            return shade_implementer(state_dir, cfg, wd)
 
     events: list[dict] = []
-    active = [l for l in list_loops(state_dir) if l.get('status') in ('created', 'running')]
+    active = [lp for lp in list_loops(state_dir) if lp.get('status') in ('created', 'running')]
 
     for meta in active[:max_loops]:
         loop_id = meta.get('id')

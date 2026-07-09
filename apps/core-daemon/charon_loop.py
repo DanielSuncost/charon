@@ -25,10 +25,10 @@ try:
         task_insert as _db_task_insert,
         task_get as _db_task_get,
         task_update as _db_task_update,
-        task_all as _db_task_all,
-        task_pending as _db_task_pending,
+        task_all as _db_task_all,  # noqa: F401 — availability probe: full adapter API must import
+        task_pending as _db_task_pending,  # noqa: F401 — availability probe
         run_log_append as _db_run_log_append,
-        event_append as _db_event_append,
+        event_append as _db_event_append,  # noqa: F401 — availability probe
     )
     _HAS_STORE = True
 except ImportError:
@@ -950,7 +950,7 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
 
             # Soft specialization refresh on heartbeat
             try:
-                from soft_specialization import refresh_all_agents as _refresh_specs, should_refresh as _spec_should_refresh
+                from soft_specialization import refresh_all_agents as _refresh_specs
                 # Only run every few heartbeats (controlled by CHARON_SPEC_INTERVAL)
                 updated = _refresh_specs(state_dir, mode='heuristic')
                 if updated:

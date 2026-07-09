@@ -10,7 +10,6 @@ Usage:
 """
 from __future__ import annotations
 
-import json
 import re
 import sqlite3
 import struct
@@ -88,7 +87,7 @@ _FTS_STOPWORDS = {
     'when', 'where', 'why', 'how', 'how_many', 'many', 'much', 'so', 'than', 'then',
     'there', 'here', 'from', 'into', 'out', 'up', 'down', 'over', 'under', 'again',
     'can', 'will', 'would', 'should', 'could', 'may', 'might', 'must', 'not', 'no',
-    'yes', 'all', 'any', 'some', 'me', 'mine', 'our', 'us', 'they', 'them', 'their',
+    'yes', 'all', 'any', 'some', 'mine', 'our', 'us', 'they', 'them', 'their',
 }
 SIMILARITY_THRESHOLD = 0.35  # minimum cosine similarity to include
 DEDUP_THRESHOLD = 0.95  # cosine similarity for dedup (exact/near-exact only)
@@ -533,7 +532,7 @@ class MemoryEngine:
         # made hybrid underperform either component on exact-id lookups. Use a
         # sharper fusion constant and up-weight FTS, since an FTS hit on a rare
         # (high-IDF) token is a strong exact-match signal that dense embeddings
-        # blur. (Measured: scripts/exp_fts_scale.py — hybrid now >= max(vec,fts)
+        # blur. (Measured: scripts/experiments/exp_fts_scale.py — hybrid now >= max(vec,fts)
         # on id queries without hurting semantic recall.)
         scores: dict[str, float] = {}
         sources: dict[str, str] = {}
@@ -547,7 +546,7 @@ class MemoryEngine:
             scores[mem_id] = scores.get(mem_id, 0) + (1.0 / (RRF_FUSION_K + rank + 1)) * VEC_FUSION_WEIGHT
             sources[mem_id] = "vec"
 
-        for rank, (mem_id, fts_rank) in enumerate(fts_results):
+        for rank, (mem_id, _fts_rank) in enumerate(fts_results):
             scores[mem_id] = scores.get(mem_id, 0) + (1.0 / (RRF_FUSION_K + rank + 1)) * fts_weight
             sources[mem_id] = "hybrid" if mem_id in sources else "fts"
 

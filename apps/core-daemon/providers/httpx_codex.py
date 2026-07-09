@@ -12,13 +12,12 @@ import base64
 import json
 import os
 import time
-import uuid
 from pathlib import Path
 from typing import Any, AsyncIterator
 
 import httpx
 
-from . import Message, ModelInfo, StreamDelta, ToolCall, Usage
+from . import Message, ModelInfo, StreamDelta, ToolCall
 
 try:
     from diagnostics import record as _diag
@@ -47,7 +46,7 @@ def _extract_account_id(token: str) -> str:
             raise ValueError('No account ID in token')
         return account_id
     except Exception as e:
-        raise ValueError(f'Failed to extract accountId from Codex token: {e}')
+        raise ValueError(f'Failed to extract accountId from Codex token: {e}') from e
 
 
 def _convert_messages_to_input(messages: list[Message]) -> list[dict]:

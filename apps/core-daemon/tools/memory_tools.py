@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any
 
 from tools import ToolContext, ToolResult
 
@@ -117,7 +116,7 @@ def _load_user_entries(state_dir: Path) -> list[str]:
         from store_adapter import get_db, user_model_get
         db = get_db(state_dir)
         model = user_model_get(db)
-        for key, value in model.items():
+        for _key, value in model.items():
             if isinstance(value, dict) and 'value' in value:
                 entries.append(str(value['value']))
             elif isinstance(value, str):
@@ -293,7 +292,7 @@ def execute_user_model(params: dict, ctx: ToolContext) -> ToolResult:
             return ToolResult(content=f'Error: No correction matched "{old_text}".', is_error=True)
 
         save_structured(ctx.state_dir, model)
-        return ToolResult(content=f'Correction removed.\n\n' + render_for_prompt(model))
+        return ToolResult(content='Correction removed.\n\n' + render_for_prompt(model))
 
     # Backward compat: 'add' still works as 'correct'
     if action == 'add':
@@ -308,7 +307,7 @@ def execute_user_model(params: dict, ctx: ToolContext) -> ToolResult:
             model['corrections'].pop()
             return ToolResult(content=f'Error: Would exceed {CHAR_LIMIT:,} char limit.', is_error=True)
         save_structured(ctx.state_dir, model)
-        return ToolResult(content=f'Entry added.\n\n' + render_for_prompt(model))
+        return ToolResult(content='Entry added.\n\n' + render_for_prompt(model))
 
     # Backward compat: 'replace' works on corrections
     if action == 'replace':
@@ -327,7 +326,7 @@ def execute_user_model(params: dict, ctx: ToolContext) -> ToolResult:
             return ToolResult(content='Error: Multiple corrections matched.', is_error=True)
         corrections[matches[0]] = content
         save_structured(ctx.state_dir, model)
-        return ToolResult(content=f'Entry replaced.\n\n' + render_for_prompt(model))
+        return ToolResult(content='Entry replaced.\n\n' + render_for_prompt(model))
 
     return ToolResult(
         content=f'Error: Unknown action "{action}". Use: read, set, correct, add_intention, remove.',
@@ -464,7 +463,7 @@ def execute_project_knowledge(params: dict, ctx: ToolContext) -> ToolResult:
             return ToolResult(content=f'Error: No entry matched "{old_text}".', is_error=True)
         if len(matches) > 1:
             return ToolResult(
-                content=f'Error: Multiple entries matched. Be more specific.',
+                content='Error: Multiple entries matched. Be more specific.',
                 is_error=True,
             )
 
@@ -472,7 +471,7 @@ def execute_project_knowledge(params: dict, ctx: ToolContext) -> ToolResult:
         test_entries = entries.copy()
         test_entries[idx] = content
         if len(ENTRY_DELIMITER.join(test_entries)) > PROJECT_KNOWLEDGE_CHAR_LIMIT:
-            return ToolResult(content=f'Error: Replacement would exceed limit.', is_error=True)
+            return ToolResult(content='Error: Replacement would exceed limit.', is_error=True)
 
         entries[idx] = content
         _save_knowledge_entries(ctx.project_root, entries, ctx.state_dir)
@@ -488,7 +487,7 @@ def execute_project_knowledge(params: dict, ctx: ToolContext) -> ToolResult:
         if not matches:
             return ToolResult(content=f'Error: No entry matched "{old_text}".', is_error=True)
         if len(matches) > 1:
-            return ToolResult(content=f'Error: Multiple entries matched. Be more specific.', is_error=True)
+            return ToolResult(content='Error: Multiple entries matched. Be more specific.', is_error=True)
 
         entries.pop(matches[0][0])
         _save_knowledge_entries(ctx.project_root, entries, ctx.state_dir)

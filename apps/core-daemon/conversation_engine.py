@@ -18,23 +18,21 @@ import queue
 import re
 import threading
 import time
-import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator
 
 from providers import (
-    AssistantResponse, Message, ModelInfo, Provider, StreamDelta,
-    ToolCall, Usage, get_provider,
+    Message, ModelInfo, Provider, ToolCall, Usage, get_provider,
 )
-from tools import ALL_TOOL_DEFS, ToolContext, ToolResult, execute_tool
+from tools import ALL_TOOL_DEFS, ToolContext, execute_tool
 from execution_memory import record_tool_event
 
 # Browser visibility settings (graceful fallback if unavailable)
 try:
     from browser_settings import (
         needs_session_prompt, set_session_override, set_persistent_default,
-        mark_prompted, status_string, should_show_browser,
+        mark_prompted, status_string, should_show_browser,  # noqa: F401 — availability probe: full settings API must import
     )
     _HAS_BROWSER_SETTINGS = True
 except ImportError:
@@ -945,7 +943,7 @@ class ConversationEngine:
                     agent_id=self.agent_id,
                     state_dir=self.state_dir,
                     scope=self.scope,
-                    on_tool_output=lambda tool_name, chunk: output_q.put(chunk) if tool_name == tc.name else None,
+                    on_tool_output=lambda tool_name, chunk, _q=output_q, _tc=tc: _q.put(chunk) if tool_name == _tc.name else None,
                     operation_id=self.operation_id,
                     operation_domain=self.operation_domain,
                     work_unit_id=self.work_unit_id,
@@ -958,7 +956,7 @@ class ConversationEngine:
                 result_box: dict[str, Any] = {}
                 err_box: dict[str, Exception] = {}
 
-                def _run_tool() -> None:
+                def _run_tool(tc=tc, tool_ctx=tool_ctx, result_box=result_box, err_box=err_box) -> None:
                     try:
                         result_box['result'] = execute_tool(tc.name, tc.arguments, tool_ctx)
                     except Exception as e:

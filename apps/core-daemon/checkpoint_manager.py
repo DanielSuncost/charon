@@ -19,7 +19,6 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 
 @dataclass
@@ -141,15 +140,6 @@ class CheckpointManager:
         else:
             self._git('add', '-A', check=False)
 
-        # Check if there are any changes staged
-        diff_result = self._git('diff', '--cached', '--stat', check=False)
-        files_changed = 0
-        summary = 'no changes'
-        if diff_result.stdout.strip():
-            stat_lines = diff_result.stdout.strip().splitlines()
-            summary = stat_lines[-1].strip() if stat_lines else 'changes'
-            files_changed = len(stat_lines) - 1  # last line is summary
-
         timestamp = datetime.now(timezone.utc).isoformat()
         label = label or f'checkpoint-{int(time.time())}'
         msg = f'{label}\n\ntimestamp: {timestamp}'
@@ -224,7 +214,7 @@ class CheckpointManager:
                 tmp_index.unlink()
             except OSError:
                 pass
-        return [l.strip() for l in result.stdout.splitlines() if l.strip()]
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
     def diff_full(self, checkpoint_id: str) -> str:
         """Full diff (not just stat) between current state and a checkpoint."""

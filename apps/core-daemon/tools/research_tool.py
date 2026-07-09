@@ -10,7 +10,6 @@ Provides the storage/runtime backbone for Libris:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from tools import ToolContext, ToolResult
 

@@ -16,7 +16,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
-from . import Message, ModelInfo, StreamDelta, ToolCall, Usage
+from . import Message, ModelInfo, StreamDelta, ToolCall
 
 try:
     from diagnostics import record as _diag

@@ -13,15 +13,13 @@ depth-aware recall guidance (ported from lossless-claw).
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
-from typing import Any
 
 from context_store import (
     ContextItem, ContextStore, StoredMessage, StoredSummary,
     _estimate_tokens,
 )
-from providers import Message, ToolCall
+from providers import Message
 
 
 # ── Result types ────────────────────────────────────────────────────

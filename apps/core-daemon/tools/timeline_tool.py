@@ -132,7 +132,7 @@ def execute_timeline(params: dict, ctx: ToolContext) -> ToolResult:
             if not hits:
                 return ToolResult(content=f'No events found for: {query}')
             lines = [f'## Events matching "{query}"']
-            for ev, score in hits:
+            for ev, _score in hits:
                 when = (ev.ts or '')[:10]
                 lines.append(f'- [{when}] **{ev.event_type}** ({ev.actor or "?"}): {ev.summary[:200]}')
             return ToolResult(content='\n'.join(lines))
@@ -145,7 +145,7 @@ def execute_timeline(params: dict, ctx: ToolContext) -> ToolResult:
             if not hits:
                 return ToolResult(content=f'No learned procedures for: {goal}')
             lines = [f'## Procedures for "{goal}"']
-            for p, score in hits:
+            for p, _score in hits:
                 rate = procedural.success_rate(p)
                 lines.append(f'- **{p.name}** (success {p.success_count}/{p.success_count + p.failure_count}, '
                              f'rate {rate:.2f})')

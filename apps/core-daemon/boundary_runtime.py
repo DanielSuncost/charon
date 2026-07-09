@@ -15,7 +15,7 @@ try:
         boundary_get as _db_boundary_get,
         boundary_list as _db_boundary_list,
         boundary_update as _db_boundary_update,
-        boundary_pending_for_agent as _db_boundary_pending,
+        boundary_pending_for_agent as _db_boundary_pending,  # noqa: F401 — availability probe: full adapter API must import
     )
     _HAS_STORE = True
 except ImportError:

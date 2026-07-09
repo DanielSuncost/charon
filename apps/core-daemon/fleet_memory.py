@@ -56,7 +56,7 @@ def _summarize_output(output: str, agent_name: str, server_id: str) -> str | Non
         pass
 
     # Fallback: extract last meaningful lines
-    lines = [l.strip() for l in clean.splitlines() if l.strip()]
+    lines = [ln.strip() for ln in clean.splitlines() if ln.strip()]
     if lines:
         return f"Recent output from {agent_name}: {' | '.join(lines[-3:])}"
     return None

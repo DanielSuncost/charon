@@ -20,7 +20,6 @@ from __future__ import annotations
 import sys
 import threading
 from pathlib import Path
-from typing import Any
 
 # Ensure libs/ is importable
 _ROOT = Path(__file__).resolve().parents[2]

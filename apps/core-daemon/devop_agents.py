@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-import time
 from pathlib import Path
 from typing import Any
 
@@ -280,7 +279,6 @@ def _run_operation_controller(
 ) -> None:
     try:
         from devop_runtime import (
-            get_operation_state,
             save_candidate_workstreams,
             init_workstream,
             append_operation_event,

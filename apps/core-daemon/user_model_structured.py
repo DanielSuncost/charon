@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 
 CATEGORIES = ('style', 'coding', 'tooling', 'workflow', 'corrections', 'intentions', 'patterns', 'interests', 'mental_model', 'ideas')
@@ -293,7 +292,7 @@ def _render_dict_inline(d: dict) -> str:
     if not d:
         return ''
     parts = []
-    for k, v in d.items():
+    for _k, v in d.items():
         parts.append(f'{v}' if len(d) == 1 else f'{v}')
     return ', '.join(parts)
 
@@ -528,5 +527,5 @@ def total_chars(model: dict) -> int:
     rendered = render_for_prompt(model)
     # Subtract the delimiter lines and header
     lines = rendered.split('\n')
-    content_lines = [l for l in lines if not l.startswith('═') and not l.startswith('USER PROFILE')]
+    content_lines = [ln for ln in lines if not ln.startswith('═') and not ln.startswith('USER PROFILE')]
     return len('\n'.join(content_lines).strip())

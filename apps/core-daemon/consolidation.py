@@ -14,7 +14,6 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 
 def _now() -> str:
@@ -302,7 +301,6 @@ Output ONLY valid JSON, nothing else."""
 async def _run_analysis(state_dir: Path, signals_text: str, current_profile: str, model_tier: str) -> dict:
     """Run the LLM analysis to extract user model updates."""
     from provider_bridge import create_provider_and_model
-    from providers import ModelInfo
 
     provider, model, ready = create_provider_and_model(state_dir)
     if not ready:

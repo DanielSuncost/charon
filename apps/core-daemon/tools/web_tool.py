@@ -14,8 +14,7 @@ import json
 import os
 import re
 from html.parser import HTMLParser
-from typing import Any
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.parse import quote_plus
 
 from tools import ToolContext, ToolResult
 

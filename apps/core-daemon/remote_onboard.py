@@ -289,7 +289,7 @@ def auto_configure_fleet(
         'user': user,
         'ssh_options': [
             '-o', 'ControlMaster=auto',
-            '-o', f'ControlPath=~/.ssh/charon-%r@%h:%p',
+            '-o', 'ControlPath=~/.ssh/charon-%r@%h:%p',
             '-o', 'ControlPersist=600',
         ],
         'boat_command': 'charons-boat stream',

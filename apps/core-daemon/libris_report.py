@@ -174,12 +174,14 @@ def markdown_to_html(md: str) -> str:
             continue
         h = re.match(r'^(#{1,6})\s+(.*)$', stripped)
         if h:
-            flush_para(); close_lists()
+            flush_para()
+            close_lists()
             level = len(h.group(1))
             out.append(f'<h{level}>{_inline(h.group(2).strip())}</h{level}>')
             continue
         if re.match(r'^(-{3,}|\*{3,}|_{3,})$', stripped):
-            flush_para(); close_lists()
+            flush_para()
+            close_lists()
             out.append('<hr>')
             continue
         ol = re.match(r'^\d+[.)]\s+(.*)$', stripped)
@@ -194,7 +196,8 @@ def markdown_to_html(md: str) -> str:
             out.append(f'<li>{_inline((ol or ul).group(1).strip())}</li>')
             continue
         if stripped.startswith('>'):
-            flush_para(); close_lists()
+            flush_para()
+            close_lists()
             out.append(f'<blockquote>{_inline(stripped.lstrip("> ").strip())}</blockquote>')
             continue
         para.append(stripped)

@@ -160,7 +160,7 @@ def remote_capture_pane(ssh_target: str, session_name: str,
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         if result.returncode != 0:
-            return f'(remote capture failed)'
+            return '(remote capture failed)'
         return result.stdout
     except Exception as e:
         return f'(remote error: {e})'

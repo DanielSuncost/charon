@@ -16,11 +16,9 @@ Two indexing modes:
 from __future__ import annotations
 
 import asyncio
-import json
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
 
 def _index_in_background(state_dir: Path, turns: list[dict], agent_id: str, conv_id: str):
