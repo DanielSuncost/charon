@@ -1,11 +1,5 @@
 import json
-import sys
 import time
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-sys.path.insert(0, str(ROOT / 'apps' / 'tui' / 'opentui'))
 
 from automation_runtime import create_automation, get_automation_state
 from automation_scheduler import run_due_automations_once
@@ -83,9 +77,9 @@ def test_browser_workflow_from_file_command(monkeypatch, tmp_path):
         {'action': 'assert_text', 'text': 'Login'},
     ]))
 
-    import chat_backend
-    monkeypatch.setattr(chat_backend, 'STATE_DIR', tmp_path / 'state')
-    monkeypatch.setattr(chat_backend, 'emit', lambda event: captured.append(event))
+    from backend import common
+    monkeypatch.setattr(common, 'STATE_DIR', tmp_path / 'state')
+    monkeypatch.setattr(common, 'emit', lambda event: captured.append(event))
     monkeypatch.setattr(backend, '_devop_project_root', lambda: str(tmp_path / 'project'))
     monkeypatch.setattr(backend, '_get_refresh_payload', lambda: {})
 

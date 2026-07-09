@@ -1,11 +1,4 @@
-import json
-import sys
 import time
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-sys.path.insert(0, str(ROOT / 'apps' / 'tui' / 'opentui'))
 
 from automation_runtime import (
     create_automation,
@@ -158,9 +151,9 @@ def test_automate_webhook_and_browser_workflow_commands(monkeypatch, tmp_path):
     def fake_emit(event):
         captured.append(event)
 
-    import chat_backend
-    monkeypatch.setattr(chat_backend, 'emit', fake_emit)
-    monkeypatch.setattr(chat_backend, 'STATE_DIR', tmp_path / 'state')
+    from backend import common
+    monkeypatch.setattr(common, 'emit', fake_emit)
+    monkeypatch.setattr(common, 'STATE_DIR', tmp_path / 'state')
     monkeypatch.setattr(backend, '_get_refresh_payload', lambda: {})
 
     backend.handle_command('/automate browser-workflow every 5 minutes steps [{"action":"navigate","url":"https://example.com"},{"action":"assert_text","text":"Example"}]', 'req-wf')

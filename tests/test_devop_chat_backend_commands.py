@@ -3,13 +3,8 @@ import sys
 import base64
 import time
 import types
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'tui' / 'opentui'))
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-
-import chat_backend
+from backend import common
 from chat_backend import ChatBackend
 from provider_bridge import save_session_provider_config
 
@@ -39,7 +34,7 @@ def test_devop_command_listed_in_suggestions():
 def test_refresh_payload_uses_session_override_onboarding_step(tmp_path, monkeypatch):
     state_dir = tmp_path / 'state'
     state_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(chat_backend, 'STATE_DIR', state_dir)
+    monkeypatch.setattr(common, 'STATE_DIR', state_dir)
 
     (state_dir / 'onboarding.json').write_text(json.dumps({
         'complete': True,
@@ -71,7 +66,7 @@ def test_refresh_payload_uses_session_override_onboarding_step(tmp_path, monkeyp
 def test_setup_provider_persists_global_onboarding_even_for_session_override(tmp_path, monkeypatch):
     state_dir = tmp_path / 'state'
     state_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(chat_backend, 'STATE_DIR', state_dir)
+    monkeypatch.setattr(common, 'STATE_DIR', state_dir)
 
     (state_dir / 'onboarding.json').write_text(json.dumps({
         'complete': True,
@@ -110,7 +105,7 @@ def test_codex_existing_expired_access_only_token_is_not_reused(tmp_path, monkey
     state_dir = tmp_path / 'state'
     auth_dir = state_dir / 'auth'
     auth_dir.mkdir(parents=True)
-    monkeypatch.setattr(chat_backend, 'STATE_DIR', state_dir)
+    monkeypatch.setattr(common, 'STATE_DIR', state_dir)
 
     expired = _jwt_with_exp(int(time.time()) - 60)
     (auth_dir / 'auth.json').write_text(json.dumps({
@@ -131,7 +126,7 @@ def test_setup_provider_codex_preserves_existing_refresh_token(tmp_path, monkeyp
     state_dir = tmp_path / 'state'
     auth_dir = state_dir / 'auth'
     auth_dir.mkdir(parents=True)
-    monkeypatch.setattr(chat_backend, 'STATE_DIR', state_dir)
+    monkeypatch.setattr(common, 'STATE_DIR', state_dir)
 
     (state_dir / 'onboarding.json').write_text(json.dumps({
         'complete': False,
@@ -172,7 +167,7 @@ def test_setup_provider_codex_completes_when_existing_model_is_known(tmp_path, m
     state_dir = tmp_path / 'state'
     auth_dir = state_dir / 'auth'
     auth_dir.mkdir(parents=True)
-    monkeypatch.setattr(chat_backend, 'STATE_DIR', state_dir)
+    monkeypatch.setattr(common, 'STATE_DIR', state_dir)
 
     (state_dir / 'onboarding.json').write_text(json.dumps({
         'provider_mode': 'provider',
