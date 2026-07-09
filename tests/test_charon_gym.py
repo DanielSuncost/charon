@@ -2,10 +2,6 @@
 and receives real rewards. The four deterministic tasks are asserted fully; the
 aesthetic task needs a provider for a real reward, so we only assert its
 reset/step plumbing here."""
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "apps" / "core-daemon"))
 
 import charon_gym
 

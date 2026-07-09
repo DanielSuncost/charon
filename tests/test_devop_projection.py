@@ -1,9 +1,3 @@
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-
 from devop_runtime import init_operation, init_workstream, save_checkpoint, save_review, append_decision
 from devop_projection import project_graph, project_room_messages, project_f4_stream, summarize_operation, summarize_workstream
 

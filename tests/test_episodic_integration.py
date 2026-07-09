@@ -1,11 +1,7 @@
 """Integration: completing a task (create_task_episode) creates a first-class,
 queryable Episode in the live memory engine — i.e. episodic memory is wired in,
 not just a library."""
-import sys
-import tempfile
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'apps' / 'core-daemon'))
 
 from execution_memory import create_task_episode
 from memory_engine import MemoryEngine
@@ -13,7 +9,8 @@ import episodic as ep
 
 
 def test_task_completion_creates_queryable_episode(tmp_path):
-    state = tmp_path / "state"; state.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
     proj = str(tmp_path / "proj")
     rec = create_task_episode(
         state, session_id="sess-1", agent_id="AG-1", project_root=proj, provider="codex",
@@ -46,7 +43,8 @@ def test_task_completion_creates_queryable_episode(tmp_path):
 
 
 def test_two_tasks_are_ordered_episodes(tmp_path):
-    state = tmp_path / "state"; state.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
     proj = str(tmp_path / "proj")
     for i, obj in enumerate(["set up the database schema", "wire up the API layer"]):
         create_task_episode(
@@ -69,7 +67,8 @@ def test_timeline_tool_registered_and_queries_episodes(tmp_path):
     assert 'Timeline' in TOOL_EXECUTORS
     assert any(d.get('name') == 'Timeline' for d in ALL_TOOL_DEFS)
 
-    state = tmp_path / "state"; state.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
     proj = str(tmp_path / "proj")
     create_task_episode(
         state, session_id="s1", agent_id="AG", project_root=proj, provider="codex",

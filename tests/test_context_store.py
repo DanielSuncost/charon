@@ -1,17 +1,11 @@
 """Tests for lossless context store."""
 from __future__ import annotations
 
-import json
-import sys
 import sqlite3
-from pathlib import Path
 
 import pytest
 
 # Ensure apps/core-daemon is on the path
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-sys.path.insert(0, str(ROOT / 'libs'))
 
 from context_store import ContextStore, _estimate_tokens
 from providers import Message, ToolCall
@@ -28,7 +22,7 @@ class FakeDB:
 
     def execute(self, sql, params=()):
         cursor = self.conn.execute(sql, params)
-        cursor.lastrowid  # ensure it's populated
+        _ = cursor.lastrowid  # ensure it's populated
         return cursor
 
     def executemany(self, sql, params_seq):
@@ -43,12 +37,12 @@ class FakeDB:
         if row is None:
             return None
         cols = [d[0] for d in cur.description]
-        return dict(zip(cols, row))
+        return dict(zip(cols, row, strict=False))
 
     def fetchall(self, sql, params=()):
         cur = self.conn.execute(sql, params)
         cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
+        return [dict(zip(cols, row, strict=False)) for row in cur.fetchall()]
 
 
 @pytest.fixture
@@ -293,7 +287,7 @@ class TestSearch:
 
     def test_search_across_compacted_history(self, db):
         """Search finds messages that have been compacted out of context."""
-        mid = ContextStore.persist_message(
+        ContextStore.persist_message(
             db, 'agent-1',
             Message(role='user', content='The error was ECONNREFUSED on port 5432'))
 

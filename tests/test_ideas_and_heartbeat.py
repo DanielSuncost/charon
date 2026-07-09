@@ -1,14 +1,11 @@
 """Tests for idea capture, goal listing, and heartbeat."""
+import importlib.util
 import json
 import sys
 import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-sys.path.insert(0, str(ROOT))
-
-import importlib.util
 
 _spec = importlib.util.spec_from_file_location(
     'goal_runtime_ideas', ROOT / 'apps' / 'core-daemon' / 'goal_runtime.py')

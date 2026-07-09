@@ -1,13 +1,7 @@
 """Tests for shade scope enforcement, conversation search, and queue processing."""
 import json
-import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-sys.path.insert(0, str(ROOT))
-
-from tools import ToolContext, ToolResult, execute_tool, _check_scope
+from tools import ToolContext, execute_tool, _check_scope
 from tools.search_tool import search_conversations, rebuild_index, execute_search
 import store_adapter
 

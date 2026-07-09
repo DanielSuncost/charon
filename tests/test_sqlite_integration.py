@@ -3,25 +3,19 @@
 These tests run the actual runtime functions and then check that state
 landed in SQLite, not just JSON files.
 """
-import json
+import importlib.util
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-DAEMON = ROOT / 'apps' / 'core-daemon'
-sys.path.insert(0, str(DAEMON))
-sys.path.insert(0, str(ROOT))
-
 import store_adapter
 from libs.store import (
-    agent_get, agent_list, task_all, task_get, task_pending,
-    boundary_list, contract_list, shade_event_list,
+    task_get, boundary_list, contract_list, shade_event_list,
     agent_memory_get, agent_inbox_list, agent_profile_get,
     goal_project_get, goal_session_get, goal_context_packet_get,
 )
 
-# Import runtime modules (they use importlib.util internally so we need them on path)
-import importlib.util
+ROOT = Path(__file__).resolve().parents[1]
+DAEMON = ROOT / 'apps' / 'core-daemon'
 
 
 def _load(name, path):
@@ -220,7 +214,7 @@ def test_goal_runtime_syncs_to_sqlite(tmp_path):
     assert ses is not None
 
     # Build and check context packet
-    packet = goal_runtime.build_context_packet(
+    goal_runtime.build_context_packet(
         state_dir,
         agent_id='AG-GOAL',
         project_id=result['project_id'],

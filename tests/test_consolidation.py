@@ -1,20 +1,9 @@
 """Tests for user model consolidation."""
-import json
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-sys.path.insert(0, str(ROOT))
 
 import store_adapter
 from consolidation import (
     load_config, save_config, should_run, save_trace, list_traces,
     _collect_recent_signals, _apply_changes, _ensure_conversation_messages,
-    DEFAULT_CONFIG,
-)
-from user_model_structured import (
-    load_structured, save_structured, set_field, add_correction,
 )
 
 

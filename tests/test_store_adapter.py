@@ -1,11 +1,5 @@
 """Tests for the store adapter — singleton DB, auto-migration, and module wiring."""
 import json
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-sys.path.insert(0, str(ROOT))
 
 import store_adapter  # noqa: E402
 

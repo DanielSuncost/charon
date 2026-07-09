@@ -1,10 +1,3 @@
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-sys.path.insert(0, str(ROOT / 'apps' / 'tui' / 'opentui'))
-
 from conversation_engine import ConversationEngine
 from providers import ModelInfo
 from devop_runtime import init_operation, init_workstream, save_checkpoint, save_review

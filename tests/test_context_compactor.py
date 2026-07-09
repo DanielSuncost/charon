@@ -2,25 +2,16 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import sqlite3
-import sys
-from pathlib import Path
-from typing import AsyncIterator
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-sys.path.insert(0, str(ROOT / 'libs'))
-
-from context_store import ContextStore, _estimate_tokens
+from context_store import ContextStore
 from context_compactor import (
-    ContextCompactor, CompactionConfig, CompactionResult,
-    _build_leaf_prompt, _build_d1_prompt, _build_d2_prompt,
+    ContextCompactor, CompactionConfig, _build_leaf_prompt, _build_d1_prompt, _build_d2_prompt,
     _build_d3plus_prompt, _deterministic_fallback,
 )
-from providers import Message, ModelInfo, StreamDelta, ToolCall
+from providers import Message, ModelInfo, StreamDelta
 
 
 # ── Fixtures ────────────────────────────────────────────────────────
@@ -45,12 +36,12 @@ class FakeDB:
         if row is None:
             return None
         cols = [d[0] for d in cur.description]
-        return dict(zip(cols, row))
+        return dict(zip(cols, row, strict=False))
 
     def fetchall(self, sql, params=()):
         cur = self.conn.execute(sql, params)
         cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
+        return [dict(zip(cols, row, strict=False)) for row in cur.fetchall()]
 
 
 class FakeProvider:
@@ -323,7 +314,7 @@ class TestCondensation:
         if len(summary_items) >= small_config.condensed_min_fanout:
             # Now run a full sweep which should condense
             cond_provider = FakeProvider('Condensed higher-level summary.')
-            result = asyncio.run(compactor.evaluate_and_compact(
+            asyncio.run(compactor.evaluate_and_compact(
                 db, 'agent-1',
                 token_budget=2_000,  # force compaction
                 provider=cond_provider,

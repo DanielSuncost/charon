@@ -1,10 +1,6 @@
 """Tests for the shared cross-process OAuth refresh lock."""
 import asyncio
 import fcntl
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'apps' / 'core-daemon'))
 
 from oauth_lock import locked_refresh
 

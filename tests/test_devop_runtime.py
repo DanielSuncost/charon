@@ -1,9 +1,3 @@
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-
 from devop_runtime import (
     init_operation,
     get_operation_state,
@@ -133,7 +127,7 @@ def test_best_checkpoint_and_final_selection(tmp_path):
         paired_judge_agent_id='AG-JUDGE',
     )
 
-    cp1 = save_checkpoint(
+    save_checkpoint(
         state_dir,
         op['operation_id'],
         ws['slug'],

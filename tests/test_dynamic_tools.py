@@ -1,15 +1,9 @@
 """Tests for the dynamic tool loader."""
-import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-sys.path.insert(0, str(ROOT))
-
-from tools import ToolContext, ToolResult, execute_tool
+from tools import ToolContext, execute_tool
 from tools.dynamic_loader import (
     load_dynamic_tools, get_all_tool_defs, execute_dynamic_tool,
-    list_dynamic_tools, get_load_errors,
+    list_dynamic_tools,
 )
 
 

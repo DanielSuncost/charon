@@ -1,10 +1,4 @@
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-
-from providers import Message, ModelInfo
+from providers import ModelInfo
 from context_transfer import (
     resolve_transfer_profile,
     compile_transfer_bundle,

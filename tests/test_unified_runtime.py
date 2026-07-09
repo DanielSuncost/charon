@@ -13,8 +13,6 @@ from unittest.mock import patch, MagicMock
 import importlib.util
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-
 
 def _load_mod(name, path):
     spec = importlib.util.spec_from_file_location(name, path)

@@ -1,18 +1,10 @@
 """Tests for structured UserModel and ProjectKnowledge memory tools."""
-import json
-import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-sys.path.insert(0, str(ROOT))
-
-from tools import ToolContext, ToolResult
+from tools import ToolContext
 from tools.memory_tools import execute_user_model, execute_project_knowledge
 from user_model_structured import (
     load_structured, save_structured, render_for_prompt, render_markdown,
-    set_field, add_correction, remove_correction, set_intention, total_chars,
-    CHAR_LIMIT,
+    set_field, add_correction, remove_correction, set_intention,
 )
 import store_adapter
 

@@ -5,14 +5,9 @@ without requiring a running server (uses httpx mock transport).
 """
 import asyncio
 import json
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
 
 import httpx
-from providers import Message, ModelInfo, StreamDelta, ToolCall
+from providers import Message, ModelInfo, ToolCall
 from providers.httpx_openai import HttpxOpenAIProvider, _convert_messages, _convert_tools
 
 

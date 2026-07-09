@@ -1,9 +1,6 @@
 """Tests for the first-class episodic memory layer (episodic.py)."""
-import sys
 import tempfile
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'apps' / 'core-daemon'))
 
 import pytest
 from memory_engine import MemoryEngine
@@ -98,10 +95,10 @@ def test_recency_weight_prefers_newer_among_matches():
 
 def test_recency_weight_zero_is_noop_default():
     eng = _engine()
-    a = eng.add("alpha note about caching", category="event", container_tag="t",
-                event_date="2025-01-01", check_updates=False)
-    b = eng.add("beta note about caching", category="event", container_tag="t",
-                event_date="2025-09-01", check_updates=False)
+    eng.add("alpha note about caching", category="event", container_tag="t",
+            event_date="2025-01-01", check_updates=False)
+    eng.add("beta note about caching", category="event", container_tag="t",
+            event_date="2025-09-01", check_updates=False)
     # default (no recency_weight) must behave exactly like an explicit 0.0
     r_default = eng.recall("caching note", container_tag="t", limit=5)
     r_zero = eng.recall("caching note", container_tag="t", limit=5, recency_weight=0.0)
@@ -170,7 +167,6 @@ def test_add_and_get_typed_events_in_order():
 def test_event_type_validation():
     eng = _engine()
     e = _ep(eng)
-    import pytest
     with pytest.raises(ValueError):
         ep.add_event(eng, e.id, event_type="not_a_type", summary="x", container_tag="t")
 

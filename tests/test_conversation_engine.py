@@ -5,14 +5,9 @@ They verify the agent loop, tool execution, compaction, and event flow.
 """
 import asyncio
 import json
-import sys
-from pathlib import Path
 from typing import AsyncIterator
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-
-from providers import Message, ModelInfo, StreamDelta, ToolCall, Usage
+from providers import Message, ModelInfo, StreamDelta, ToolCall
 from conversation_engine import (
     ConversationEngine, build_system_prompt, estimate_tokens,
     should_compact, EngineEvent,

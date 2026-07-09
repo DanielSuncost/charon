@@ -77,7 +77,7 @@ def test_prompt_fails_fast_for_unknown_agent(tmp_path):
     with redirect_stdout(io.StringIO()):
         try:
             charon_agents.cmd_agent_prompt(args)
-            assert False, 'expected SystemExit'
+            raise AssertionError('expected SystemExit')
         except SystemExit as e:
             assert e.code == 2
 

@@ -5,7 +5,6 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
 
 spec = importlib.util.spec_from_file_location(
     'libris_convergence', ROOT / 'apps' / 'core-daemon' / 'libris_convergence.py')

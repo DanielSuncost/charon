@@ -1,9 +1,6 @@
 """Tests for cross-agent decision & discussion threads (threads.py)."""
-import sys
 import tempfile
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'apps' / 'core-daemon'))
 
 from memory_engine import MemoryEngine
 import episodic as ep
@@ -37,7 +34,8 @@ def _scenario(eng, tag):
 
 
 def test_log_decision_timestamps_to_episode_and_captures_why():
-    eng = _engine(); tag = "p"
+    eng = _engine()
+    tag = "p"
     e = _episode(eng, agent="architect", conv="sB", date="2025-03-07", tag=tag)
     ev = th.log_decision(eng, e.id, what="use JWT", why="stateless", alternatives="sessions",
                          topic="auth", container_tag=tag)
@@ -48,7 +46,8 @@ def test_log_decision_timestamps_to_episode_and_captures_why():
 
 
 def test_thread_is_cross_agent_chronological_and_attributed():
-    eng = _engine(); tag = "p"
+    eng = _engine()
+    tag = "p"
     _scenario(eng, tag)
     items = th.thread(eng, "auth authentication JWT", container_tag=tag)
     # spans all three agents — not siloed
@@ -64,7 +63,8 @@ def test_thread_is_cross_agent_chronological_and_attributed():
 
 
 def test_why_returns_rationale_alternatives_and_owner():
-    eng = _engine(); tag = "p"
+    eng = _engine()
+    tag = "p"
     _scenario(eng, tag)
     w = th.why(eng, "auth JWT decision", container_tag=tag)
     assert w and w[0]["agent"] == "architect"
@@ -73,7 +73,8 @@ def test_why_returns_rationale_alternatives_and_owner():
 
 
 def test_get_or_create_episode_for_session_dedups():
-    eng = _engine(); tag = "p"
+    eng = _engine()
+    tag = "p"
     m = eng.add("x", category="event", container_tag=tag, source_conv="s1", check_updates=False)
     e1 = ep.get_or_create_episode_for_session(eng, source_conv="s1", container_tag=tag,
                                               source_agent="A", member_ids=[m.id])
@@ -86,7 +87,8 @@ def test_get_or_create_episode_for_session_dedups():
 def test_timeline_tool_thread_why_log_decision(tmp_path):
     from tools import ToolContext
     from tools.timeline_tool import execute_timeline
-    state = tmp_path / "state"; state.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
     ctx = ToolContext(project_root=Path(tmp_path / "proj"), agent_id="architect", state_dir=state)
     r = execute_timeline({'action': 'log_decision', 'what': 'use JWT for auth',
                           'why': 'stateless scales across the fleet',

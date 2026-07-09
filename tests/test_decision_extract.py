@@ -1,10 +1,7 @@
 """Decision auto-extraction: conservative heuristic capture of committed
 decisions from agent output, and its wiring into task-completion episodes.
-(Accuracy is measured separately: scripts/exp_decision_extraction.py.)"""
-import sys
+(Accuracy is measured separately: scripts/experiments/exp_decision_extraction.py.)"""
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'apps' / 'core-daemon'))
 
 from decision_extract import extract_decisions
 
@@ -61,7 +58,8 @@ def test_task_completion_auto_captures_decision(tmp_path):
     import json as _json
     import episodic as ep
 
-    state = tmp_path / "state"; state.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
     proj = str(tmp_path / "proj")
     create_task_episode(
         state, session_id="s-dec", agent_id="AG-7", project_root=proj, provider="codex",

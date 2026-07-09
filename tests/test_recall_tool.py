@@ -1,15 +1,12 @@
 """Tests for Recall tool and memory indexer integration."""
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "core-daemon"))
-
 from tools import ToolContext
-from tools.recall_tool import execute_recall, _get_engine
+from tools.recall_tool import execute_recall
 from memory_indexer import index_conversation_sync
 
 
@@ -77,7 +74,7 @@ class TestRecallTool:
         result = execute_recall({'query': 'user', 'limit': 2}, seeded_ctx)
         assert not result.is_error
         # Should have at most 2 results
-        lines = [l for l in result.content.split('\n') if l.startswith('**')]
+        lines = [line for line in result.content.split('\n') if line.startswith('**')]
         assert len(lines) <= 2
 
 

@@ -4,14 +4,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-sys.path.insert(0, str(ROOT))
-
 from tools import ToolContext
 from tools.http_tool import execute_http
 from tools.git_tool import execute_git
 
+ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'apps' / 'core-daemon' / 'charon_loop.py'
 
 

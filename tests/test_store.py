@@ -1,10 +1,5 @@
 """Tests for the Charon SQLite persistence layer (libs/store.py)."""
 import json
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
 
 from libs.store import (
     open_db, DB,
@@ -15,7 +10,7 @@ from libs.store import (
     task_pending, task_all, task_queue_stats,
     # events
     event_append, event_list, event_get_by_message,
-    events_for_conversation, conversation_list, reconstruct_path,
+    conversation_list, reconstruct_path,
     # shade contracts
     contract_insert, contract_get, contract_list, contract_update,
     # shade phase events
@@ -567,7 +562,7 @@ class TestMigration:
         assert onboarding_get(db)['complete'] is True
 
         # Idempotent: running again should not duplicate
-        summary2 = migrate_from_json(db, state)
+        migrate_from_json(db, state)
         assert agent_count(db) == 1
         db.close()
 

@@ -1,7 +1,6 @@
 from pathlib import Path
 import importlib.util
 import json
-import os
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]

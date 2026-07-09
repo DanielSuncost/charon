@@ -1,15 +1,8 @@
 """Tests for tool approval system."""
-import os
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
 
 from tool_approval import (
     detect_dangerous_command, classify_tool_risk, needs_approval,
-    approve_for_session, approve_tool_for_session, clear_session_approvals,
-    is_approval_skipped,
+    approve_tool_for_session, clear_session_approvals,
 )
 
 
