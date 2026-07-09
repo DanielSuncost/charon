@@ -1,7 +1,6 @@
 """Fleet tools — remote agent orchestration via Charon's boat protocol."""
 from __future__ import annotations
 
-import json
 from typing import Any
 
 FLEET_STATUS_TOOL_DEF = {

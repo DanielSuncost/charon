@@ -104,6 +104,6 @@ def read_steers(state_dir: Path, session_id: str) -> list[dict]:
     try:
         lines = steer_file.read_text().splitlines()
         steer_file.unlink(missing_ok=True)
-        return [json.loads(l) for l in lines if l.strip()]
+        return [json.loads(ln) for ln in lines if ln.strip()]
     except Exception:
         return []

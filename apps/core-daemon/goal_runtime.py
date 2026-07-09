@@ -16,9 +16,9 @@ try:
     from store_adapter import (
         get_db as _get_db,
         goal_project_upsert as _db_project_upsert,
-        goal_project_get as _db_project_get,
+        goal_project_get as _db_project_get,  # noqa: F401 — availability probe: full adapter API must import
         goal_session_upsert as _db_session_upsert,
-        goal_session_get as _db_session_get,
+        goal_session_get as _db_session_get,  # noqa: F401 — availability probe
         goal_context_packet_upsert as _db_context_packet_upsert,
         goal_context_packet_get as _db_context_packet_get,
     )

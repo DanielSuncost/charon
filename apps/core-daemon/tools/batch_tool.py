@@ -5,10 +5,7 @@ as a parallel batch. Each sub-task gets its own shade with its own engine.
 """
 from __future__ import annotations
 
-import json
 import threading
-from pathlib import Path
-from typing import Any
 
 from tools import ToolContext, ToolResult
 

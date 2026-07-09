@@ -339,7 +339,6 @@ def _run_operation_controller(
     try:
         from libris_runtime import (
             get_operation_state,
-            save_candidate_topics,
             init_topic,
             update_topic_runtime,
             set_operation_status,

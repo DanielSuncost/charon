@@ -10,12 +10,10 @@ Uses Playwright Chromium with CDP for:
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import secrets
 import threading
 from pathlib import Path
-from typing import Any
 
 from tools import ToolContext, ToolResult
 

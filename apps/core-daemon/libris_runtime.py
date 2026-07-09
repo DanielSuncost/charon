@@ -196,7 +196,7 @@ def _evaluate_budget(operation: dict[str, Any]) -> dict[str, Any]:
 
 # ── Project paths / metadata ────────────────────────────────────────
 
-from project_registry_loader import load_ensure_project
+from project_registry_loader import load_ensure_project  # noqa: E402 — deliberate late import: section-local dependency
 
 _ensure_project_registry = load_ensure_project(__file__, 'libris_runtime')
 

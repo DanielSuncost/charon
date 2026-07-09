@@ -25,7 +25,7 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from tools import ToolContext, execute_tool
 from judge_engine import create_loop, create_judge

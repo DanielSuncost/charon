@@ -7,7 +7,7 @@ an explicit rationale clause exists, the why. Deliberately conservative: hedges,
 questions, negations, hypotheticals, and third-party decisions are rejected —
 a silently wrong auto-decision in the thread record is worse than a missing one.
 
-Measured: scripts/exp_decision_extraction.py (labeled precision/recall corpus
+Measured: scripts/experiments/exp_decision_extraction.py (labeled precision/recall corpus
 with hard negatives). This is a pattern heuristic, not NLU — phrasings outside
 the pattern list are missed, and the eval prints exactly which.
 """
@@ -89,7 +89,7 @@ def _clean(text: str) -> str:
 def extract_decisions(text: str, *, max_decisions: int = 3) -> list[dict]:
     """Committed decisions in `text`: [{what, why, evidence, importance}].
     Conservative by design — see module docstring; measured by
-    scripts/exp_decision_extraction.py."""
+    scripts/experiments/exp_decision_extraction.py."""
     out: list[dict] = []
     seen: set[str] = set()
     for sentence in _SENT_SPLIT.split(text or ""):

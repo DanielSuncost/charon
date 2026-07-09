@@ -70,7 +70,7 @@ def list_conversations(state_dir: Path) -> list[dict]:
         seen.add(agent_id)
         try:
             lines = f.read_text().splitlines()
-            msg_count = len([l for l in lines if l.strip()])
+            msg_count = len([ln for ln in lines if ln.strip()])
             # Get last message timestamp
             last_ts = 0
             for line in reversed(lines):
@@ -98,7 +98,6 @@ def list_conversations(state_dir: Path) -> list[dict]:
 
     # Merge sessions that exist only in the lossless SQLite store
     try:
-        from context_store import ContextStore
         from store_adapter import get_db
         db = get_db(state_dir)
         rows = db.fetchall(

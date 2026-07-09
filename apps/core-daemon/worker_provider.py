@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 DEFAULT_WORKER_MODELS = {
     'codex': 'gpt-5.4',

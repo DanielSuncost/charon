@@ -10,7 +10,6 @@ Recall tool = hybrid vector + FTS5 search over indexed memories
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 from tools import ToolContext, ToolResult
 

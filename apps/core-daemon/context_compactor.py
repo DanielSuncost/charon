@@ -17,13 +17,10 @@ Compaction always makes progress via three-level escalation:
 from __future__ import annotations
 
 import asyncio
-import json
-import time
 from dataclasses import dataclass
-from typing import Any
 
 from context_store import ContextStore, ContextItem, StoredSummary, _estimate_tokens
-from providers import Message, ModelInfo, Provider, StreamDelta
+from providers import Message, ModelInfo, Provider
 
 
 # ── Configuration ───────────────────────────────────────────────────

@@ -456,7 +456,7 @@ def recall_events(engine, query: str, *, container_tag: str | None = None, limit
     (importance/50)**importance_weight before final ranking, so events their
     writer marked as noise (importance<50) sink and decisions (80) rise.
     Neutral at importance 50; pass 0.0 for pure content ranking. Default 0.5
-    measured on scripts/exp_thread_reconstruction_hard.py (tuned seeds 0-2,
+    measured on scripts/experiments/exp_thread_reconstruction_hard.py (tuned seeds 0-2,
     validated held-out seeds 3-7): +0.02 coverage over pure content ranking;
     weights >1 HURT — they promote other threads' decisions, not this one's
     events. The honest summary: importance demotes marked noise but cannot fix

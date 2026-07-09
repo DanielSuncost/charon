@@ -15,12 +15,9 @@ New tools written by the agent are available after reload.
 from __future__ import annotations
 
 import importlib.util
-import json
 import logging
-import sys
-import traceback
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from tools import ToolContext, ToolResult
 

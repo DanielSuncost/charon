@@ -13,8 +13,6 @@ the task completes, upgrading the summary without blocking.
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Any
 import re
 
@@ -205,7 +203,7 @@ def _join_paths(paths: list[str], max_show: int = 3) -> str:
 def _extract_command_highlight(command: str, output: str) -> str:
     """Extract the most informative line from command output."""
     cmd_lower = command.lower()
-    lines = [l.strip() for l in output.strip().splitlines() if l.strip()]
+    lines = [ln.strip() for ln in output.strip().splitlines() if ln.strip()]
     if not lines:
         return ''
 
@@ -245,7 +243,6 @@ async def summarize_rich(
 
     Takes the execution trace and distills it into a 1-2 sentence summary.
     """
-    from providers import StreamDelta
 
     # Build trace text
     trace_lines = [f'Task: {instruction[:200]}']

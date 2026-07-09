@@ -5,7 +5,6 @@ engine doesn't care which backend is active.
 """
 from __future__ import annotations
 
-import json
 import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Protocol
@@ -104,12 +103,12 @@ def get_provider(provider_name: str) -> Provider:
         try:
             from .anthropic import AnthropicProvider
             return AnthropicProvider()
-        except ImportError:
+        except ImportError as e:
             # Fallback: use httpx provider against Anthropic's messages API
             # (not yet implemented — require the SDK for now)
             raise ValueError(
                 'anthropic package not installed. Run: pip install anthropic'
-            )
+            ) from e
 
     if name in ('openai', 'openai-compatible'):
         try:

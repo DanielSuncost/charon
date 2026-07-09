@@ -21,8 +21,6 @@ from __future__ import annotations
 import os
 import re
 import threading
-from pathlib import Path
-from typing import Any
 
 
 # ── Dangerous patterns ──────────────────────────────────────────────
@@ -117,7 +115,7 @@ def classify_tool_risk(tool_name: str, params: dict) -> tuple[str, str]:
         return 'write', f'spawn {len(tasks)} shade workers'
 
     if tool_name == 'SpawnShade':
-        return 'write', f'spawn shade worker'
+        return 'write', 'spawn shade worker'
 
     return 'safe', ''
 

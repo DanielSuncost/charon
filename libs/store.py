@@ -312,12 +312,12 @@ class DB:
         if row is None:
             return None
         cols = [d[0] for d in cur.description]
-        return dict(zip(cols, row))
+        return dict(zip(cols, row, strict=False))
 
     def fetchall(self, sql: str, params: tuple | dict = ()) -> list[dict]:
         cur = self.conn.execute(sql, params)
         cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
+        return [dict(zip(cols, row, strict=False)) for row in cur.fetchall()]
 
 
 def open_db(state_dir: Path, *, filename: str = 'charon.db') -> DB:

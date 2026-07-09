@@ -29,7 +29,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Protocol
 
 
 # ── Data types ──────────────────────────────────────────────────────
@@ -44,7 +43,7 @@ def _new_id(prefix: str = 'jl') -> str:
 
 # Default min_delta for stochastic (LLM) judges, set from measured score noise:
 # AestheticJudge σ≈0.22 on a 1-10 scale (gpt-5.5; see results/judge_variance.json
-# and scripts/measure_judge_variance.py). Use ~2σ so a single noise spike does
+# and scripts/experiments/measure_judge_variance.py). Use ~2σ so a single noise spike does
 # not register as an improvement and get kept.
 STOCHASTIC_JUDGE_MIN_DELTA = 0.5
 
@@ -892,7 +891,7 @@ def build_iteration_prompt(config: JudgeLoopConfig) -> str:
     if last_scored:
         last = last_scored[-1]
         parts.append('')
-        parts.append(f'## Last Judge Feedback')
+        parts.append('## Last Judge Feedback')
         parts.append(last.feedback[:500])
 
     return '\n'.join(parts)
@@ -1147,8 +1146,8 @@ def format_status(config: JudgeLoopConfig) -> str:
         lines.append('Status: created (not yet started)')
         return '\n'.join(lines)
 
-    lines.append(f'| | Value |')
-    lines.append(f'|---|---|')
+    lines.append('| | Value |')
+    lines.append('|---|---|')
     lines.append(f'| Iterations | {config.current_iteration} / {config.max_iterations} |')
     if config.baseline is not None:
         lines.append(f'| Baseline | {config.baseline} |')

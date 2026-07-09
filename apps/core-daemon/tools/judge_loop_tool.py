@@ -11,9 +11,6 @@ Judge types:
 """
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from typing import Any
 
 from tools import ToolContext, ToolResult
 
@@ -167,7 +164,7 @@ def _handle_create(params: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(content='Error: state_dir not available', is_error=True)
 
     try:
-        from judge_engine import create_loop, format_status
+        from judge_engine import create_loop
 
         config = create_loop(
             ctx.state_dir,

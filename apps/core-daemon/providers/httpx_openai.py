@@ -77,9 +77,9 @@ def _drain_think_buffer(text_buffer: str, in_think_block: bool) -> tuple[list[St
 
     return out, text_buffer, in_think_block
 
-import httpx
+import httpx  # noqa: E402 — deliberate layout: pure helpers above, deps below
 
-from . import Message, ModelInfo, StreamDelta, ToolCall, Usage
+from . import Message, ModelInfo, StreamDelta, ToolCall  # noqa: E402
 
 
 class HttpxOpenAIProvider:

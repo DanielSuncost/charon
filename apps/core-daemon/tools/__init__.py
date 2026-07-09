@@ -198,7 +198,7 @@ def _signal_managed_pid(pid: int, sig: int = signal.SIGTERM) -> bool:
 def _refresh_managed_processes(ctx: ToolContext) -> dict[str, Any]:
     data = _load_managed_processes(ctx)
     changed = False
-    for proc_id, entry in list((data.get('processes') or {}).items()):
+    for _proc_id, entry in list((data.get('processes') or {}).items()):
         pid = int(entry.get('pid', 0) or 0)
         running = _is_pid_running(pid)
         log_path = Path(str(entry.get('log_path') or ''))
@@ -265,7 +265,7 @@ def _read_pdf(target: Path, params: dict, ctx: ToolContext) -> ToolResult:
     pdftotext = shutil.which('pdftotext')
     if not pdftotext:
         return ToolResult(
-            content=f'Error: pdftotext not installed. Install poppler-utils: sudo apt install poppler-utils',
+            content='Error: pdftotext not installed. Install poppler-utils: sudo apt install poppler-utils',
             is_error=True,
         )
 
@@ -648,8 +648,10 @@ def execute_bash(params: dict, ctx: ToolContext) -> ToolResult:
         aborted = False
         t_out = threading.Thread(target=_reader, args=(popen.stdout, stdout_chunks, 'stdout'), daemon=True) if popen.stdout else None
         t_err = threading.Thread(target=_reader, args=(popen.stderr, stderr_chunks, 'stderr'), daemon=True) if popen.stderr else None
-        if t_out: t_out.start()
-        if t_err: t_err.start()
+        if t_out:
+            t_out.start()
+        if t_err:
+            t_err.start()
 
         while True:
             rc = popen.poll()
@@ -669,8 +671,10 @@ def execute_bash(params: dict, ctx: ToolContext) -> ToolResult:
             popen.wait(timeout=2)
         except Exception:
             pass
-        if t_out: t_out.join(timeout=1)
-        if t_err: t_err.join(timeout=1)
+        if t_out:
+            t_out.join(timeout=1)
+        if t_err:
+            t_err.join(timeout=1)
         with chunks_lock:
             stdout = ''.join(stdout_chunks)
             stderr = ''.join(stderr_chunks)
@@ -1004,7 +1008,8 @@ from tools.clarify_tool import CLARIFY_TOOL_DEF, execute_clarify
 # Browser tool — optional, only loads if playwright is installed
 # Suppress stdout/stderr during import (browser-use loads ML models noisily)
 try:
-    import io as _io, contextlib as _cl
+    import io as _io
+    import contextlib as _cl
     with _cl.redirect_stdout(_io.StringIO()), _cl.redirect_stderr(_io.StringIO()):
         from tools.browser_tool import BROWSER_TOOL_DEF, execute_browser
     _HAS_BROWSER = True

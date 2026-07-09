@@ -10,11 +10,9 @@ Usage:
 """
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 from pathlib import Path
-from typing import Any
 
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
 ENTRY_DELIMITER = "\n§\n"

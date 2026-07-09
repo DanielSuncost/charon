@@ -7,10 +7,8 @@ feature branch exists, force pushing).
 """
 from __future__ import annotations
 
-import json
 import subprocess
 from pathlib import Path
-from typing import Any
 
 from tools import ToolContext, ToolResult
 
@@ -151,7 +149,7 @@ def execute_git(params: dict, ctx: ToolContext) -> ToolResult:
 
         # Check if there's anything to commit
         ok, status = _run_git(['status', '--porcelain'], cwd)
-        staged = [l for l in status.splitlines() if l and not l.startswith('??')]
+        staged = [ln for ln in status.splitlines() if ln and not ln.startswith('??')]
         if not staged and not status.strip():
             return ToolResult(content='Nothing to commit (working tree clean).')
 
@@ -192,7 +190,7 @@ def execute_git(params: dict, ctx: ToolContext) -> ToolResult:
     if action == 'log':
         max_lines = int(params.get('lines') or 20)
         count = min(max_lines, 50)
-        ok, out = _run_git(['log', f'--oneline', f'-{count}', '--no-color'], cwd)
+        ok, out = _run_git(['log', '--oneline', f'-{count}', '--no-color'], cwd)
         if not ok:
             return ToolResult(content=f'Error: {out}', is_error=True)
         branch = _current_branch(cwd)
