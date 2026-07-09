@@ -881,15 +881,39 @@ def _run_libris_role(
             phase=phase_name, status='running', topic_slug=topic_slug,
             summary=f'{role.capitalize()} is actively working.'
         )
-        response, events = asyncio.run(engine.submit_and_collect(instruction))
-        input_tokens, output_tokens = _collect_usage(events)
+        # Emit a unified trace span for this role's LLM run (additive, best-effort).
+        # All spans of one Libris operation share trace_id tr_<operation_id>, so the
+        # whole run reconstructs as one tree/timeline across the shared substrate.
+        _model_id = getattr(model, 'model_id', '') or role
+        try:
+            import orchestration_trace as _ot
+            _trace_cm = _ot.span(
+                state_dir, name=f'libris {role}', system='libris', kind='agent_run',
+                trace_id=f'tr_{operation_id}', operation_id=operation_id,
+                agent_id=agent.get('id', ''), task_id=topic_slug or None,
+                model=_model_id, attributes={'role': role},
+            )
+        except Exception:
+            _trace_cm = None
+        if _trace_cm is not None:
+            with _trace_cm as _sp:
+                response, events = asyncio.run(engine.submit_and_collect(instruction))
+                input_tokens, output_tokens = _collect_usage(events)
+                try:
+                    _sp.add_usage(model=_model_id, input_tokens=input_tokens,
+                                  output_tokens=output_tokens)
+                except Exception:
+                    pass
+        else:
+            response, events = asyncio.run(engine.submit_and_collect(instruction))
+            input_tokens, output_tokens = _collect_usage(events)
         try:
             record_usage(
                 state_dir,
                 project_root,
                 operation_id,
                 role=role,
-                model=getattr(model, 'model_id', '') or role,
+                model=_model_id,
                 topic_slug=topic_slug,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
