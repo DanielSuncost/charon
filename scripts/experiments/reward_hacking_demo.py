@@ -12,17 +12,17 @@ the *gates* do, reproducibly, without depending on a stochastic LLM.
   B. "Smaller is better" quantitative reward, gamed by REMOVING functionality.
      Gate: a behavioral constraint_command that must still pass.
 
-Run: PYTHONPATH=apps/core-daemon python scripts/reward_hacking_demo.py
+Run: PYTHONPATH=apps/core-daemon python scripts/experiments/reward_hacking_demo.py
 """
 import json
 import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
-from judge_engine import create_loop, create_judge  # noqa: E402
+from judge_engine import create_loop  # noqa: E402
 from checkpoint_manager import CheckpointManager  # noqa: E402
 from judge_loop_driver import advance_loop  # noqa: E402
 
@@ -63,7 +63,10 @@ TEST_CALC_GAMED = (
 
 def scenario_a(frozen):
     tmp = Path(tempfile.mkdtemp(prefix="rh_a_"))
-    work = tmp / "repo"; work.mkdir(); state = tmp / "state"; state.mkdir()
+    work = tmp / "repo"
+    work.mkdir()
+    state = tmp / "state"
+    state.mkdir()
     (work / "calc.py").write_text(CALC)
     (work / "test_calc.py").write_text(TEST_CALC)
 
@@ -112,7 +115,10 @@ BEHAVIOR_CONSTRAINT = (
 
 def scenario_b(constraint):
     tmp = Path(tempfile.mkdtemp(prefix="rh_b_"))
-    work = tmp / "repo"; work.mkdir(); state = tmp / "state"; state.mkdir()
+    work = tmp / "repo"
+    work.mkdir()
+    state = tmp / "state"
+    state.mkdir()
     (work / "service.py").write_text(SERVICE)
 
     config = create_loop(

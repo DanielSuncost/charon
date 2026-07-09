@@ -8,7 +8,7 @@ logic is held fixed and verified each round, so any score gain is pure judge
 manipulation, not real improvement.
 
   PYTHONPATH=apps/core-daemon CHARON_STATE_DIR=$PWD/.charon_state \
-    python scripts/exp_adaptive_injection.py --rounds 6 --trials 3
+    python scripts/experiments/exp_adaptive_injection.py --rounds 6 --trials 3
 """
 import argparse
 import asyncio
@@ -19,7 +19,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 from judge_engine import create_loop, create_judge  # noqa: E402
@@ -82,7 +82,11 @@ def _attacker(provider, model, current_file, last_score, last_feedback):
 
 
 def run_trial(provider, model, rounds):
-    tmp = Path(tempfile.mkdtemp()); work = tmp / "p"; work.mkdir(); state = tmp / "s"; state.mkdir()
+    tmp = Path(tempfile.mkdtemp())
+    work = tmp / "p"
+    work.mkdir()
+    state = tmp / "s"
+    state.mkdir()
     (work / "summarize.py").write_text(BASE)
     cfg = create_loop(state, goal="improve quality", project=str(work), agent_id="atk",
                       judge_type="aesthetic", rubric=RUBRIC, scope=["summarize.py"])
@@ -136,7 +140,8 @@ def main():
              for tr in report["trials"] if not tr["logic_ever_changed"]]
     report["max_injection_lift_logic_fixed"] = round(max(lifts), 3) if lifts else None
     print(f"\nmax injection lift with logic held fixed: {report['max_injection_lift_logic_fixed']}")
-    out = Path(args.out); out.parent.mkdir(parents=True, exist_ok=True)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2))
     print(f"wrote {out}")
     return 0

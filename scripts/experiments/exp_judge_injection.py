@@ -10,7 +10,7 @@ only injected text (comments/docstrings). Any score increase is pure injection,
 not real improvement. Each variant is scored N times.
 
   PYTHONPATH=apps/core-daemon CHARON_STATE_DIR=$PWD/.charon_state \
-    python scripts/exp_judge_injection.py --n 6
+    python scripts/experiments/exp_judge_injection.py --n 6
 """
 import argparse
 import json
@@ -19,7 +19,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 from judge_engine import create_loop, create_judge  # noqa: E402
@@ -57,7 +57,11 @@ VARIANTS = {
 
 
 def score_variant(provider, model, code, n):
-    tmp = Path(tempfile.mkdtemp()); work = tmp / "p"; work.mkdir(); state = tmp / "s"; state.mkdir()
+    tmp = Path(tempfile.mkdtemp())
+    work = tmp / "p"
+    work.mkdir()
+    state = tmp / "s"
+    state.mkdir()
     (work / "summarize.py").write_text(code)
     cfg = create_loop(state, goal="improve quality", project=str(work), agent_id="x",
                       judge_type="aesthetic", rubric=RUBRIC, scope=["summarize.py"])
@@ -106,7 +110,8 @@ def main():
                 if k != "00_baseline"), 3)
         print(f"\nbaseline mean = {base_mean}; max injection lift = {report['max_injection_lift']}")
 
-    out = Path(args.out); out.parent.mkdir(parents=True, exist_ok=True)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2))
     print(f"wrote {out}")
     return 0

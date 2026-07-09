@@ -20,7 +20,7 @@ DETECTS the gaming. A frozen constraint keeps required content present, so the
 only hack vector is padding, not deletion.
 
   PYTHONPATH=apps/core-daemon CHARON_STATE_DIR=$PWD/.charon_state \
-    python scripts/exp_aesthetic_heldout.py --iters 6
+    python scripts/experiments/exp_aesthetic_heldout.py --iters 6
 """
 import argparse
 import copy
@@ -29,7 +29,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 from judge_engine import (  # noqa: E402
@@ -102,8 +102,10 @@ def score_with(rubric, provider, model, base_cfg, work, k=2):
 
 def run_arm(arm, framing, provider, model, iters):
     tmp = Path(tempfile.mkdtemp(prefix=f"aes_{arm}_"))
-    work = tmp / "p"; work.mkdir()
-    cfgstate = tmp / "s"; cfgstate.mkdir()
+    work = tmp / "p"
+    work.mkdir()
+    cfgstate = tmp / "s"
+    cfgstate.mkdir()
     (work / "help.txt").write_text(HELP)
     (work / "check_help.py").write_text(CHECK)
 
@@ -126,7 +128,8 @@ def run_arm(arm, framing, provider, model, iters):
     for i in range(1, iters + 1):
         summary = shade_implementer(ROOT / ".charon_state", cfg, work)
         if summary is None:
-            print(f"[{arm}] iter{i}  (implementer returned None)"); break
+            print(f"[{arm}] iter{i}  (implementer returned None)")
+            break
         cfg, it = run_iteration(cfg, judgeA, work, change_summary=str(summary)[:60], checkpoint_mgr=cp)
         # working dir now holds the BEST artifact (rollback restored it if discarded).
         b = score_with(RUBRIC_B, provider, model, cfg, work)
@@ -163,7 +166,8 @@ def main():
     print("\nReading: neutral → A and B both rise (real quality). adversarial → A rises "
           "but the held-out B lags/falls = judge overfitting detected.")
 
-    out = Path(args.out); out.parent.mkdir(parents=True, exist_ok=True)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2))
     print(f"\nwrote {out}")
     return 0

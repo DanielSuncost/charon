@@ -270,18 +270,18 @@ The benchmark has two stages: retrieval (local, slow) and reading
 ```bash
 # Stage 1: Retrieval only (slow — indexes all sessions per question)
 PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
-  python scripts/bench_longmemeval.py --retrieval-only
+  python scripts/experiments/bench_longmemeval.py --retrieval-only
 
 # Stage 2: Reader with a specific model (fast — uses saved retrieval)
 OPENROUTER_API_KEY=sk-or-... PYTHONPATH=apps/core-daemon \
-  python scripts/bench_longmemeval.py \
+  python scripts/experiments/bench_longmemeval.py \
     --reader-provider openrouter \
     --reader-model openai/gpt-4o \
     --retrieval-file results/longmemeval/retrieval_*.json
 
 # Evaluate (uses GPT-4o as judge, matching LongMemEval's official eval)
 OPENROUTER_API_KEY=sk-or-... \
-  python scripts/eval_longmemeval.py \
+  python scripts/experiments/eval_longmemeval.py \
     results/longmemeval/hyp_*.jsonl
 ```
 
@@ -296,5 +296,5 @@ runs can resume.
 3. `apps/core-daemon/memory_relations.py` — edge management, version chains
 4. `apps/core-daemon/tools/recall_tool.py` — agent-facing recall tool
 5. `tests/test_memory_engine.py` — unit tests
-6. `scripts/bench_longmemeval.py` — benchmark runner
+6. `scripts/experiments/bench_longmemeval.py` — benchmark runner
 7. Integration into `charon_loop.py` — extract facts after each session

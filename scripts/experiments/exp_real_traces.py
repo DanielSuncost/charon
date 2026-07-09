@@ -19,17 +19,16 @@ gold labels. Known limits of the recorded data (reported below when hit):
     is task-level (completion-derived capture, not per-turn streaming).
 
   PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
-    python scripts/exp_real_traces.py --state .charon_state
+    python scripts/experiments/exp_real_traces.py --state .charon_state
 """
 import argparse
 import json
 import sys
 import tempfile
 from collections import Counter
-from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 from execution_memory import create_task_episode  # noqa: E402
@@ -51,7 +50,7 @@ def main():
     if not src.exists():
         print(f"no task episodes at {src}")
         return 1
-    rows = [json.loads(l) for l in src.open(encoding="utf-8") if l.strip()]
+    rows = [json.loads(line) for line in src.open(encoding="utf-8") if line.strip()]
     print(f"replaying {len(rows)} real task episodes from {src}")
 
     scratch = Path(tempfile.mkdtemp(prefix="charon-replay-"))
@@ -60,8 +59,7 @@ def main():
         agent = r.get("agent_id") or ""
         if not agent:
             empty_agents += 1
-            agent = f"unknown-agent"
-        ts = r.get("ts")
+            agent = "unknown-agent"
         create_task_episode(
             scratch,
             session_id=r.get("session_id") or f"replay-{i}",

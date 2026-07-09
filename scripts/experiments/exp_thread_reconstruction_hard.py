@@ -31,7 +31,7 @@ A perfect score here is a red flag, not a win (house rule); the point of this
 benchmark is a real, lower number than the moderate one.
 
   PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
-    python scripts/exp_thread_reconstruction_hard.py --seeds 3
+    python scripts/experiments/exp_thread_reconstruction_hard.py --seeds 3
 """
 import argparse
 import json
@@ -41,7 +41,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 from memory_engine import MemoryEngine  # noqa: E402
@@ -183,7 +183,8 @@ def build(rng, tag):
             subject, choice, why = spec["subject"], spec["choice"], spec["why"]
             events = []  # (key, agent, ts) in gold order
 
-            def gold_event(ev, agent):
+            # bind events/thread_id: closure is only called within this iteration (B023 false positive)
+            def gold_event(ev, agent, events=events, thread_id=thread_id):
                 key = (ev.episode_id, ev.summary)
                 events.append((key, agent, ev.ts))
                 all_gold_keys[key] = thread_id

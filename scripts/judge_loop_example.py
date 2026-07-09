@@ -23,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
-from judge_engine import create_loop, load_loop  # noqa: E402
+from judge_engine import create_loop  # noqa: E402
 from checkpoint_manager import CheckpointManager  # noqa: E402
 from judge_loop_driver import advance_loop  # noqa: E402
 
@@ -43,8 +43,10 @@ if __name__ == "__main__":
 
 def main() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="judge_loop_example_"))
-    work = tmp / "project"; work.mkdir()
-    state = tmp / "state"; state.mkdir()
+    work = tmp / "project"
+    work.mkdir()
+    state = tmp / "state"
+    state.mkdir()
     (work / "solver.py").write_text(SOLVER.format(batch=1))
 
     def set_batch(n: int):

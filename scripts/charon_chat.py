@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import sys
 from pathlib import Path
 
@@ -21,8 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
 
-from providers import ModelInfo, get_provider
-from conversation_engine import ConversationEngine
+from providers import ModelInfo, get_provider  # noqa: E402 — import requires sys.path setup above
+from conversation_engine import ConversationEngine  # noqa: E402 — import requires sys.path setup above
 
 
 # ANSI colors
@@ -76,7 +75,6 @@ async def chat_loop(engine: ConversationEngine):
         thinking_shown = False
         async for event in engine.submit(user_input):
             if event.type == 'thinking_delta':
-                text = event.data.get('text', '')
                 if not thinking_shown:
                     print(f'{DIM}  [thinking...]{RESET}', flush=True)
                     thinking_shown = True
@@ -130,13 +128,8 @@ async def chat_loop(engine: ConversationEngine):
                 error = event.data.get('error', 'unknown error')
                 print(f'\n{RED}  Error: {error}{RESET}', flush=True)
             elif event.type == 'done':
-                usage = event.data.get('usage', {})
-                turns = event.data.get('total_turns', 0)
-                msg_count = event.data.get('message_count', 0)
-                if usage:
-                    token_str = f"in={usage.get('input_tokens', '?')} out={usage.get('output_tokens', '?')}"
-                else:
-                    token_str = ''
+                # End of stream; usage/turn stats in event.data are intentionally not printed.
+                pass
 
         print()  # newline after response
         print()

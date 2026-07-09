@@ -9,7 +9,7 @@ the fluent-but-answerless passage above the terse-but-correct factoid; FTS pins
 the exact key/value. Each query has one gold factoid among fluent distractors.
 
   PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
-    python scripts/exp_fts_codememory.py
+    python scripts/experiments/exp_fts_codememory.py
 """
 import json
 import statistics
@@ -17,7 +17,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 from memory_engine import MemoryEngine, embed_one  # noqa: E402
@@ -100,7 +100,8 @@ def top_ids(pairs):
     seen, out = set(), []
     for mid, _ in pairs:
         if mid not in seen:
-            seen.add(mid); out.append(mid)
+            seen.add(mid)
+            out.append(mid)
     return out
 
 
@@ -117,7 +118,7 @@ def main():
 
     modes = {"vector_only": [], "fts_only": [], "hybrid_rrf": []}
     detail = []
-    for query, gold_text, _ in CLUSTERS:
+    for query, _gold_text, _ in CLUSTERS:
         g = gold[query]
         qv = embed_one(query, eng.state_dir)
         vec = top_ids(eng._search_vec(qv, container_tag="code", limit=20))
@@ -125,7 +126,7 @@ def main():
         hyb = top_ids([(sm.memory.id, sm.score) for sm in
                        eng.recall(query, container_tag="code", limit=20).memories])
 
-        def at(ids, k):
+        def at(ids, k, g=g):  # bind g: called within this iteration only (B023 false positive)
             return 1.0 if g in ids[:k] else 0.0
         modes["vector_only"].append((at(vec, 1), at(vec, 3)))
         modes["fts_only"].append((at(fts, 1), at(fts, 3)))

@@ -9,7 +9,7 @@ noise). This script measures the noise so `min_delta` can be set from data.
 
 Usage:
   PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
-    python scripts/measure_judge_variance.py --n 20 --out results/judge_variance.json
+    python scripts/experiments/measure_judge_variance.py --n 20 --out results/judge_variance.json
 
 The Aesthetic measurement needs a configured provider (it makes N real LLM
 calls). Without one, that judge is reported as skipped.
@@ -22,7 +22,7 @@ import tempfile
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 from judge_engine import create_loop, create_judge  # noqa: E402
@@ -79,8 +79,10 @@ def main():
     args = ap.parse_args()
 
     tmp = Path(tempfile.mkdtemp(prefix="judge_variance_"))
-    work = tmp / "project"; work.mkdir()
-    state = tmp / "state"; state.mkdir()
+    work = tmp / "project"
+    work.mkdir()
+    state = tmp / "state"
+    state.mkdir()
     (work / "summarize.py").write_text(SAMPLE_CODE)
 
     report = {"n": args.n, "measured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "judges": {}}
@@ -105,7 +107,7 @@ def main():
                                                                )
             if not ready:
                 raise RuntimeError("no provider ready")
-        except Exception as e:
+        except Exception:
             # fall back to the repo's configured state dir
             try:
                 from provider_bridge import create_provider_and_model

@@ -23,7 +23,7 @@ crowding/discrimination as the corpus grows — NOT deep paraphrase matching
 pressure emerges naturally from shared domain/aspect words at higher N.
 
   PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
-    python scripts/exp_thread_scale.py --sizes 24,96,288 --seeds 2
+    python scripts/experiments/exp_thread_scale.py --sizes 24,96,288 --seeds 2
 """
 import argparse
 import json
@@ -34,7 +34,7 @@ import tempfile
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 from memory_engine import MemoryEngine  # noqa: E402
@@ -170,7 +170,7 @@ def run_size(n_threads, seeds):
         rng = random.Random(seed)
         eng, flat, gold = build(rng, f"sc-{n_threads}-{seed}", n_threads)
         tag = f"sc-{n_threads}-{seed}"
-        for tid, g in gold.items():
+        for _tid, g in gold.items():
             t0 = time.monotonic()
             items = th.thread(eng, g["query"], container_tag=tag, limit=THREAD_LIMIT)
             lat.append(time.monotonic() - t0)
@@ -195,8 +195,12 @@ def run_size(n_threads, seeds):
                     cur_stale.append(1.0 if (f"use {g['first_choice']}" in top
                                              and f"to {g['current_choice']}" not in top)
                                      else 0.0)
-        eng.close(); flat.close()
-    m = lambda v: round(statistics.mean(v), 3) if v else None
+        eng.close()
+        flat.close()
+
+    def m(v):
+        return round(statistics.mean(v), 3) if v else None
+
     return {
         "threads": n_threads, "seeds": len(seeds),
         "coverage": m(cov), "precision": m(prec), "flat_coverage": m(flat_cov),

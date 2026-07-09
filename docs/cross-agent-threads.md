@@ -29,7 +29,7 @@ thing that makes Charon's multi-agent model actually navigable.
 - Surfaced through the existing `Timeline` tool. 8 unit/integration tests; full
   suite green (789).
 
-## Objective evaluation (`scripts/exp_thread_reconstruction.py`)
+## Objective evaluation (`scripts/experiments/exp_thread_reconstruction.py`)
 
 The feature comes with a clean, non-confounded benchmark: build a multi-agent
 scenario with KNOWN threads (each topic raised by one agent, decided by another with

@@ -17,7 +17,7 @@ can measure per-type retrieval recall@k and answer-correctness, and isolate whic
 difficulty axis breaks memory. Deterministic given --seed. Self-validating: every
 question must be answerable from its declared gold turns.
 
-  python scripts/memeval_gen.py --difficulty medium --seed 0 --out results/memeval/medium_s0.json
+  python scripts/experiments/memeval_gen.py --difficulty medium --seed 0 --out results/memeval/medium_s0.json
 """
 from __future__ import annotations
 
@@ -202,7 +202,8 @@ def validate(dataset: dict) -> list[str]:
     for q in dataset["questions"]:
         gold = [turns.get(tid) for tid in q["gold_turn_ids"]]
         if any(g is None for g in gold):
-            errors.append(f"{q['qid']}: missing gold turn"); continue
+            errors.append(f"{q['qid']}: missing gold turn")
+            continue
         facts = [g["fact"] for g in gold if g["fact"]]
         if q["type"] in ("single_session", "knowledge_update"):
             if not any(f["value"] == q["answer"] for f in facts):

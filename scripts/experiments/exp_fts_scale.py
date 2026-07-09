@@ -10,7 +10,7 @@ We build N records of the form "record <id>: <fact>", query by a held id, and
 measure recall@1 for vector-only / FTS-only / hybrid+RRF as N grows.
 
   PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
-    python scripts/exp_fts_scale.py
+    python scripts/experiments/exp_fts_scale.py
 """
 import hashlib
 import json
@@ -19,7 +19,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
 
 from memory_engine import MemoryEngine, embed_one  # noqa: E402
@@ -45,7 +45,8 @@ def top_ids(pairs):
     seen, out = set(), []
     for mid, _ in pairs:
         if mid not in seen:
-            seen.add(mid); out.append(mid)
+            seen.add(mid)
+            out.append(mid)
     return out
 
 
@@ -56,7 +57,8 @@ def run_size(n, n_probe=20):
         rid = _id(i)
         fact = FACTS[i % len(FACTS)]
         m = eng.add(f"record {rid}: {fact}", container_tag="s", category="event", check_updates=False)
-        ids.append(rid); golds[rid] = m.id
+        ids.append(rid)
+        golds[rid] = m.id
     # probe a spread of ids
     probes = [ids[int(j * (n - 1) / (n_probe - 1))] for j in range(min(n_probe, n))]
     res = {"vector_only": [], "fts_only": [], "hybrid_rrf": []}
