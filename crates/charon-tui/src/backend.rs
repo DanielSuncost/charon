@@ -13,6 +13,8 @@ use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::util::project_root;
+
 // ── Fleet config ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
@@ -636,26 +638,6 @@ impl ByteStream for BoatPane {
     }
 }
 
-fn project_root() -> PathBuf {
-    if let Ok(root) = std::env::var("CHARON_ROOT") {
-        let path = PathBuf::from(root);
-        if path.exists() {
-            return path;
-        }
-    }
-
-    if let Ok(exe) = std::env::current_exe() {
-        for anc in exe.ancestors() {
-            let marker = anc.join("apps").join("core-daemon");
-            if marker.exists() {
-                return anc.to_path_buf();
-            }
-        }
-    }
-
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap().to_path_buf()
-}
-
 fn boat_socket_for(session_id: &str) -> Option<String> {
     let home = std::env::var("HOME").ok()?;
     let path = PathBuf::from(home).join(".charon/boats").join(format!("{}.json", session_id));
@@ -843,11 +825,24 @@ pub fn discover_sessions() -> Vec<DiscoveredSession> {
     sessions
 }
 
+/// A registry entry written by charons-boat to `~/.charon/boats/<id>.json`
+/// (see `tools/charons-boat/boat_session.py::write_registry`). Only the fields
+/// the TUI reads are listed; the rest (`id`, `pid`, `created`, `status`,
+/// `transport`, `socket`, `cols`, `rows`) are ignored by serde.
+#[derive(Debug, Deserialize)]
+struct BoatRegistration {
+    session: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    command: Option<String>,
+}
+
 fn parse_boat_registration(content: &str) -> Option<DiscoveredSession> {
-    // Simple JSON parsing without serde — extract "session" and "name" fields
-    let session = extract_json_string(content, "session")?;
-    let name = extract_json_string(content, "name").unwrap_or_else(|| session.clone());
-    let command = extract_json_string(content, "command").unwrap_or_default();
+    // Malformed/partial entries are tolerated: any parse failure skips the entry.
+    let reg: BoatRegistration = serde_json::from_str(content).ok()?;
+    let name = reg.name.unwrap_or_else(|| reg.session.clone());
+    let command = reg.command.unwrap_or_default();
 
     // Derive agent type from command
     let agent = if command.contains("hermes") {
@@ -863,37 +858,12 @@ fn parse_boat_registration(content: &str) -> Option<DiscoveredSession> {
     };
 
     Some(DiscoveredSession {
-        session_name: session,
+        session_name: reg.session,
         display_name: name,
         agent_type: agent.to_string(),
         transport: "boat".to_string(),
         server_id: None,
     })
-}
-
-fn extract_json_string(json: &str, key: &str) -> Option<String> {
-    let pattern = format!("\"{}\"", key);
-    let start = json.find(&pattern)?;
-    let after_key = &json[start + pattern.len()..];
-    // Skip whitespace and colon
-    let after_colon = after_key.find(':')?;
-    let value_part = &after_key[after_colon + 1..];
-    // Find the opening quote
-    let open = value_part.find('"')?;
-    let value_start = &value_part[open + 1..];
-    // Find the closing quote (handle escaped quotes)
-    let mut end = 0;
-    let chars: Vec<char> = value_start.chars().collect();
-    while end < chars.len() {
-        if chars[end] == '\\' {
-            end += 2;
-        } else if chars[end] == '"' {
-            break;
-        } else {
-            end += 1;
-        }
-    }
-    Some(value_start[..value_start.char_indices().nth(end)?.0].to_string())
 }
 
 pub fn dirs_home() -> std::path::PathBuf {

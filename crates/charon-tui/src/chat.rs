@@ -1,10 +1,11 @@
 use serde_json::{json, Map, Value};
 use std::io::{self, BufRead, BufReader, Write};
-use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use crate::util::project_root;
 
 #[derive(Clone, Debug, Default)]
 pub struct LaunchOptions {
@@ -173,29 +174,6 @@ fn merge_json_objects(dst: &mut Map<String, Value>, src: &Map<String, Value>) {
             }
         }
     }
-}
-
-fn project_root() -> PathBuf {
-    if let Ok(root) = std::env::var("CHARON_ROOT") {
-        let path = PathBuf::from(root);
-        if path.exists() {
-            return path;
-        }
-    }
-
-    if let Ok(exe) = std::env::current_exe() {
-        for anc in exe.ancestors() {
-            let marker = anc.join("apps").join("core-daemon");
-            if marker.exists() {
-                return anc.to_path_buf();
-            }
-        }
-    }
-
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent().unwrap()
-        .parent().unwrap()
-        .to_path_buf()
 }
 
 #[derive(Clone, Debug)]
