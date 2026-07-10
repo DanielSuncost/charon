@@ -334,8 +334,8 @@ class FleetSetupMixin:
             result = subprocess.run(
                 ['ssh', '-o', 'BatchMode=yes', target,
                  'export PATH="$HOME/.local/bin:$HOME/charon:$PATH" && '
-                 'cd ~/charon && PYTHONPATH=apps/core-daemon python3 -c "'
-                 'import charon_auth; '
+                 'cd ~/charon && PYTHONPATH=src python3 -c "'
+                 'from charon.providers import charon_auth; '
                  'charon_auth.login_oauth(\\"openai-codex\\", status_cb=print)'
                  '"'],
                 capture_output=True, text=True, timeout=60,
@@ -378,8 +378,8 @@ class FleetSetupMixin:
             result = subprocess.run(
                 ['ssh', '-o', 'BatchMode=yes', target,
                  f'export PATH="$HOME/.local/bin:$HOME/charon:$PATH" && '
-                 f'cd ~/charon && PYTHONPATH=apps/core-daemon python3 -c "'
-                 f'import charon_auth; '
+                 f'cd ~/charon && PYTHONPATH=src python3 -c "'
+                 f'from charon.providers import charon_auth; '
                  f'charon_auth.login_oauth(\\"openai-codex\\", auth_code_cb=lambda p: \\"{code}\\")'
                  f'"'],
                 capture_output=True, text=True, timeout=30,
@@ -457,7 +457,7 @@ class FleetSetupMixin:
 
         # Update fleet.json
         try:
-            from fleet_registry import load_fleet, save_fleet
+            from charon.fleet.fleet_registry import load_fleet, save_fleet
             fleet = load_fleet()
             server_id = setup.get('server_id', setup['host'])
 

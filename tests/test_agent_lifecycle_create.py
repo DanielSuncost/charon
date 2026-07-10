@@ -1,21 +1,13 @@
-from pathlib import Path
-import importlib.util
 import pytest
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-MODULE_PATH = ROOT / 'apps' / 'core-daemon' / 'agent_lifecycle.py'
 
-spec = importlib.util.spec_from_file_location('agent_lifecycle_create', MODULE_PATH)
-agent_lifecycle = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = agent_lifecycle
-spec.loader.exec_module(agent_lifecycle)
+from charon.agents import agent_lifecycle
 
 
 def test_create_agent_fails_fast_when_tmux_creation_fails(tmp_path, monkeypatch):
-    agent_lifecycle.STATE_DIR = tmp_path / 'state'
-    agent_lifecycle.AGENTS_FILE = agent_lifecycle.STATE_DIR / 'agents.json'
-    agent_lifecycle.INTERVENTIONS_FILE = agent_lifecycle.STATE_DIR / 'interventions.jsonl'
+    monkeypatch.setattr(agent_lifecycle, 'STATE_DIR', tmp_path / 'state')
+    monkeypatch.setattr(agent_lifecycle, 'AGENTS_FILE', tmp_path / 'state' / 'agents.json')
+    monkeypatch.setattr(agent_lifecycle, 'INTERVENTIONS_FILE', tmp_path / 'state' / 'interventions.jsonl')
 
     monkeypatch.setattr(agent_lifecycle, '_ensure_tmux_session', lambda *_args, **_kwargs: (False, 'tmux boom'))
 
@@ -31,10 +23,10 @@ def test_create_agent_fails_fast_when_tmux_creation_fails(tmp_path, monkeypatch)
     assert not agent_lifecycle.AGENTS_FILE.exists()
 
 
-def test_create_agent_autonames_charon_per_project_without_tmux(tmp_path):
-    agent_lifecycle.STATE_DIR = tmp_path / 'state'
-    agent_lifecycle.AGENTS_FILE = agent_lifecycle.STATE_DIR / 'agents.json'
-    agent_lifecycle.INTERVENTIONS_FILE = agent_lifecycle.STATE_DIR / 'interventions.jsonl'
+def test_create_agent_autonames_charon_per_project_without_tmux(tmp_path, monkeypatch):
+    monkeypatch.setattr(agent_lifecycle, 'STATE_DIR', tmp_path / 'state')
+    monkeypatch.setattr(agent_lifecycle, 'AGENTS_FILE', tmp_path / 'state' / 'agents.json')
+    monkeypatch.setattr(agent_lifecycle, 'INTERVENTIONS_FILE', tmp_path / 'state' / 'interventions.jsonl')
 
     a1 = agent_lifecycle.create_agent(
         name='',

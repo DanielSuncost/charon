@@ -1,33 +1,13 @@
-from pathlib import Path
-import importlib.util
 import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-TOOLS_PATH = ROOT / 'apps' / 'core-daemon' / 'tools' / '__init__.py'
-CL_PATH = ROOT / 'apps' / 'core-daemon' / 'tools' / 'clarify_tool.py'
-RUNTIME_PATH = ROOT / 'apps' / 'core-daemon' / 'libris_runtime.py'
-AGENTS_PATH = ROOT / 'apps' / 'core-daemon' / 'libris_agents.py'
 
+from charon import tools as tools_mod
 
-spec_tools = importlib.util.spec_from_file_location('tools', TOOLS_PATH)
-tools_mod = importlib.util.module_from_spec(spec_tools)
-sys.modules['tools'] = tools_mod
-spec_tools.loader.exec_module(tools_mod)
+from charon.tools import clarify_tool as cl_mod
 
-spec_cl = importlib.util.spec_from_file_location('clarify_tool', CL_PATH)
-cl_mod = importlib.util.module_from_spec(spec_cl)
-sys.modules['clarify_tool'] = cl_mod
-spec_cl.loader.exec_module(cl_mod)
+from charon.libris import libris_runtime as runtime_mod
 
-spec_runtime = importlib.util.spec_from_file_location('libris_runtime', RUNTIME_PATH)
-runtime_mod = importlib.util.module_from_spec(spec_runtime)
-sys.modules['libris_runtime'] = runtime_mod
-spec_runtime.loader.exec_module(runtime_mod)
-
-spec_agents = importlib.util.spec_from_file_location('libris_agents', AGENTS_PATH)
-agents_mod = importlib.util.module_from_spec(spec_agents)
-sys.modules['libris_agents'] = agents_mod
-spec_agents.loader.exec_module(agents_mod)
+from charon.libris import libris_agents as agents_mod
 
 
 def test_missing_candidate_topics_requests_clarification(tmp_path, monkeypatch):
@@ -99,7 +79,7 @@ def test_controller_waits_for_running_coordinator(tmp_path, monkeypatch):
     orch.spawn_topic_procurement_shades = lambda *a, **k: []
     orch.wait_for_procurement_contracts = lambda *a, **k: []
     orch.build_procurement_summary_markdown = lambda *a, **k: ''
-    monkeypatch.setitem(sys.modules, 'libris_orchestrator', orch)
+    monkeypatch.setitem(sys.modules, 'charon.libris.libris_orchestrator', orch)
     spec_mod = _types.ModuleType('libris_specialists')
     spec_mod.spawn_topic_claim_extraction_shades = lambda *a, **k: []
     spec_mod.wait_for_claim_extraction_contracts = lambda *a, **k: []
@@ -107,11 +87,11 @@ def test_controller_waits_for_running_coordinator(tmp_path, monkeypatch):
     spec_mod.spawn_topic_contradiction_check_shades = lambda *a, **k: []
     spec_mod.wait_for_contradiction_check_contracts = lambda *a, **k: []
     spec_mod.ingest_contradiction_check_contracts = lambda *a, **k: []
-    monkeypatch.setitem(sys.modules, 'libris_specialists', spec_mod)
+    monkeypatch.setitem(sys.modules, 'charon.libris.libris_specialists', spec_mod)
     conv = _types.ModuleType('libris_convergence')
     conv.should_request_additional_revision = lambda *a, **k: {
         'should_revise': False, 'reasons': ['quality_good_enough'], 'metrics': {}}
-    monkeypatch.setitem(sys.modules, 'libris_convergence', conv)
+    monkeypatch.setitem(sys.modules, 'charon.libris.libris_convergence', conv)
 
     spawned = []
     monkeypatch.setattr(

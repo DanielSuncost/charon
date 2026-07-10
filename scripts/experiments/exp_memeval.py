@@ -8,7 +8,7 @@ single-session recall, knowledge-update (latest value), multi-session joins, and
 temporal ordering. Because the data is authored with ground truth, we can crank
 distractors/joins and watch which retrieval regime breaks.
 
-  PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
+  PYTHONPATH=src CHARON_EMBED_BACKEND=local \
     python scripts/experiments/exp_memeval.py --seeds 3
 """
 import argparse
@@ -21,10 +21,10 @@ import random
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts" / "experiments"))
 
-from memory_engine import MemoryEngine, embed_one  # noqa: E402
+from charon.memory.memory_engine import MemoryEngine, embed_one  # noqa: E402
 from memeval_gen import Gen, PRESETS, validate  # noqa: E402
 
 KS = [1, 2, 3, 5]

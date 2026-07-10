@@ -18,7 +18,7 @@ gold labels. Known limits of the recorded data (reported below when hit):
     a name sequence only → decision extraction sees partial text; event timing
     is task-level (completion-derived capture, not per-turn streaming).
 
-  PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
+  PYTHONPATH=src CHARON_EMBED_BACKEND=local \
     python scripts/experiments/exp_real_traces.py --state .charon_state
 """
 import argparse
@@ -29,12 +29,12 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from execution_memory import create_task_episode  # noqa: E402
-from memory_engine import MemoryEngine  # noqa: E402
-import episodic as ep  # noqa: E402
-import threads as th  # noqa: E402
+from charon.memory.execution_memory import create_task_episode  # noqa: E402
+from charon.memory.memory_engine import MemoryEngine  # noqa: E402
+from charon.memory import episodic as ep  # noqa: E402
+from charon.agents import threads as th  # noqa: E402
 
 
 def main():

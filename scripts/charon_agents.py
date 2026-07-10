@@ -2,7 +2,6 @@
 from __future__ import annotations
 import argparse
 import difflib
-import importlib.util
 import json
 import os
 import sys
@@ -23,6 +22,7 @@ except Exception:
 
 ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / '.charon_state'
+sys.path.insert(0, str(ROOT / 'src'))
 
 
 def _safe_load_json(path: Path, default):
@@ -51,21 +51,13 @@ def _safe_load_jsonl(path: Path) -> list[dict]:
     return rows
 
 
-def _load_module(name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-agent_lifecycle = _load_module('agent_lifecycle_cli', ROOT / 'apps' / 'core-daemon' / 'agent_lifecycle.py')
-conversation_runtime = _load_module('conversation_runtime_cli', ROOT / 'apps' / 'core-daemon' / 'conversation_runtime.py')
-boundary_runtime = _load_module('boundary_runtime_cli', ROOT / 'apps' / 'core-daemon' / 'boundary_runtime.py')
-shade_orchestrator = _load_module('shade_orchestrator_cli', ROOT / 'apps' / 'core-daemon' / 'shade_orchestrator.py')
-goal_runtime = _load_module('goal_runtime_cli', ROOT / 'apps' / 'core-daemon' / 'goal_runtime.py')
-llm_adapter = _load_module('llm_adapter_cli', ROOT / 'apps' / 'core-daemon' / 'llm_adapter.py')
-charon_auth = _load_module('charon_auth_cli', ROOT / 'apps' / 'core-daemon' / 'charon_auth.py')
+from charon.agents import agent_lifecycle  # noqa: E402
+from charon.conversation import conversation_runtime  # noqa: E402
+from charon.agents import boundary_runtime  # noqa: E402
+from charon.shade import shade_orchestrator  # noqa: E402
+from charon.agents import goal_runtime  # noqa: E402
+from charon.providers import llm_adapter  # noqa: E402
+from charon.providers import charon_auth  # noqa: E402
 
 
 def cmd_create(args):
@@ -568,7 +560,7 @@ def cmd_agent_session(args):
         if not getattr(args, 'no_daemon', False):
             cmd = [
                 sys.executable,
-                str(ROOT / 'apps' / 'core-daemon' / 'charon_loop.py'),
+                str(ROOT / 'src' / 'charon' / 'charon_loop.py'),
                 '--state-dir',
                 str(STATE_DIR),
             ]
@@ -698,7 +690,7 @@ def _handle_chat_slash_command(msg: str, *, agent_id: str, conversation_id: str,
         return True
 
     if text == '/specialist' or text.startswith('/specialist '):
-        specialists = _load_module('specialists_cli', ROOT / 'apps' / 'core-daemon' / 'specialists.py')
+        from charon.agents import specialists
         parts = text[len('/specialist'):].strip().split(None, 2)
         if not parts or parts[0] == 'list':
             print('Specialist templates:')
@@ -727,8 +719,8 @@ def _handle_chat_slash_command(msg: str, *, agent_id: str, conversation_id: str,
         return True
 
     if text == '/clarifications':
-        tools_mod = _load_module('tools_clarify_cli_tools', ROOT / 'apps' / 'core-daemon' / 'tools' / '__init__.py')
-        clarify_mod = _load_module('clarify_cli_mod', ROOT / 'apps' / 'core-daemon' / 'tools' / 'clarify_tool.py')
+        from charon import tools as tools_mod
+        from charon.tools import clarify_tool as clarify_mod
         ctx = tools_mod.ToolContext(project_root=ROOT, agent_id=agent_id, state_dir=STATE_DIR)
         res = clarify_mod.execute_clarify({'action': 'list'}, ctx)
         details = res.details or {}
@@ -753,8 +745,8 @@ def _handle_chat_slash_command(msg: str, *, agent_id: str, conversation_id: str,
             print('Usage: /clarify <clarification_id> <answer>')
             return True
         cid, answer = parts[0].strip(), parts[1].strip()
-        tools_mod = _load_module('tools_clarify_cli_tools_answer', ROOT / 'apps' / 'core-daemon' / 'tools' / '__init__.py')
-        clarify_mod = _load_module('clarify_cli_mod_answer', ROOT / 'apps' / 'core-daemon' / 'tools' / 'clarify_tool.py')
+        from charon import tools as tools_mod
+        from charon.tools import clarify_tool as clarify_mod
         ctx = tools_mod.ToolContext(project_root=ROOT, agent_id=agent_id, state_dir=STATE_DIR)
         res = clarify_mod.execute_clarify({'action': 'answer', 'clarification_id': cid, 'answer': answer}, ctx)
         print(res.content)
@@ -1064,10 +1056,10 @@ def cmd_setup_complete(_args):
 
     # Sync to SQLite
     try:
-        _daemon_dir = str(ROOT / 'apps' / 'core-daemon')
+        _daemon_dir = str(ROOT / 'src')
         if _daemon_dir not in sys.path:
             sys.path.insert(0, _daemon_dir)
-        from store_adapter import get_db, onboarding_set as db_ob_set
+        from charon.infra.store_adapter import get_db, onboarding_set as db_ob_set
         db = get_db(STATE_DIR)
         db_ob_set(db, state)
     except Exception:

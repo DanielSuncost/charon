@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from memory_engine import MemoryEngine
+from charon.memory.memory_engine import MemoryEngine
 
 
 @pytest.fixture

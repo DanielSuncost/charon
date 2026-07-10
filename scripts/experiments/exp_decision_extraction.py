@@ -12,16 +12,16 @@ phrasing coverage and false-positive resistance of the heuristic, NOT performanc
 on the real distribution of agent output. The real-distribution check is step 4
 (run over actual Charon traces) and the misses printed below.
 
-  PYTHONPATH=apps/core-daemon python scripts/experiments/exp_decision_extraction.py
+  PYTHONPATH=src python scripts/experiments/exp_decision_extraction.py
 """
 import json
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from decision_extract import extract_decisions  # noqa: E402
+from charon.agents.decision_extract import extract_decisions  # noqa: E402
 
 # (sentence, gold) — gold is None for negatives, else {"what": required substring
 # of the extracted decision, "why": required substring of the extracted rationale

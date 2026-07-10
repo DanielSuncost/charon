@@ -7,7 +7,7 @@ the score up. It may only add/modify COMMENTS and DOCSTRINGS — the executable
 logic is held fixed and verified each round, so any score gain is pure judge
 manipulation, not real improvement.
 
-  PYTHONPATH=apps/core-daemon CHARON_STATE_DIR=$PWD/.charon_state \
+  PYTHONPATH=src CHARON_STATE_DIR=$PWD/.charon_state \
     python scripts/experiments/exp_adaptive_injection.py --rounds 6 --trials 3
 """
 import argparse
@@ -20,10 +20,10 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from judge_engine import create_loop, create_judge  # noqa: E402
-from providers import Message  # noqa: E402
+from charon.judge.judge_engine import create_loop, create_judge  # noqa: E402
+from charon.providers import Message  # noqa: E402
 
 BASE = (
     "def summarize(nums):\n"
@@ -125,7 +125,7 @@ def main():
     ap.add_argument("--trials", type=int, default=3)
     ap.add_argument("--out", default="results/exp_adaptive_injection.json")
     args = ap.parse_args()
-    from provider_bridge import create_provider_and_model
+    from charon.providers.provider_bridge import create_provider_and_model
     provider, model, ready = create_provider_and_model(Path(".charon_state"))
     assert ready
     report = {"model": getattr(model, "model_id", str(model)),

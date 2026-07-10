@@ -1,6 +1,6 @@
-from conversation_engine import ConversationEngine
-from providers import ModelInfo
-from devop_runtime import init_operation, init_workstream, save_checkpoint, save_review
+from charon.conversation.conversation_engine import ConversationEngine
+from charon.providers import ModelInfo
+from charon.devop.devop_runtime import init_operation, init_workstream, save_checkpoint, save_review
 from chat_backend import _collect_devop_rooms
 
 

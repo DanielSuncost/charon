@@ -3,8 +3,8 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from memory_engine import MemoryEngine
-import episodic as ep
+from charon.memory.memory_engine import MemoryEngine
+from charon.memory import episodic as ep
 
 
 def _engine():

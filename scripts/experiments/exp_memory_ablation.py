@@ -9,7 +9,7 @@ detection (is_latest chains) change recall on the category it's meant to help?
 
 No API: pure on-device retrieval (bge-base + sqlite-vec + FTS5).
 
-  PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
+  PYTHONPATH=src CHARON_EMBED_BACKEND=local \
     python scripts/experiments/exp_memory_ablation.py --per-type 10 --topk 5
 """
 import argparse
@@ -22,9 +22,9 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from memory_engine import MemoryEngine, embed_one  # noqa: E402
+from charon.memory.memory_engine import MemoryEngine, embed_one  # noqa: E402
 
 DATA = ROOT / "data" / "longmemeval" / "longmemeval_s_cleaned.json"
 

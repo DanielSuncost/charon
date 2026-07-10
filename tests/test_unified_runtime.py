@@ -7,23 +7,11 @@ Verifies that:
 4. Per-agent engine caching works
 """
 import json
-import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-import importlib.util
 
-ROOT = Path(__file__).resolve().parents[1]
-
-def _load_mod(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-agent_runtime = _load_mod('agent_runtime_unified_test', ROOT / 'apps' / 'core-daemon' / 'agent_runtime.py')
-provider_bridge = _load_mod('provider_bridge_test', ROOT / 'apps' / 'core-daemon' / 'provider_bridge.py')
+from charon.agents import agent_runtime
+from charon.providers import provider_bridge
 
 
 def _write_onboarding(state_dir: Path, **overrides):

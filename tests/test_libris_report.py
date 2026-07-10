@@ -2,7 +2,7 @@
 full render over a synthetic operation directory."""
 import json
 
-import libris_report as lr
+from charon.libris import libris_report as lr
 
 
 def test_markdown_basics():

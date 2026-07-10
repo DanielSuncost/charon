@@ -33,7 +33,7 @@ Provide a fast, guided setup to either:
 - API key stored in auth.json (OpenRouter)
 
 ## OAuth (Cleanroom)
-- Implemented in apps/core-daemon/charon_auth.py
+- Implemented in src/charon/providers/charon_auth.py
 - PKCE + local callback server
 - Codex: OpenAI OAuth endpoints
 - Claude Code: Anthropic OAuth endpoints

@@ -1,6 +1,6 @@
 """Tests for intelligent task summarization."""
 
-from task_summarizer import summarize_fast, _short_path, _extract_command_highlight
+from charon.agents.task_summarizer import summarize_fast, _short_path, _extract_command_highlight
 
 
 # ── Path shortening ─────────────────────────────────────────────────
@@ -11,7 +11,7 @@ def test_short_path_already_short():
 
 
 def test_short_path_long():
-    assert _short_path('apps/core-daemon/tools/memory_tools.py') == 'tools/memory_tools.py'
+    assert _short_path('src/charon/tools/memory_tools.py') == 'tools/memory_tools.py'
     assert _short_path('/home/user/project/src/auth/login.py') == 'auth/login.py'
 
 

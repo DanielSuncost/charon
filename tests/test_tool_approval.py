@@ -1,6 +1,6 @@
 """Tests for tool approval system."""
 
-from tool_approval import (
+from charon.infra.tool_approval import (
     detect_dangerous_command, classify_tool_risk, needs_approval,
     approve_tool_for_session, clear_session_approvals,
 )

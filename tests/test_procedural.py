@@ -2,8 +2,8 @@
 import tempfile
 from pathlib import Path
 
-from memory_engine import MemoryEngine
-import procedural as pr
+from charon.memory.memory_engine import MemoryEngine
+from charon.memory import procedural as pr
 
 
 def _engine():

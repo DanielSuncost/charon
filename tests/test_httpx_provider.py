@@ -7,8 +7,8 @@ import asyncio
 import json
 
 import httpx
-from providers import Message, ModelInfo, ToolCall
-from providers.httpx_openai import HttpxOpenAIProvider, _convert_messages, _convert_tools
+from charon.providers import Message, ModelInfo, ToolCall
+from charon.providers.httpx_openai import HttpxOpenAIProvider, _convert_messages, _convert_tools
 
 
 MODEL = ModelInfo(provider='local', model_id='test-model', context_window=32000)
@@ -261,7 +261,7 @@ class TestSSEParsing:
 
     def test_think_block_separation(self):
         """Test that inline <think> blocks are parsed into thinking deltas."""
-        from providers.httpx_openai import _drain_think_buffer
+        from charon.providers.httpx_openai import _drain_think_buffer
 
         deltas, buf, in_think = _drain_think_buffer(
             '<think>Let me analyze this.</think>\nHere is my answer.',
@@ -275,7 +275,7 @@ class TestSSEParsing:
 
     def test_think_block_streamed_across_chunks(self):
         """Test think block detection when <think> spans multiple SSE chunks."""
-        from providers.httpx_openai import _drain_think_buffer
+        from charon.providers.httpx_openai import _drain_think_buffer
 
         chunks = ['<thi', 'nk>deep ', 'thought</thi', 'nk>\nAnswer here']
         in_think = False
@@ -295,7 +295,7 @@ class TestSSEParsing:
 
     def test_orphan_closing_think_tag_is_stripped(self):
         """Visible text should not leak lone </think> tags."""
-        from providers.httpx_openai import _drain_think_buffer
+        from charon.providers.httpx_openai import _drain_think_buffer
 
         deltas, buf, in_think = _drain_think_buffer('</think>\n\nHello', False)
 

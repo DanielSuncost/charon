@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'apps' / 'core-daemon' / 'charon_loop.py'
+SCRIPT = Path(__file__).resolve().parents[1] / 'src' / 'charon' / 'charon_loop.py'
 
 
 def _run_loop(state_dir: Path, stop_file: Path, max_cycles: int = 8):

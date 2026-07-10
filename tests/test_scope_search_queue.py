@@ -1,9 +1,9 @@
 """Tests for shade scope enforcement, conversation search, and queue processing."""
 import json
 
-from tools import ToolContext, execute_tool, _check_scope
-from tools.search_tool import search_conversations, rebuild_index, execute_search
-import store_adapter
+from charon.tools import ToolContext, execute_tool, _check_scope
+from charon.tools.search_tool import search_conversations, rebuild_index, execute_search
+from charon.infra import store_adapter
 
 
 def setup_function():

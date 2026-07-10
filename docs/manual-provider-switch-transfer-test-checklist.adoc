@@ -56,7 +56,7 @@ Use a session with real context, not trivial chat.
 
 === Good sample setup
 Have the model:
-- inspect `apps/core-daemon/context_transfer.py`
+- inspect `src/charon/context/context_transfer.py`
 - edit something small
 - run `python -m py_compile ...`
 - leave one follow-up improvement unfinished

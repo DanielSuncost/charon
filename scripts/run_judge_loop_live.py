@@ -6,7 +6,7 @@ check.py is FROZEN (the loop must not edit it). Correctness judge, target 1.0.
 This exercises the full live path: LLM reads/edits within scope -> run_iteration
 checkpoints + scores + keeps/rolls back -> convergence.
 
-  PYTHONPATH=apps/core-daemon CHARON_STATE_DIR=$PWD/.charon_state \
+  PYTHONPATH=src CHARON_STATE_DIR=$PWD/.charon_state \
     python scripts/run_judge_loop_live.py
 """
 import sys
@@ -14,11 +14,11 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from judge_engine import create_loop, create_judge, run_baseline, run_iteration, check_convergence  # noqa
-from checkpoint_manager import CheckpointManager  # noqa
-from judge_loop_driver import shade_implementer  # noqa
+from charon.judge.judge_engine import create_loop, create_judge, run_baseline, run_iteration, check_convergence  # noqa
+from charon.automation.checkpoint_manager import CheckpointManager  # noqa
+from charon.judge.judge_loop_driver import shade_implementer  # noqa
 
 CHECK = (
     "from solver import transform\n"

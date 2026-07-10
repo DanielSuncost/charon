@@ -13,7 +13,7 @@ What it demonstrates:
   - shadow-git checkpoint + rollback of real files (added files included),
   - convergence detection (target_met).
 
-Run:  PYTHONPATH=apps/core-daemon python scripts/judge_loop_example.py
+Run:  PYTHONPATH=src python scripts/judge_loop_example.py
 """
 import re
 import sys
@@ -21,11 +21,11 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from judge_engine import create_loop  # noqa: E402
-from checkpoint_manager import CheckpointManager  # noqa: E402
-from judge_loop_driver import advance_loop  # noqa: E402
+from charon.judge.judge_engine import create_loop  # noqa: E402
+from charon.automation.checkpoint_manager import CheckpointManager  # noqa: E402
+from charon.judge.judge_loop_driver import advance_loop  # noqa: E402
 
 SOLVER = '''\
 BATCH = {batch}

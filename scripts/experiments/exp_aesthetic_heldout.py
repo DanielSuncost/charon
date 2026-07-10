@@ -19,7 +19,7 @@ Under adversarial, A climbs but the held-out B lags or falls — the held-out ju
 DETECTS the gaming. A frozen constraint keeps required content present, so the
 only hack vector is padding, not deletion.
 
-  PYTHONPATH=apps/core-daemon CHARON_STATE_DIR=$PWD/.charon_state \
+  PYTHONPATH=src CHARON_STATE_DIR=$PWD/.charon_state \
     python scripts/experiments/exp_aesthetic_heldout.py --iters 6
 """
 import argparse
@@ -30,14 +30,14 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from judge_engine import (  # noqa: E402
+from charon.judge.judge_engine import (  # noqa: E402
     create_loop, create_judge, run_baseline, run_iteration,
 )
-from checkpoint_manager import CheckpointManager  # noqa: E402
-from judge_loop_driver import shade_implementer  # noqa: E402
-from provider_bridge import create_provider_and_model  # noqa: E402
+from charon.automation.checkpoint_manager import CheckpointManager  # noqa: E402
+from charon.judge.judge_loop_driver import shade_implementer  # noqa: E402
+from charon.providers.provider_bridge import create_provider_and_model  # noqa: E402
 
 HELP = """\
 usage: charon [cmd] [opts]

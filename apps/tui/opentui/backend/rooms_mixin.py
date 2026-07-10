@@ -11,7 +11,7 @@ from pathlib import Path
 
 from backend import common
 from backend.settings_io import _hermes_conversation_runtime_dir, _write_hermes_runtime_home
-from provider_bridge import resolve_provider_config
+from charon.providers.provider_bridge import resolve_provider_config
 
 
 class RoomsMixin:
@@ -76,7 +76,7 @@ class RoomsMixin:
 
     def _room_recent_context(self, room_id: str, limit: int = 8) -> str:
         try:
-            from inter_agent_rooms import list_events
+            from charon.agents.inter_agent_rooms import list_events
             events = list_events(common.STATE_DIR, room_id, limit=limit * 3)
         except Exception:
             events = []
@@ -391,7 +391,7 @@ class RoomsMixin:
 
         def _run() -> None:
             try:
-                from inter_agent_rooms import (
+                from charon.agents.inter_agent_rooms import (
                     append_event,
                     consume_injections,
                     load_room,
@@ -409,7 +409,7 @@ class RoomsMixin:
                 state = load_runner_state(common.STATE_DIR, rid) or self._initial_room_runner_state(room, topic_local, room_participants, mode_local)
                 save_runner_state(common.STATE_DIR, rid, state)
 
-                from conversation_runtime import runtime_for_participant
+                from charon.conversation.conversation_runtime import runtime_for_participant
 
                 if mode_local in ('peer', 'debate', 'researcher-reviewer', 'pair-programmers', 'strategist-critic', 'planner-critic', 'architect-reviewer', 'optimist-skeptic'):
                     if len(room_participants) < 2:
@@ -730,8 +730,8 @@ class RoomsMixin:
         start_runner: bool,
         runner_mode: str = 'teacher-student',
     ) -> dict:
-        from inter_agent_rooms import create_room, append_event, slugify, update_room
-        from conversation_participants import get_conversation_adapter
+        from charon.agents.inter_agent_rooms import create_room, append_event, slugify, update_room
+        from charon.conversation.conversation_participants import get_conversation_adapter
         import subprocess as _sp
 
         adapter = get_conversation_adapter(agent_type)
@@ -806,7 +806,7 @@ class RoomsMixin:
                 'prompt': role_prompt[:200],
             })
         room = update_room(common.STATE_DIR, room['id'], participants=bound_participants, participant_sessions=[p.get('session') for p in bound_participants]) or room
-        from conversation_runtime import runtime_for_participant
+        from charon.conversation.conversation_runtime import runtime_for_participant
         for participant in bound_participants:
             runtime_for_participant(participant).wait_until_ready(timeout=15.0)
         if start_runner and len(bound_participants) >= 2:
@@ -968,7 +968,7 @@ class RoomsMixin:
         return ''
 
     def _detect_orchestration_provider(self, lower: str) -> str:
-        from conversation_participants import supported_conversation_agent_types
+        from charon.conversation.conversation_participants import supported_conversation_agent_types
         candidates = supported_conversation_agent_types()
         for provider in candidates:
             if re.search(rf'\b{re.escape(provider)}\b', lower):
@@ -1019,9 +1019,9 @@ class RoomsMixin:
         if not re.search(r'\b(start|create|spawn|launch|open|begin|orchestrate|conversation|team|agents?|participants?|room|session)\b', lower):
             return None
         try:
-            from conversation_participants import supported_conversation_agent_types
-            from model_registry import get_shade_provider_and_model
-            from conversation_engine import ConversationEngine
+            from charon.conversation.conversation_participants import supported_conversation_agent_types
+            from charon.providers.model_registry import get_shade_provider_and_model
+            from charon.conversation.conversation_engine import ConversationEngine
         except Exception:
             return None
 
@@ -1296,7 +1296,7 @@ class RoomsMixin:
         else:
             kind, obj = 'working', 'task'
             try:
-                from task_summarizer import summarize_instruction_fast
+                from charon.agents.task_summarizer import summarize_instruction_fast
                 title = summarize_instruction_fast(message)
             except Exception:
                 title = message[:80].strip() or 'Working on task'
@@ -1329,9 +1329,9 @@ class RoomsMixin:
         def _run() -> None:
             try:
                 import asyncio as _aio
-                from task_summarizer import summarize_instruction_rich, summarize_instruction_fast
+                from charon.agents.task_summarizer import summarize_instruction_rich, summarize_instruction_fast
                 try:
-                    from model_registry import get_shade_provider_and_model
+                    from charon.providers.model_registry import get_shade_provider_and_model
                     provider, model, ready = get_shade_provider_and_model(common.STATE_DIR, phase_name='analysis', task_complexity='normal')
                 except Exception:
                     provider = model = None
@@ -1391,7 +1391,7 @@ class RoomsMixin:
         if not op_id:
             return None
         try:
-            from libris_runtime import get_libris_swarm_state
+            from charon.libris.libris_runtime import get_libris_swarm_state
             project_root = self._project_root_for_rooms()
             swarm = get_libris_swarm_state(common.STATE_DIR, project_root, op_id)
             if not swarm:
@@ -1474,8 +1474,8 @@ class RoomsMixin:
             common.emit({'type': 'error', 'error': f'No Libris targets matched: {target}', 'request_id': request_id})
             return True
         try:
-            from session_registry import send_steer
-            from libris_runtime import append_operation_event
+            from charon.agents.session_registry import send_steer
+            from charon.libris.libris_runtime import append_operation_event
             project_root = self._project_root_for_rooms()
             sent: list[str] = []
             for node in targets:

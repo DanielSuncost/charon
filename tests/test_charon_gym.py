@@ -3,7 +3,7 @@ and receives real rewards. The four deterministic tasks are asserted fully; the
 aesthetic task needs a provider for a real reward, so we only assert its
 reset/step plumbing here."""
 
-import charon_gym
+from charon import charon_gym
 
 
 # Correct scripted action for each deterministic task.

@@ -1,14 +1,6 @@
-from pathlib import Path
-import importlib.util
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-MODULE_PATH = ROOT / 'apps' / 'core-daemon' / 'intervention_graph.py'
 
-spec = importlib.util.spec_from_file_location('intervention_graph', MODULE_PATH)
-intervention_graph = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = intervention_graph
-spec.loader.exec_module(intervention_graph)
+from charon.agents import intervention_graph
 
 
 def test_append_message_records_parent_chain(tmp_path):

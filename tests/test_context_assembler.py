@@ -5,11 +5,11 @@ import sqlite3
 
 import pytest
 
-from context_store import ContextStore
-from context_assembler import (
+from charon.context.context_store import ContextStore
+from charon.context.context_assembler import (
     ContextAssembler, _format_summary_xml, _build_recall_guidance,
 )
-from providers import Message, ToolCall
+from charon.providers import Message, ToolCall
 
 
 # ── Fixtures ────────────────────────────────────────────────────────

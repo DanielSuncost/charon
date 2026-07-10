@@ -46,7 +46,7 @@ jobs:
           cp "$ROOT/pyproject.toml" "$OUT/pyproject.toml"
           mkdir -p "$OUT/apps/tui/opentui"
           cp "$ROOT/apps/tui/opentui/chat_backend.py" "$OUT/apps/tui/opentui/chat_backend.py"
-          cp -R "$ROOT/apps/core-daemon" "$OUT/apps/core-daemon"
+          cp -R "$ROOT/src" "$OUT/src"
           cp -R "$ROOT/scripts" "$OUT/scripts"
           cp -R "$ROOT/tools" "$OUT/tools"
           cp -R "$ROOT/assets" "$OUT/assets"

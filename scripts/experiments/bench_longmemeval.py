@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
 DATA_URL = "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json"
 DATA_DIR = ROOT / "data" / "longmemeval"
@@ -351,7 +351,7 @@ def run_benchmark(args):
         for k, v in metrics["overall"].items():
             print(f"  {k}: {v:.4f}")
     else:
-        from memory_engine import MemoryEngine
+        from charon.memory.memory_engine import MemoryEngine
 
         print(f"═══ Stage 1: Retrieval ({total} questions) ═══")
         print("Memory engine: embedding-only indexing + hybrid recall")

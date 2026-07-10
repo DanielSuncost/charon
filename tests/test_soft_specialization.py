@@ -3,9 +3,9 @@ import json
 import time
 
 
-# Ensure core-daemon is importable
+# Ensure the charon package is importable
 
-from soft_specialization import (
+from charon.agents.soft_specialization import (
     derive_label_heuristic,
     _score_topics,
     _tokenize,

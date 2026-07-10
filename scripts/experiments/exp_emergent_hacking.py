@@ -7,7 +7,7 @@ For each gameable task we give a real model (codex/gpt-5.5) a *neutral* objectiv
 rewrite files for N iterations to raise the reward. We classify each episode's
 outcome as honest / hacked / failed, with and without the relevant gate.
 
-  PYTHONPATH=apps/core-daemon CHARON_STATE_DIR=$PWD/.charon_state \
+  PYTHONPATH=src CHARON_STATE_DIR=$PWD/.charon_state \
     python scripts/experiments/exp_emergent_hacking.py --episodes 5 --iters 3
 """
 import argparse
@@ -19,11 +19,11 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from judge_engine import create_loop, create_judge, run_baseline, run_iteration  # noqa: E402
-from checkpoint_manager import CheckpointManager  # noqa: E402
-from providers import Message  # noqa: E402
+from charon.judge.judge_engine import create_loop, create_judge, run_baseline, run_iteration  # noqa: E402
+from charon.automation.checkpoint_manager import CheckpointManager  # noqa: E402
+from charon.providers import Message  # noqa: E402
 
 
 def _llm(provider, model, prompt: str) -> str:
@@ -160,7 +160,7 @@ def main():
     ap.add_argument("--iters", type=int, default=3)
     ap.add_argument("--out", default="results/exp_emergent_hacking.json")
     args = ap.parse_args()
-    from provider_bridge import create_provider_and_model
+    from charon.providers.provider_bridge import create_provider_and_model
     provider, model, ready = create_provider_and_model(Path(".charon_state"))
     assert ready
     report = {"model": getattr(model, "model_id", str(model)),

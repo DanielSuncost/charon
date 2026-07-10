@@ -1,12 +1,12 @@
 """Tests for structured UserModel and ProjectKnowledge memory tools."""
 
-from tools import ToolContext
-from tools.memory_tools import execute_user_model, execute_project_knowledge
-from user_model_structured import (
+from charon.tools import ToolContext
+from charon.tools.memory_tools import execute_user_model, execute_project_knowledge
+from charon.memory.user_model_structured import (
     load_structured, save_structured, render_for_prompt, render_markdown,
     set_field, add_correction, remove_correction, set_intention,
 )
-import store_adapter
+from charon.infra import store_adapter
 
 
 def setup_function():

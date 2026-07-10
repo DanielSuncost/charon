@@ -121,7 +121,7 @@ class LibrisMixin:
         if stop_condition:
             full_prompt += f'\n\nStop condition: {stop_condition}'
         try:
-            from libris_agents import start_autonomous_libris_research
+            from charon.libris.libris_agents import start_autonomous_libris_research
             res = start_autonomous_libris_research(
                 common.STATE_DIR,
                 Path(self._libris_project_root()),

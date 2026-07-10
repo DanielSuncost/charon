@@ -27,13 +27,13 @@ CHECK = (
 
 
 def test_live_loop_converges_with_real_implementer(tmp_path):
-    from judge_engine import create_loop, create_judge, run_baseline, run_iteration, check_convergence
-    from checkpoint_manager import CheckpointManager
-    from judge_loop_driver import shade_implementer
+    from charon.judge.judge_engine import create_loop, create_judge, run_baseline, run_iteration, check_convergence
+    from charon.automation.checkpoint_manager import CheckpointManager
+    from charon.judge.judge_loop_driver import shade_implementer
 
     state = ROOT / '.charon_state'
     # Bail clearly if no provider is configured rather than failing opaquely.
-    from model_registry import get_shade_provider_and_model
+    from charon.providers.model_registry import get_shade_provider_and_model
     provider, _model, ready = get_shade_provider_and_model(state)
     if not provider or not ready:
         pytest.skip('no shade provider configured in .charon_state')

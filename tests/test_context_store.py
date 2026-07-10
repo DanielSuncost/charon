@@ -5,10 +5,10 @@ import sqlite3
 
 import pytest
 
-# Ensure apps/core-daemon is on the path
+# Ensure src is on the path
 
-from context_store import ContextStore, _estimate_tokens
-from providers import Message, ToolCall
+from charon.context.context_store import ContextStore, _estimate_tokens
+from charon.providers import Message, ToolCall
 
 
 # ── Fixtures ────────────────────────────────────────────────────────

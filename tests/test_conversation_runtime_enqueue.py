@@ -1,24 +1,8 @@
-import importlib.util
 import json
-import sys
-from pathlib import Path
 
-import store_adapter
-from libs.store import task_get
-
-ROOT = Path(__file__).resolve().parents[1]
-DAEMON = ROOT / 'apps' / 'core-daemon'
-
-
-def _load(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-conversation_runtime = _load('conversation_runtime_enqueue_test', DAEMON / 'conversation_runtime.py')
+from charon.infra import store_adapter
+from charon.infra.store import task_get
+from charon.conversation import conversation_runtime
 
 
 def setup_function():

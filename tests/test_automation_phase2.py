@@ -1,8 +1,8 @@
 import json
 import time
 
-from automation_runtime import create_automation, get_automation_state
-from automation_scheduler import run_due_automations_once
+from charon.automation.automation_runtime import create_automation, get_automation_state
+from charon.automation.automation_scheduler import run_due_automations_once
 from chat_backend import ChatBackend
 
 
@@ -30,7 +30,7 @@ def test_browser_workflow_selector_steps(tmp_path, monkeypatch):
         },
     )
 
-    import tools.browser_tool as browser_tool
+    import charon.tools.browser_tool as browser_tool
 
     class FakeResult:
         def __init__(self, content, is_error=False):

@@ -25,7 +25,7 @@
 └────────────────────────────┬─────────────────────────────────────┘
                              │  WebSocket / IPC
 ┌────────────────────────────▼─────────────────────────────────────┐
-│                      core-daemon (Python)                        │
+│                      charon daemon (Python)                      │
 │                                                                  │
 │  charon_loop ──► agent_runtime ──► conversation_engine           │
 │                                                                  │
@@ -171,16 +171,19 @@ Remote agents follow the same model — just over an SSH tunnel. No tmux require
 
 ```
 charon/
-├── apps/core-daemon/              # Python agent runtime
-│   ├── conversation_engine.py     # Multi-turn LLM with tool use and steering
-│   ├── memory_engine.py           # Semantic memory: vector + FTS5 hybrid search
-│   ├── agent_runtime.py           # Task execution with summarization
-│   ├── shade_orchestrator.py      # Sequential shade contracts
-│   ├── batch_orchestrator.py      # Parallel shade swarms
-│   ├── judge_engine.py            # Judge Loop: iterative optimization
-│   ├── checkpoint_manager.py      # Shadow git snapshots for rollback
-│   ├── autonomous.py              # Goal-driven self-assignment
-│   └── tools/                     # 15 built-in + dynamic plugin loader
+├── src/charon/                    # Python agent runtime (installable package)
+│   ├── charon_loop.py             # Daemon entry point
+│   ├── conversation/              # Multi-turn LLM engine with tool use and steering
+│   ├── memory/                    # Semantic memory: vector + FTS5 hybrid search
+│   ├── agents/                    # Task execution, lifecycle, autonomy
+│   ├── shade/                     # Sequential shade contracts
+│   ├── automation/                # Parallel shade swarms, schedulers, checkpoints
+│   ├── judge/                     # Judge Loop: iterative optimization
+│   ├── libris/                    # Research operations
+│   ├── fleet/                     # Remote dispatch (Harbor), fleet sync
+│   ├── providers/                 # Anthropic, OpenAI, local (httpx)
+│   ├── infra/                     # SQLite store (WAL), registries, diagnostics
+│   └── tools/                     # Built-in tools + dynamic plugin loader
 ├── crates/charon-tui/             # Rust TUI (crossterm + vte + portable-pty)
 │   ├── src/main.rs                # Entry point, event loop, view routing
 │   ├── src/grid.rs                # Responsive grid layout (N cells, aspect-aware)

@@ -1,15 +1,7 @@
-from pathlib import Path
-import importlib.util
 import json
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-MOD_PATH = ROOT / 'apps' / 'core-daemon' / 'shade_orchestrator.py'
 
-spec = importlib.util.spec_from_file_location('shade_orchestrator', MOD_PATH)
-shade_orchestrator = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = shade_orchestrator
-spec.loader.exec_module(shade_orchestrator)
+from charon.shade import shade_orchestrator
 
 
 def test_assess_contract_outcome_flags_weak_completed_output(tmp_path):

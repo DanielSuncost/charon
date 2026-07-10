@@ -154,7 +154,7 @@ class CommandsMixin:
             if command == '/clarifications':
                 try:
                     from clarify_tool import execute_clarify
-                    from tools import ToolContext
+                    from charon.tools import ToolContext
                     clar_ctx = ToolContext(project_root=common.ROOT, agent_id=(self._active_agent_id or ''), state_dir=common.STATE_DIR)
                     pending = execute_clarify({'action': 'list'}, clar_ctx)
                     details = pending.details or {}
@@ -197,7 +197,7 @@ class CommandsMixin:
                 cid, answer = parts[0].strip(), parts[1].strip()
                 try:
                     from clarify_tool import execute_clarify
-                    from tools import ToolContext
+                    from charon.tools import ToolContext
                     clar_ctx = ToolContext(project_root=common.ROOT, agent_id=(self._active_agent_id or ''), state_dir=common.STATE_DIR)
                     result = execute_clarify({'action': 'answer', 'clarification_id': cid, 'answer': answer}, clar_ctx)
                     if result.is_error:
@@ -218,7 +218,7 @@ class CommandsMixin:
                     common.emit({'type': 'error', 'error': 'Usage: /idea <description>', 'request_id': request_id})
                     return
                 try:
-                    import user_model_structured as ums
+                    from charon.memory import user_model_structured as ums
                     # Get message_seq from context store if available
                     msg_seq = -1
                     agent_id = self._active_agent_id or ''
@@ -239,7 +239,7 @@ class CommandsMixin:
 
             if command == '/ideas':
                 try:
-                    import user_model_structured as ums
+                    from charon.memory import user_model_structured as ums
                     ideas = ums.list_ideas(common.STATE_DIR)
                     if not ideas:
                         common.emit({'type': 'status', 'message': 'No ideas recorded yet. Use /idea <text> to capture one.', 'request_id': request_id})
@@ -260,7 +260,7 @@ class CommandsMixin:
                     common.emit({'type': 'error', 'error': 'Usage: /idea-detail <idea-id>', 'request_id': request_id})
                     return
                 try:
-                    import user_model_structured as ums
+                    from charon.memory import user_model_structured as ums
                     # Support both full id and #N shorthand
                     if idea_id.startswith('#'):
                         try:
@@ -315,7 +315,7 @@ class CommandsMixin:
                 if rest.startswith('status '):
                     op_id = rest[7:].strip()
                     try:
-                        from libris_runtime import get_libris_swarm_state
+                        from charon.libris.libris_runtime import get_libris_swarm_state
                         swarm = get_libris_swarm_state(common.STATE_DIR, Path(self._libris_project_root()), op_id)
                         if not swarm:
                             common.emit({'type': 'error', 'error': f'No Libris operation found: {op_id}', 'request_id': request_id})
@@ -385,8 +385,8 @@ class CommandsMixin:
                 if rest.startswith('status '):
                     op_id = rest[7:].strip()
                     try:
-                        from devop_projection import summarize_operation
-                        from devop_runtime import get_operation_state
+                        from charon.devop.devop_projection import summarize_operation
+                        from charon.devop.devop_runtime import get_operation_state
                         op = get_operation_state(common.STATE_DIR, op_id)
                         if not op:
                             common.emit({'type': 'error', 'error': f'No software-dev operation found: {op_id}', 'request_id': request_id})
@@ -415,7 +415,7 @@ class CommandsMixin:
                 if rest.startswith('stop '):
                     op_id = rest[5:].strip()
                     try:
-                        from devop_runtime import operation_dir, append_operation_event, set_operation_status
+                        from charon.devop.devop_runtime import operation_dir, append_operation_event, set_operation_status
                         op_path = operation_dir(common.STATE_DIR, op_id) / 'operation.json'
                         if not op_path.exists():
                             common.emit({'type': 'error', 'error': f'No software-dev operation found: {op_id}', 'request_id': request_id})
@@ -432,7 +432,7 @@ class CommandsMixin:
                         common.emit({'type': 'error', 'error': f'Software-dev stop failed: {e}', 'request_id': request_id})
                     return
                 try:
-                    from devop_agents import start_autonomous_software_operation
+                    from charon.devop.devop_agents import start_autonomous_software_operation
                     res = start_autonomous_software_operation(
                         common.STATE_DIR,
                         Path(self._devop_project_root()),
@@ -486,7 +486,7 @@ class CommandsMixin:
                 if rest == 'list' or rest.startswith('list '):
                     filter_mode = rest[5:].strip().lower() if rest.startswith('list ') else ''
                     try:
-                        from automation_runtime import list_automations
+                        from charon.automation.automation_runtime import list_automations
                         items = list_automations(common.STATE_DIR)
                         if filter_mode == 'cron':
                             items = [a for a in items if str((a.get('schedule') or {}).get('type') or '').lower() == 'cron']
@@ -519,7 +519,7 @@ class CommandsMixin:
                 if rest.startswith('status '):
                     automation_id = rest[7:].strip()
                     try:
-                        from automation_runtime import get_automation_state
+                        from charon.automation.automation_runtime import get_automation_state
                         doc = get_automation_state(common.STATE_DIR, automation_id)
                         if not doc:
                             common.emit({'type': 'error', 'error': f'No automation found: {automation_id}', 'request_id': request_id})
@@ -546,7 +546,7 @@ class CommandsMixin:
                         return
                     automation_id, webhook_url = parts[0].strip(), parts[1].strip()
                     try:
-                        from automation_runtime import set_automation_webhook
+                        from charon.automation.automation_runtime import set_automation_webhook
                         doc = set_automation_webhook(common.STATE_DIR, automation_id, webhook_url)
                         if not doc:
                             common.emit({'type': 'error', 'error': f'No automation found: {automation_id}', 'request_id': request_id})
@@ -560,7 +560,7 @@ class CommandsMixin:
                     if rest.startswith(action_name + ' '):
                         automation_id = rest[len(action_name) + 1:].strip()
                         try:
-                            from automation_runtime import pause_automation, resume_automation, request_stop_automation
+                            from charon.automation.automation_runtime import pause_automation, resume_automation, request_stop_automation
                             fn = {'pause': pause_automation, 'resume': resume_automation, 'stop': request_stop_automation}[action_name]
                             doc = fn(common.STATE_DIR, automation_id)
                             if not doc:
@@ -622,7 +622,7 @@ class CommandsMixin:
                             first_url = str(step.get('url') or '')
                             break
                     try:
-                        from automation_runtime import create_automation
+                        from charon.automation.automation_runtime import create_automation
                         doc = create_automation(
                             common.STATE_DIR,
                             Path(self._devop_project_root()),
@@ -661,7 +661,7 @@ class CommandsMixin:
                         return
                     schedule = {'type': 'interval', 'interval_seconds': interval}
                 try:
-                    from automation_runtime import create_automation
+                    from charon.automation.automation_runtime import create_automation
                     doc = create_automation(
                         common.STATE_DIR,
                         Path(self._devop_project_root()),
@@ -682,7 +682,7 @@ class CommandsMixin:
             if command == '/add-remote' or command.startswith('/add-remote '):
                 rest = command[12:].strip() if command.startswith('/add-remote ') else ''
                 try:
-                    from remote_onboard import test_ssh, check_boat_installed, deploy_boat_remote, discover_remote_agents, auto_configure_fleet
+                    from charon.fleet.remote_onboard import test_ssh, check_boat_installed, deploy_boat_remote, discover_remote_agents, auto_configure_fleet
 
                     if not rest:
                         common.emit({'type': 'status', 'message': (
@@ -715,7 +715,7 @@ class CommandsMixin:
                         self._pending_remote_onboard = None
                         # Start fleet sync if not already running
                         try:
-                            from fleet_sync import start_fleet_sync
+                            from charon.fleet.fleet_sync import start_fleet_sync
                             start_fleet_sync()
                         except Exception:
                             pass
@@ -855,7 +855,7 @@ class CommandsMixin:
 
             if command in ('/hermes', '/pi'):
                 try:
-                    from external_session_launcher import launch_wrapped_session
+                    from charon.fleet.external_session_launcher import launch_wrapped_session
                     onboarding = common._load_json(common.STATE_DIR / 'onboarding.json', {})
                     project = str(onboarding.get('project') or str(common.ROOT)).strip()
                     agent_kind = command[1:]
@@ -886,7 +886,7 @@ class CommandsMixin:
                         return
                     parts = rest.split()
                     provider = (parts[0] if parts else '').strip().lower()
-                    from conversation_participants import get_conversation_adapter
+                    from charon.conversation.conversation_participants import get_conversation_adapter
                     adapter = get_conversation_adapter(provider)
                     if not adapter:
                         common.emit({'type': 'error', 'error': f'Unsupported conversation provider for now: {provider}', 'request_id': request_id})
@@ -1005,7 +1005,7 @@ class CommandsMixin:
                     provider = (parts[0] if len(parts) > 0 else '').strip().lower()
                     count = int(parts[1]) if len(parts) > 1 and str(parts[1]).isdigit() else 2
                     topic = (parts[2] if len(parts) > 2 else '').strip() or 'open discussion'
-                    from conversation_participants import get_conversation_adapter
+                    from charon.conversation.conversation_participants import get_conversation_adapter
                     adapter = get_conversation_adapter(provider)
                     if not adapter:
                         common.emit({'type': 'error', 'error': f'Unsupported team provider for now: {provider}', 'request_id': request_id})
@@ -1046,7 +1046,7 @@ class CommandsMixin:
                     provider = (parts[0] if len(parts) > 0 else '').strip().lower()
                     count = int(parts[1]) if len(parts) > 1 and str(parts[1]).isdigit() else 2
                     goal = (parts[2] if len(parts) > 2 else '').strip() or 'engineering task'
-                    from conversation_participants import get_conversation_adapter
+                    from charon.conversation.conversation_participants import get_conversation_adapter
                     adapter = get_conversation_adapter(provider)
                     if not adapter:
                         common.emit({'type': 'error', 'error': f'Unsupported devteam provider for now: {provider}', 'request_id': request_id})
@@ -1081,7 +1081,7 @@ class CommandsMixin:
                     if not room_id:
                         common.emit({'type': 'status', 'message': 'Usage: /pause-room <room-id>', 'request_id': request_id})
                         return
-                    from inter_agent_rooms import append_event, load_room, update_room
+                    from charon.agents.inter_agent_rooms import append_event, load_room, update_room
                     room = load_room(common.STATE_DIR, room_id)
                     if not room:
                         common.emit({'type': 'error', 'error': f'Unknown room: {room_id}', 'request_id': request_id})
@@ -1101,7 +1101,7 @@ class CommandsMixin:
                     if not room_id:
                         common.emit({'type': 'status', 'message': 'Usage: /resume-room <room-id>', 'request_id': request_id})
                         return
-                    from inter_agent_rooms import append_event, load_room, update_room
+                    from charon.agents.inter_agent_rooms import append_event, load_room, update_room
                     room = load_room(common.STATE_DIR, room_id)
                     if not room:
                         common.emit({'type': 'error', 'error': f'Unknown room: {room_id}', 'request_id': request_id})
@@ -1137,7 +1137,7 @@ class CommandsMixin:
                     message = ' '.join(parts[1:]).strip()
                     if self._dispatch_libris_room_intervention(room_id, target='whole', when='now', message=message, request_id=request_id, mode='say'):
                         return
-                    from inter_agent_rooms import append_event, load_room, queue_injection
+                    from charon.agents.inter_agent_rooms import append_event, load_room, queue_injection
                     room = load_room(common.STATE_DIR, room_id)
                     if not room:
                         common.emit({'type': 'error', 'error': f'Unknown room: {room_id}', 'request_id': request_id})
@@ -1197,7 +1197,7 @@ class CommandsMixin:
                         return
                     if self._dispatch_libris_room_intervention(room_id, target=target, when=when, message=message, request_id=request_id, mode='inject'):
                         return
-                    from inter_agent_rooms import append_event, load_room, queue_injection
+                    from charon.agents.inter_agent_rooms import append_event, load_room, queue_injection
                     room = load_room(common.STATE_DIR, room_id)
                     if not room:
                         common.emit({'type': 'error', 'error': f'Unknown room: {room_id}', 'request_id': request_id})
@@ -1232,7 +1232,7 @@ class CommandsMixin:
                     if not room_id:
                         common.emit({'type': 'status', 'message': 'Usage: /delete-room <room-id>', 'request_id': request_id})
                         return
-                    from inter_agent_rooms import delete_room, load_room
+                    from charon.agents.inter_agent_rooms import delete_room, load_room
                     room = load_room(common.STATE_DIR, room_id)
                     participant_sessions = list(room.get('participant_sessions') or []) if room else []
                     if not participant_sessions and room:
@@ -1258,7 +1258,7 @@ class CommandsMixin:
             if command == '/resume' or command.startswith('/resume '):
                 arg = command[8:].strip() if command.startswith('/resume ') else ''
                 try:
-                    from conversation_store import list_conversations, load_conversation, dict_to_message, message_to_dict
+                    from charon.conversation.conversation_store import list_conversations, load_conversation, dict_to_message, message_to_dict
                     convos = list_conversations(common.STATE_DIR)
                     if arg:
                         # Direct resume — must reset the engine so it gets the
@@ -1308,7 +1308,7 @@ class CommandsMixin:
                         # Pre-load SQLite counts + last user messages for accuracy
                         _store_info = {}
                         try:
-                            from store_adapter import get_db
+                            from charon.infra.store_adapter import get_db
                             _sdb = get_db(common.STATE_DIR)
                             # Batch: get counts per agent
                             for row in _sdb.fetchall(
@@ -1430,19 +1430,19 @@ class CommandsMixin:
             if command.startswith('/setup shade-model '):
                 model_name = command[18:].strip()
                 if model_name == 'same':
-                    from model_registry import load_registry, save_registry
+                    from charon.providers.model_registry import load_registry, save_registry
                     reg = load_registry(common.STATE_DIR)
                     reg['shade_model_mode'] = 'same'
                     save_registry(common.STATE_DIR, reg)
                     common.emit({'type': 'status', 'message': 'Shade model: same as main agent.', 'request_id': request_id})
                 elif model_name == 'auto':
-                    from model_registry import load_registry, save_registry
+                    from charon.providers.model_registry import load_registry, save_registry
                     reg = load_registry(common.STATE_DIR)
                     reg['shade_model_mode'] = 'auto'
                     save_registry(common.STATE_DIR, reg)
                     common.emit({'type': 'status', 'message': 'Shade model: auto (Charon picks per task).', 'request_id': request_id})
                 else:
-                    from model_registry import load_registry, save_registry
+                    from charon.providers.model_registry import load_registry, save_registry
                     reg = load_registry(common.STATE_DIR)
                     reg['shade_model_mode'] = 'fixed'
                     # Parse provider/model format
@@ -1457,7 +1457,7 @@ class CommandsMixin:
                 return
             if command.startswith('/setup shade-url '):
                 url = command[17:].strip()
-                from model_registry import load_registry, save_registry
+                from charon.providers.model_registry import load_registry, save_registry
                 reg = load_registry(common.STATE_DIR)
                 reg['shade_base_url'] = url
                 save_registry(common.STATE_DIR, reg)
@@ -1465,7 +1465,7 @@ class CommandsMixin:
                 return
             if command.startswith('/setup shade-key '):
                 key = command[17:].strip()
-                from model_registry import load_registry, save_registry
+                from charon.providers.model_registry import load_registry, save_registry
                 reg = load_registry(common.STATE_DIR)
                 reg['shade_api_key'] = key
                 save_registry(common.STATE_DIR, reg)
@@ -1497,7 +1497,7 @@ class CommandsMixin:
                     lines.append(f'Provider: {onboarding.get("provider", "none")}')
 
                     try:
-                        from model_registry import load_registry
+                        from charon.providers.model_registry import load_registry
                         reg = load_registry(common.STATE_DIR)
                         shade_model = reg.get('shade_model') or '(same as main)'
                         lines.append(f'Shade model: {shade_model}')
@@ -1528,7 +1528,7 @@ class CommandsMixin:
 
                     # Shade model
                     try:
-                        from model_registry import load_registry
+                        from charon.providers.model_registry import load_registry
                         reg = load_registry(common.STATE_DIR)
                         shade_mode = reg.get('shade_model_mode', 'auto')
                         shade_model = reg.get('shade_model') or '(same as main)'
@@ -1545,7 +1545,7 @@ class CommandsMixin:
 
                     # Autonomous mode
                     try:
-                        from autonomous import load_autonomous_config
+                        from charon.agents.autonomous import load_autonomous_config
                         auto = load_autonomous_config(common.STATE_DIR)
                         lines.append(f'Autonomous mode: {"ON" if auto.get("enabled") else "OFF"}')
                         tb = auto.get('time_budget_minutes')
@@ -1557,7 +1557,7 @@ class CommandsMixin:
 
                     # Consolidation
                     try:
-                        from consolidation import load_config
+                        from charon.memory.consolidation import load_config
                         con = load_config(common.STATE_DIR)
                         lines.append(f'Consolidation: {"on" if con.get("enabled") else "off"}')
                         lines.append(f'Consolidation model: {con.get("model_tier", "fast")}')
@@ -1568,7 +1568,7 @@ class CommandsMixin:
 
                     # Approval
                     try:
-                        from tool_approval import get_approval_status
+                        from charon.infra.tool_approval import get_approval_status
                         status = get_approval_status(self._active_agent_id or 'default')
                         skip = status.get('skip_all', False)
                         approved = status.get('session_approved', [])
@@ -1581,7 +1581,7 @@ class CommandsMixin:
 
                     # Agent
                     try:
-                        from agent_lifecycle import list_agents
+                        from charon.agents.agent_lifecycle import list_agents
                         agents = [a for a in list_agents() if a.get('role') == 'charon']
                         lines.append(f'Agents: {len(agents)}')
                         for a in agents[:5]:
@@ -1591,11 +1591,11 @@ class CommandsMixin:
                     lines.append('')
 
                     # Tools
-                    from tools import ALL_TOOL_DEFS
+                    from charon.tools import ALL_TOOL_DEFS
                     built_in = [t['name'] for t in ALL_TOOL_DEFS]
                     lines.append(f'Tools ({len(built_in)}): {", ".join(built_in)}')
                     try:
-                        from tools.dynamic_loader import list_dynamic_tools
+                        from charon.tools.dynamic_loader import list_dynamic_tools
                         dynamic = list_dynamic_tools()
                         if dynamic:
                             lines.append(f'Dynamic tools ({len(dynamic)}): {", ".join(t["name"] for t in dynamic)}')
@@ -1608,7 +1608,7 @@ class CommandsMixin:
                 return
             if command == '/approve' or command.startswith('/approve '):
                 try:
-                    from tool_approval import approve_tool_for_session, approve_for_session, get_approval_status
+                    from charon.infra.tool_approval import approve_tool_for_session, approve_for_session, get_approval_status
                     arg = command[9:].strip() if command.startswith('/approve ') else ''
                     # Approve for all possible session IDs to avoid mismatch
                     session_ids = set()
@@ -1684,7 +1684,7 @@ class CommandsMixin:
                 return
             if command == '/shades' or command == '/shade stats':
                 try:
-                    from shade_stats import get_shade_stats, format_stats
+                    from charon.shade.shade_stats import get_shade_stats, format_stats
                     stats = get_shade_stats(common.STATE_DIR)
                     if stats:
                         common.emit({'type': 'status', 'message': format_stats(stats), 'request_id': request_id})
@@ -1695,8 +1695,8 @@ class CommandsMixin:
                 return
             if command == '/specialist' or command.startswith('/specialist '):
                 try:
-                    import specialists as specialists_mod
-                    import agent_lifecycle as lifecycle_mod
+                    from charon.agents import specialists as specialists_mod
+                    from charon.agents import agent_lifecycle as lifecycle_mod
                     rest = command[len('/specialist'):].strip()
                     parts = rest.split(None, 2)
                     if not parts or parts[0] == 'list':
@@ -1740,7 +1740,7 @@ class CommandsMixin:
             if command == '/batch' or command.startswith('/batch '):
                 batch_id = command[7:].strip() if command.startswith('/batch ') else ''
                 try:
-                    from batch_orchestrator import get_batch, list_batches, summarize_batch
+                    from charon.automation.batch_orchestrator import get_batch, list_batches, summarize_batch
                     if batch_id:
                         batch = get_batch(common.STATE_DIR, batch_id)
                         if batch:
@@ -1769,12 +1769,12 @@ class CommandsMixin:
                     common.emit({'type': 'error', 'error': str(e), 'request_id': request_id})
                 return
             if command == '/tools' or command == '/tools list':
-                from tools import ALL_TOOL_DEFS
+                from charon.tools import ALL_TOOL_DEFS
                 lines = ['Built-in tools:']
                 for t in ALL_TOOL_DEFS:
                     lines.append(f'  {t["name"]}: {t["description"][:60]}')
                 try:
-                    from tools.dynamic_loader import list_dynamic_tools, get_load_errors
+                    from charon.tools.dynamic_loader import list_dynamic_tools, get_load_errors
                     dynamic = list_dynamic_tools()
                     if dynamic:
                         lines.append('\nDynamic tools:')
@@ -1792,7 +1792,7 @@ class CommandsMixin:
                 return
             if command == '/tools reload':
                 try:
-                    from tools.dynamic_loader import load_dynamic_tools
+                    from charon.tools.dynamic_loader import load_dynamic_tools
                     onboarding = common._load_json(common.STATE_DIR / 'onboarding.json', {})
                     project = str(onboarding.get('project') or str(common.ROOT)).strip()
                     defs, executors, errors = load_dynamic_tools(common.STATE_DIR, Path(project))
@@ -1803,7 +1803,7 @@ class CommandsMixin:
                             msg += f'\n  {e["error"]}'
                     # Refresh engine tools
                     if self.engine:
-                        from tools.dynamic_loader import get_all_tool_defs
+                        from charon.tools.dynamic_loader import get_all_tool_defs
                         self.engine.tools = get_all_tool_defs(common.STATE_DIR, Path(project))
                     common.emit({'type': 'status', 'message': msg, 'request_id': request_id})
                 except Exception as e:
@@ -1811,7 +1811,7 @@ class CommandsMixin:
                 return
             if command == '/autonomous' or command == '/autonomous status':
                 try:
-                    from autonomous import load_autonomous_config, get_proposed_goals, get_goals_by_status
+                    from charon.agents.autonomous import load_autonomous_config, get_proposed_goals, get_goals_by_status
                     config = load_autonomous_config(common.STATE_DIR)
                     onboarding = common._load_json(common.STATE_DIR / 'onboarding.json', {})
                     project = str(onboarding.get('project') or str(common.ROOT)).strip()
@@ -1830,14 +1830,14 @@ class CommandsMixin:
                     common.emit({'type': 'error', 'error': str(e), 'request_id': request_id})
                 return
             if command == '/autonomous on':
-                from autonomous import load_autonomous_config, save_autonomous_config
+                from charon.agents.autonomous import load_autonomous_config, save_autonomous_config
                 config = load_autonomous_config(common.STATE_DIR)
                 config['enabled'] = True
                 save_autonomous_config(common.STATE_DIR, config)
                 common.emit({'type': 'status', 'message': 'Autonomous mode ON. Agent will self-assign from confirmed goals.', 'request_id': request_id})
                 return
             if command == '/autonomous off':
-                from autonomous import load_autonomous_config, save_autonomous_config
+                from charon.agents.autonomous import load_autonomous_config, save_autonomous_config
                 config = load_autonomous_config(common.STATE_DIR)
                 config['enabled'] = False
                 save_autonomous_config(common.STATE_DIR, config)
@@ -1846,7 +1846,7 @@ class CommandsMixin:
             if command.startswith('/autonomous time '):
                 try:
                     minutes = int(command[16:].strip())
-                    from autonomous import load_autonomous_config, save_autonomous_config
+                    from charon.agents.autonomous import load_autonomous_config, save_autonomous_config
                     config = load_autonomous_config(common.STATE_DIR)
                     config['time_budget_minutes'] = minutes
                     save_autonomous_config(common.STATE_DIR, config)
@@ -1857,7 +1857,7 @@ class CommandsMixin:
             if command.startswith('/autonomous tokens '):
                 try:
                     tokens = int(command[18:].strip())
-                    from autonomous import load_autonomous_config, save_autonomous_config
+                    from charon.agents.autonomous import load_autonomous_config, save_autonomous_config
                     config = load_autonomous_config(common.STATE_DIR)
                     config['token_budget'] = tokens
                     save_autonomous_config(common.STATE_DIR, config)
@@ -1868,7 +1868,7 @@ class CommandsMixin:
             if command == '/confirm' or command.startswith('/confirm '):
                 goal_id = command[9:].strip() if command.startswith('/confirm ') else ''
                 try:
-                    from autonomous import confirm_goal, get_proposed_goals
+                    from charon.agents.autonomous import confirm_goal, get_proposed_goals
                     onboarding = common._load_json(common.STATE_DIR / 'onboarding.json', {})
                     project = str(onboarding.get('project') or str(common.ROOT)).strip()
                     if not goal_id:
@@ -1890,7 +1890,7 @@ class CommandsMixin:
             if command == '/reject' or command.startswith('/reject '):
                 goal_id = command[8:].strip() if command.startswith('/reject ') else ''
                 try:
-                    from autonomous import reject_goal, get_proposed_goals
+                    from charon.agents.autonomous import reject_goal, get_proposed_goals
                     onboarding = common._load_json(common.STATE_DIR / 'onboarding.json', {})
                     project = str(onboarding.get('project') or str(common.ROOT)).strip()
                     if not goal_id:
@@ -1981,8 +1981,8 @@ class CommandsMixin:
 
                 if rest == 'status' or not rest:
                     try:
-                        from fleet_registry import load_fleet
-                        from fleet_sync import get_cached_fleet_status
+                        from charon.fleet.fleet_registry import load_fleet
+                        from charon.fleet.fleet_sync import get_cached_fleet_status
                         fleet = load_fleet()
                         cache = get_cached_fleet_status()
                         servers = fleet.get('servers', [])
@@ -2025,7 +2025,7 @@ class CommandsMixin:
                 rest = command[8:].strip() if command.startswith('/voyage ') else ''
 
                 if rest == 'list' or not rest:
-                    from harbor import list_voyages
+                    from charon.fleet.harbor import list_voyages
                     voyages = list_voyages(common.STATE_DIR)
                     if not voyages:
                         common.emit({'type': 'status', 'message': 'No voyages. Use /voyage dispatch <server> <agent> <instruction>', 'request_id': request_id})
@@ -2041,7 +2041,7 @@ class CommandsMixin:
 
                 if rest.startswith('status '):
                     vid = rest[7:].strip()
-                    from harbor import get_voyage_status
+                    from charon.fleet.harbor import get_voyage_status
                     v = get_voyage_status(vid, common.STATE_DIR)
                     if not v:
                         common.emit({'type': 'error', 'error': f'Voyage not found: {vid}', 'request_id': request_id})
@@ -2070,7 +2070,7 @@ class CommandsMixin:
 
                     import threading
                     def _run_dispatch():
-                        from harbor import dispatch_voyage
+                        from charon.fleet.harbor import dispatch_voyage
                         vid = dispatch_voyage(
                             instruction=instruction,
                             server_id=server_id,
@@ -2093,7 +2093,7 @@ class CommandsMixin:
                 rest = command[16:].strip() if command.startswith('/harvest_souls ') else ''
 
                 if rest == 'status':
-                    from assimilation import load_last_scan
+                    from charon.memory.assimilation import load_last_scan
                     scan = load_last_scan(common.STATE_DIR)
                     if not scan:
                         common.emit({'type': 'status', 'message': 'No scan found. Run /harvest_souls to scan agent repos.', 'request_id': request_id})
@@ -2121,7 +2121,7 @@ class CommandsMixin:
                     import threading
                     def _run_gap_eval():
                         try:
-                            from assimilation import run_gap_evaluation_from_saved_scan
+                            from charon.memory.assimilation import run_gap_evaluation_from_saved_scan
                             clusters = run_gap_evaluation_from_saved_scan(
                                 state_dir=common.STATE_DIR,
                                 docs_dir=common.ROOT / 'docs',
@@ -2179,7 +2179,7 @@ class CommandsMixin:
                 import threading
                 def _run_assimilation():
                     try:
-                        from assimilation import run_full_assimilation
+                        from charon.memory.assimilation import run_full_assimilation
                         result = run_full_assimilation(
                             state_dir=common.STATE_DIR,
                             docs_dir=common.ROOT / 'docs',

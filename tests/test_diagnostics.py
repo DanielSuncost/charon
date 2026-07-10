@@ -1,6 +1,6 @@
 """Tests for the TUI-safe diagnostics helper."""
 
-import diagnostics
+from charon.infra import diagnostics
 
 
 def test_record_and_read_roundtrip(tmp_path):

@@ -1,7 +1,7 @@
 """Tests for judge_engine.py — iterative optimization loops with scoring."""
 import pytest
 
-from judge_engine import (
+from charon.judge.judge_engine import (
     JudgeLoopConfig, Iteration, QuantitativeJudge, CorrectnessJudge, AestheticJudge, CompositeJudge,
     create_judge, check_convergence, is_improvement,
     build_iteration_prompt, format_status,
@@ -493,7 +493,7 @@ class TestIteration:
         assert config.consecutive_failures == 1
 
     def test_iteration_with_checkpoint(self, tmp_path):
-        from checkpoint_manager import CheckpointManager
+        from charon.automation.checkpoint_manager import CheckpointManager
 
         work_dir = tmp_path / 'work'
         work_dir.mkdir()

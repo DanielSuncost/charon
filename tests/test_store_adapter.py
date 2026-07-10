@@ -1,7 +1,7 @@
 """Tests for the store adapter — singleton DB, auto-migration, and module wiring."""
 import json
 
-import store_adapter  # noqa: E402
+from charon.infra import store_adapter  # noqa: E402
 
 
 def setup_function():

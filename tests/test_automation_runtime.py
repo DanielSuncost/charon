@@ -2,8 +2,8 @@ import time
 
 from datetime import datetime, timezone
 
-from automation_runtime import create_automation, get_automation_state, pause_automation, resume_automation, request_stop_automation, compute_next_run, cron_matches_dt
-from automation_scheduler import run_due_automations_once
+from charon.automation.automation_runtime import create_automation, get_automation_state, pause_automation, resume_automation, request_stop_automation, compute_next_run, cron_matches_dt
+from charon.automation.automation_scheduler import run_due_automations_once
 
 
 def test_automation_lifecycle_and_scheduler_run(tmp_path, monkeypatch):
@@ -24,7 +24,7 @@ def test_automation_lifecycle_and_scheduler_run(tmp_path, monkeypatch):
     assert doc['status'] == 'active'
     assert doc['kind'] == 'http_check'
 
-    import automation_scheduler
+    from charon.automation import automation_scheduler
     monkeypatch.setattr(automation_scheduler, '_http_check', lambda action: (True, 'HTTP 200 from example', {'url': action['url']}, ''))
 
     started = run_due_automations_once(state_dir, now_ts=time.time() + 5)
@@ -68,7 +68,7 @@ def test_browser_check_automation(tmp_path, monkeypatch):
         action={'url': 'https://example.com', 'expected_text': 'Example Domain', 'screenshot_on_failure': True},
     )
 
-    import tools.browser_tool as browser_tool
+    import charon.tools.browser_tool as browser_tool
 
     class FakeResult:
         def __init__(self, content, is_error=False):
@@ -115,7 +115,7 @@ def test_continuous_automation_runs_multiple_iterations(tmp_path, monkeypatch):
         action={'url': 'https://example.com'},
     )
 
-    import automation_scheduler
+    from charon.automation import automation_scheduler
     monkeypatch.setattr(automation_scheduler, '_http_check', lambda action: (True, 'loop ok', {'url': action['url']}, ''))
 
     started = run_due_automations_once(state_dir, now_ts=time.time())

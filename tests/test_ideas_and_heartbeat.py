@@ -1,17 +1,12 @@
 """Tests for idea capture, goal listing, and heartbeat."""
-import importlib.util
 import json
 import sys
 import subprocess
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from charon.agents import goal_runtime
 
-_spec = importlib.util.spec_from_file_location(
-    'goal_runtime_ideas', ROOT / 'apps' / 'core-daemon' / 'goal_runtime.py')
-goal_runtime = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = goal_runtime
-_spec.loader.exec_module(goal_runtime)
+ROOT = Path(__file__).resolve().parents[1]
 
 
 # ── Idea capture ────────────────────────────────────────────────────
@@ -120,7 +115,7 @@ def test_heartbeat_emitted_in_loop(tmp_path):
     state_dir = tmp_path / 'state'
     stop_file = tmp_path / 'STOP'
 
-    SCRIPT = ROOT / 'apps' / 'core-daemon' / 'charon_loop.py'
+    SCRIPT = ROOT / 'src' / 'charon' / 'charon_loop.py'
     env = {
         'CHARON_HEARTBEAT_INTERVAL': '2',  # emit every 2 cycles
         'CHARON_STDOUT_EVENTS': '0',

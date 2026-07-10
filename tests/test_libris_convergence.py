@@ -1,16 +1,9 @@
 """Libris convergence: judge scores are 0-10 but thresholds are 0-1 (normalize),
 and weak citation_quality must trigger a revision even when overall looks fine."""
-import importlib.util
-import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
 
-spec = importlib.util.spec_from_file_location(
-    'libris_convergence', ROOT / 'apps' / 'core-daemon' / 'libris_convergence.py')
-conv = importlib.util.module_from_spec(spec)
-sys.modules['libris_convergence'] = conv
-spec.loader.exec_module(conv)
+from charon.libris import libris_convergence as conv
 
 
 def test_norm01_handles_both_scales():

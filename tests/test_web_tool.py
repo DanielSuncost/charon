@@ -1,7 +1,7 @@
 """Tests for the Web search and extraction tool."""
 
-from tools import ToolContext
-from tools.web_tool import execute_web, html_to_text, _search_ddg
+from charon.tools import ToolContext
+from charon.tools.web_tool import execute_web, html_to_text, _search_ddg
 
 
 # ── HTML to text ────────────────────────────────────────────────────

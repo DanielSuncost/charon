@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-from memory_bridge import import_hermes, hermes_available, _parse_section_entries
+from charon.memory.memory_bridge import import_hermes, hermes_available, _parse_section_entries
 
 
 class TestParseEntries:
@@ -44,7 +44,7 @@ class TestHermesImport:
         assert stats["user_entries"] == 0
 
         # Verify memories are searchable
-        from memory_engine import MemoryEngine
+        from charon.memory.memory_engine import MemoryEngine
         engine = MemoryEngine(charon_dir)
         result = engine.recall("Rust framework")
         assert len(result.memories) > 0
@@ -66,7 +66,7 @@ class TestHermesImport:
         assert stats["user_entries"] == 2
 
         # User entries should be static
-        from memory_engine import MemoryEngine
+        from charon.memory.memory_engine import MemoryEngine
         engine = MemoryEngine(charon_dir)
         result = engine.recall("editor preferences", include_profile=True)
         assert len(result.profile_static) > 0

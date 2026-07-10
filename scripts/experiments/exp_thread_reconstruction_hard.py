@@ -30,7 +30,7 @@ that. Metrics per thread query (thread(q, limit=10)):
 A perfect score here is a red flag, not a win (house rule); the point of this
 benchmark is a real, lower number than the moderate one.
 
-  PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
+  PYTHONPATH=src CHARON_EMBED_BACKEND=local \
     python scripts/experiments/exp_thread_reconstruction_hard.py --seeds 3
 """
 import argparse
@@ -42,11 +42,11 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from memory_engine import MemoryEngine  # noqa: E402
-import episodic as ep  # noqa: E402
-import threads as th  # noqa: E402
+from charon.memory.memory_engine import MemoryEngine  # noqa: E402
+from charon.memory import episodic as ep  # noqa: E402
+from charon.agents import threads as th  # noqa: E402
 
 # 6 families x 2 near-duplicate siblings. Each sibling: a distinct decision +
 # rationale, phrasing for the 5 gold events, and a paraphrase query that never

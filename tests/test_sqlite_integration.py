@@ -3,35 +3,17 @@
 These tests run the actual runtime functions and then check that state
 landed in SQLite, not just JSON files.
 """
-import importlib.util
-import sys
-from pathlib import Path
-
-import store_adapter
-from libs.store import (
+from charon.infra import store_adapter
+from charon.infra.store import (
     task_get, boundary_list, contract_list, shade_event_list,
     agent_memory_get, agent_inbox_list, agent_profile_get,
     goal_project_get, goal_session_get, goal_context_packet_get,
 )
-
-ROOT = Path(__file__).resolve().parents[1]
-DAEMON = ROOT / 'apps' / 'core-daemon'
-
-
-def _load(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-agent_lifecycle = _load('agent_lifecycle_integ', DAEMON / 'agent_lifecycle.py')
-agent_runtime = _load('agent_runtime_integ', DAEMON / 'agent_runtime.py')
-conversation_runtime = _load('conversation_runtime_integ', DAEMON / 'conversation_runtime.py')
-shade_orchestrator = _load('shade_orchestrator_integ', DAEMON / 'shade_orchestrator.py')
-boundary_runtime = _load('boundary_runtime_integ', DAEMON / 'boundary_runtime.py')
-goal_runtime = _load('goal_runtime_integ', DAEMON / 'goal_runtime.py')
+from charon.agents import agent_runtime
+from charon.conversation import conversation_runtime
+from charon.shade import shade_orchestrator
+from charon.agents import boundary_runtime
+from charon.agents import goal_runtime
 
 
 def setup_function():
@@ -151,7 +133,7 @@ def test_boundary_runtime_syncs_to_sqlite(tmp_path):
         reason='agreed',
     )
 
-    from libs.store import boundary_get
+    from charon.infra.store import boundary_get
     updated = boundary_get(db, proposal['id'])
     assert updated['status'] == 'accepted'
 

@@ -1,8 +1,8 @@
 """Tests for the task ledger."""
 import json
 
-import store_adapter
-from task_ledger import get_agent_ledger, get_agent_ledger_summary, format_ledger_text
+from charon.infra import store_adapter
+from charon.agents.task_ledger import get_agent_ledger, get_agent_ledger_summary, format_ledger_text
 
 
 def setup_function():
@@ -12,7 +12,7 @@ def setup_function():
 def test_ledger_from_tasks(tmp_path):
     state_dir = tmp_path / 'state'
     db = store_adapter.get_db(state_dir)
-    from libs.store import task_insert
+    from charon.infra.store import task_insert
 
     task_insert(db, {
         'id': 'task-1', 'title': 'Fix auth bug', 'instruction': 'fix it',
@@ -65,7 +65,7 @@ def test_ledger_from_working_memory(tmp_path):
 def test_ledger_deduplicates(tmp_path):
     state_dir = tmp_path / 'state'
     db = store_adapter.get_db(state_dir)
-    from libs.store import task_insert, agent_memory_upsert
+    from charon.infra.store import task_insert, agent_memory_upsert
 
     task_insert(db, {
         'id': 'task-dup', 'title': 'Do thing', 'status': 'completed',
@@ -85,7 +85,7 @@ def test_ledger_deduplicates(tmp_path):
 def test_ledger_summary_stats(tmp_path):
     state_dir = tmp_path / 'state'
     db = store_adapter.get_db(state_dir)
-    from libs.store import task_insert
+    from charon.infra.store import task_insert
 
     for i in range(5):
         task_insert(db, {
@@ -130,7 +130,7 @@ def test_format_ledger_text(tmp_path):
 def test_exclude_pending(tmp_path):
     state_dir = tmp_path / 'state'
     db = store_adapter.get_db(state_dir)
-    from libs.store import task_insert
+    from charon.infra.store import task_insert
 
     task_insert(db, {
         'id': 'done', 'title': 'Done', 'status': 'completed',

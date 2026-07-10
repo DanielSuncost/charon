@@ -1,14 +1,6 @@
-from pathlib import Path
-import importlib.util
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-MOD_PATH = ROOT / 'apps' / 'core-daemon' / 'charon_auth.py'
 
-spec = importlib.util.spec_from_file_location('charon_auth_test', MOD_PATH)
-charon_auth = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = charon_auth
-spec.loader.exec_module(charon_auth)
+from charon.providers import charon_auth
 
 
 def test_anthropic_oauth_url_shape_and_local_callback_flow(monkeypatch, tmp_path):

@@ -6,12 +6,12 @@ import sqlite3
 
 import pytest
 
-from context_store import ContextStore
-from context_compactor import (
+from charon.context.context_store import ContextStore
+from charon.context.context_compactor import (
     ContextCompactor, CompactionConfig, _build_leaf_prompt, _build_d1_prompt, _build_d2_prompt,
     _build_d3plus_prompt, _deterministic_fallback,
 )
-from providers import Message, ModelInfo, StreamDelta
+from charon.providers import Message, ModelInfo, StreamDelta
 
 
 # ── Fixtures ────────────────────────────────────────────────────────

@@ -16,12 +16,12 @@ import asyncio
 import sys
 from pathlib import Path
 
-# Add core-daemon to path
+# Add src/ (charon package) to path
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
+sys.path.insert(0, str(ROOT / 'src'))
 
-from providers import ModelInfo, get_provider  # noqa: E402 — import requires sys.path setup above
-from conversation_engine import ConversationEngine  # noqa: E402 — import requires sys.path setup above
+from charon.providers import ModelInfo, get_provider  # noqa: E402 — import requires sys.path setup above
+from charon.conversation.conversation_engine import ConversationEngine  # noqa: E402 — import requires sys.path setup above
 
 
 # ANSI colors

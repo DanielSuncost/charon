@@ -8,7 +8,7 @@ same topic (no answer). Dense embeddings have a verbosity/semantic bias and rank
 the fluent-but-answerless passage above the terse-but-correct factoid; FTS pins
 the exact key/value. Each query has one gold factoid among fluent distractors.
 
-  PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
+  PYTHONPATH=src CHARON_EMBED_BACKEND=local \
     python scripts/experiments/exp_fts_codememory.py
 """
 import json
@@ -18,9 +18,9 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from memory_engine import MemoryEngine, embed_one  # noqa: E402
+from charon.memory.memory_engine import MemoryEngine, embed_one  # noqa: E402
 
 # Each cluster: (query, terse gold factoid, [fluent answerless distractors]).
 CLUSTERS = [

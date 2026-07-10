@@ -1,6 +1,6 @@
 """Tests for Charon agent tools."""
 
-from tools import (
+from charon.tools import (
     execute_read, execute_write, execute_edit, execute_bash,
     execute_tool, ToolContext, truncate_output,
     ALL_TOOL_DEFS, TOOL_EXECUTORS,
