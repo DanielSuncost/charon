@@ -16,7 +16,7 @@ The point isn't a close race — it's that flat retrieval *structurally cannot*
 serve time queries (no content overlap with "last Tuesday"), so this measures a
 capability gap, not a tuning delta.
 
-  PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
+  PYTHONPATH=src CHARON_EMBED_BACKEND=local \
     python scripts/experiments/exp_episodic_queries.py --seeds 3
 """
 import argparse
@@ -29,10 +29,10 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from memory_engine import MemoryEngine  # noqa: E402
-import episodic as ep  # noqa: E402
+from charon.memory.memory_engine import MemoryEngine  # noqa: E402
+from charon.memory import episodic as ep  # noqa: E402
 
 # Realistic developer work-session content. Each topic recurs across months, so a
 # time filter genuinely matters for topic-in-time queries.

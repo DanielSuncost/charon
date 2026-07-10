@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from tools import ToolContext
-from tools.recall_tool import execute_recall
-from memory_indexer import index_conversation_sync
+from charon.tools import ToolContext
+from charon.tools.recall_tool import execute_recall
+from charon.memory.memory_indexer import index_conversation_sync
 
 
 def _make_ctx(tmp_path, agent_id="test-agent"):
@@ -27,7 +27,7 @@ def seeded_ctx(tmp_path):
     """Context with some memories already indexed."""
     ctx = _make_ctx(tmp_path)
 
-    from memory_engine import MemoryEngine
+    from charon.memory.memory_engine import MemoryEngine
     engine = MemoryEngine(tmp_path)
     engine.add("User graduated with a degree in Business Administration", is_static=True)
     engine.add("User's daily commute is 45 minutes each way")
@@ -89,7 +89,7 @@ class TestMemoryIndexer:
         assert count >= 2  # at least the user turns (>30 chars)
 
         # Verify we can recall the indexed content
-        from memory_engine import MemoryEngine
+        from charon.memory.memory_engine import MemoryEngine
         engine = MemoryEngine(tmp_path)
         result = engine.recall('book club meeting')
         assert len(result.memories) > 0

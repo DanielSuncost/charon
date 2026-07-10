@@ -1,4 +1,4 @@
-from devop_agents import infer_candidate_workstreams
+from charon.devop.devop_agents import infer_candidate_workstreams
 
 
 def test_infer_candidate_workstreams_for_web_app():

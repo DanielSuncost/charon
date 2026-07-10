@@ -7,8 +7,8 @@ import sys
 from backend import common
 from backend.settings_io import _full_messages_from_store
 from backend.textutils import _sanitize_saved_messages
-from conversation_engine import ConversationEngine
-from provider_bridge import create_provider_and_model, resolve_provider_config
+from charon.conversation.conversation_engine import ConversationEngine
+from charon.providers.provider_bridge import create_provider_and_model, resolve_provider_config
 
 
 class ProvidersMixin:
@@ -20,7 +20,7 @@ class ProvidersMixin:
         """
         # Register approval callback so tool calls can ask for permission
         try:
-            from tools import set_approval_callback
+            from charon.tools import set_approval_callback
             def _emit_approval(tool_name, params_summary, risk, reason):
                 common.emit({
                     'type': 'approval_request',
@@ -58,13 +58,13 @@ class ProvidersMixin:
         # CHARON_AGENT / --agent.
         system_prompt = ''
         try:
-            from system_prompt_builder import build_system_prompt as build_layered_prompt
+            from charon.context.system_prompt_builder import build_system_prompt as build_layered_prompt
             agent_info = {'id': '', 'name': 'Charon', 'role': 'charon', 'goal': '', 'project': project}
             requested_agent = os.environ.get('CHARON_AGENT', '').strip()
             self._bound_agent_id = None
             if requested_agent:
                 try:
-                    from agent_lifecycle import list_agents
+                    from charon.agents.agent_lifecycle import list_agents
                     for a in list_agents():
                         if a.get('id') == requested_agent or a.get('name') == requested_agent:
                             agent_info = a
@@ -100,7 +100,7 @@ class ProvidersMixin:
 
         # Apply provider handoff transfer if present.
         try:
-            from context_transfer import load_pending_transfer, apply_transfer_to_engine, clear_pending_transfer, record_transfer_event
+            from charon.context.context_transfer import load_pending_transfer, apply_transfer_to_engine, clear_pending_transfer, record_transfer_event
             pending_transfer = load_pending_transfer(common.STATE_DIR)
             if pending_transfer:
                 apply_transfer_to_engine(self.engine, pending_transfer)
@@ -134,11 +134,11 @@ class ProvidersMixin:
                 if store_msgs:
                     if self.engine:
                         self.engine.messages = list(store_msgs)
-                    from conversation_store import message_to_dict
+                    from charon.conversation.conversation_store import message_to_dict
                     saved = [message_to_dict(m) for m in store_msgs]
                 else:
                     # Fall back to JSONL
-                    from conversation_store import load_conversation, dict_to_message
+                    from charon.conversation.conversation_store import load_conversation, dict_to_message
                     saved = _sanitize_saved_messages(load_conversation(common.STATE_DIR, aid))
                     if saved and self.engine:
                         msgs = [dict_to_message(m) for m in saved]
@@ -189,7 +189,7 @@ class ProvidersMixin:
 
     def _has_transferable_context(self) -> bool:
         try:
-            from context_transfer import session_has_transferable_context
+            from charon.context.context_transfer import session_has_transferable_context
             return bool(self.engine and session_has_transferable_context(self.engine.messages))
         except Exception:
             return bool(self.engine and len(self.engine.messages) >= 4)
@@ -231,7 +231,7 @@ class ProvidersMixin:
         bundle = None
         if self.engine and self._active_agent_id:
             try:
-                from context_transfer import create_transfer_bundle, record_pending_transfer, record_transfer_event
+                from charon.context.context_transfer import create_transfer_bundle, record_pending_transfer, record_transfer_event
                 bundle = create_transfer_bundle(
                     state_dir=common.STATE_DIR,
                     session_id=self._active_agent_id,
@@ -275,7 +275,7 @@ class ProvidersMixin:
             'request_id': request_id,
         })
         try:
-            from context_transfer import clear_pending_transfer, record_transfer_event
+            from charon.context.context_transfer import clear_pending_transfer, record_transfer_event
             clear_pending_transfer(common.STATE_DIR)
             record_transfer_event(common.STATE_DIR, {
                 'ts': __import__('time').strftime('%Y-%m-%dT%H:%M:%SZ', __import__('time').gmtime()),

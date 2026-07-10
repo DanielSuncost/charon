@@ -11,7 +11,7 @@ class HarvestMixin:
 
     def _harvest_souls_load_findings(self) -> list[dict]:
         """Load and sort the new abilities from the last scan."""
-        from assimilation import PRIORITY_ORDER
+        from charon.memory.assimilation import PRIORITY_ORDER
         abilities_dir = common.STATE_DIR / 'assimilation' / 'abilities'
         if not abilities_dir.is_dir():
             return []
@@ -82,7 +82,7 @@ class HarvestMixin:
     def _harvest_souls_load_gap_review(self) -> list[dict]:
         """Load capability-level gap review clusters."""
         try:
-            from assimilation import load_gap_review, PRIORITY_ORDER
+            from charon.memory.assimilation import load_gap_review, PRIORITY_ORDER
             clusters = load_gap_review(common.STATE_DIR)
             clusters.sort(key=lambda c: (PRIORITY_ORDER.get(c.get('priority', 'low'), 3), -int(c.get('value', 0) or 0)))
             return clusters
@@ -277,9 +277,9 @@ class HarvestMixin:
             common.emit({'type': 'status', 'message': '  Onboarding path:', 'request_id': request_id})
             common.emit({'type': 'status', 'message': f'    1. Study reference: ~/{source}/{a.get("source_file", "tools/")}'
                   if a.get('source_file') else f'    1. Study reference in {source} repo', 'request_id': request_id})
-            common.emit({'type': 'status', 'message': f'    2. Create apps/core-daemon/tools/{name.replace("-", "_")}_tool.py', 'request_id': request_id})
+            common.emit({'type': 'status', 'message': f'    2. Create src/charon/tools/{name.replace("-", "_")}_tool.py', 'request_id': request_id})
             common.emit({'type': 'status', 'message': f'    3. Define {name.upper()}_TOOL_DEF schema + execute_{name.replace("-", "_")}() handler', 'request_id': request_id})
-            common.emit({'type': 'status', 'message': '    4. Register in apps/core-daemon/tools/__init__.py (ALL_TOOL_DEFS + TOOL_EXECUTORS)', 'request_id': request_id})
+            common.emit({'type': 'status', 'message': '    4. Register in src/charon/tools/__init__.py (ALL_TOOL_DEFS + TOOL_EXECUTORS)', 'request_id': request_id})
             common.emit({'type': 'status', 'message': '    5. Test: /tools should list the new tool', 'request_id': request_id})
         elif atype == 'skill':
             common.emit({'type': 'status', 'message': '  Onboarding path:', 'request_id': request_id})
@@ -387,7 +387,7 @@ class HarvestMixin:
             common.emit({'type': 'status', 'message': 'No abilities adopted yet.', 'request_id': request_id})
             return
 
-        from assimilation import PRIORITY_ORDER
+        from charon.memory.assimilation import PRIORITY_ORDER
         adopted.sort(key=lambda a: PRIORITY_ORDER.get(a.get('priority', 'low'), 3))
 
         common.emit({'type': 'status', 'message': '', 'request_id': request_id})

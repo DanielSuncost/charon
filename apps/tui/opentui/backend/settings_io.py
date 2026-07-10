@@ -49,9 +49,9 @@ def _full_messages_from_store(agent_id: str) -> list | None:
     history (not compacted engine.messages).
     """
     try:
-        from context_store import ContextStore
-        from store_adapter import get_db
-        from providers import Message as _Msg
+        from charon.context.context_store import ContextStore
+        from charon.infra.store_adapter import get_db
+        from charon.providers import Message as _Msg
         db = get_db(common.STATE_DIR)
         stored = ContextStore.get_messages_for_agent(db, agent_id, limit=10000)
         if not stored:

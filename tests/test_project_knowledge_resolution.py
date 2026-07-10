@@ -1,21 +1,6 @@
-import importlib.util
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-DAEMON = ROOT / 'apps' / 'core-daemon'
-
-def _load(name, path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-project_registry = _load('project_registry_pk_test', DAEMON / 'project_registry.py')
-system_prompt_builder = _load('system_prompt_builder_pk_test', DAEMON / 'system_prompt_builder.py')
-context_transfer = _load('context_transfer_pk_test', DAEMON / 'context_transfer.py')
+from charon.infra import project_registry
+from charon.context import system_prompt_builder
+from charon.context import context_transfer
 
 
 def test_system_prompt_builder_reads_canonical_project_knowledge(tmp_path):

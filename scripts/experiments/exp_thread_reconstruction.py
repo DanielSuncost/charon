@@ -14,7 +14,7 @@ against ground truth derived from the construction:
 
 No LLM judge, no floored baseline, no legibility confound — gold is structural.
 
-  PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
+  PYTHONPATH=src CHARON_EMBED_BACKEND=local \
     python scripts/experiments/exp_thread_reconstruction.py --seeds 3
 """
 import argparse
@@ -26,11 +26,11 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from memory_engine import MemoryEngine  # noqa: E402
-import episodic as ep  # noqa: E402
-import threads as th  # noqa: E402
+from charon.memory.memory_engine import MemoryEngine  # noqa: E402
+from charon.memory import episodic as ep  # noqa: E402
+from charon.agents import threads as th  # noqa: E402
 
 TOPICS = {
     "authentication": ("JWT", "stateless tokens scale across the fleet"),

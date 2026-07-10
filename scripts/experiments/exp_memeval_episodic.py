@@ -13,7 +13,7 @@ condition so summaries never contaminate the baseline.
 Also tests recency-weighting on knowledge_update (the latest-value failure: stale
 and current both retrievable; does a recency bonus surface the current one?).
 
-  PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
+  PYTHONPATH=src CHARON_EMBED_BACKEND=local \
     python scripts/experiments/exp_memeval_episodic.py --seeds 3
 """
 import argparse
@@ -26,11 +26,11 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts" / "experiments"))
 
-from memory_engine import MemoryEngine  # noqa: E402
-import episodic as ep  # noqa: E402
+from charon.memory.memory_engine import MemoryEngine  # noqa: E402
+from charon.memory import episodic as ep  # noqa: E402
 from memeval_gen import Gen, PRESETS, validate  # noqa: E402
 
 KS = [1, 2, 3, 5]

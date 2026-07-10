@@ -5,7 +5,7 @@ A continuous metric (wall-clock, minimize) with no closed-form answer and a
 FROZEN correctness gate — so the loop must genuinely hill-climb over many ticks,
 banking each real speedup and rolling back regressions / wrong answers.
 
-  PYTHONPATH=apps/core-daemon CHARON_STATE_DIR=$PWD/.charon_state \
+  PYTHONPATH=src CHARON_STATE_DIR=$PWD/.charon_state \
     python scripts/run_judge_loop_opt_live.py
 """
 import sys
@@ -13,13 +13,13 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from judge_engine import (  # noqa: E402
+from charon.judge.judge_engine import (  # noqa: E402
     create_loop, create_judge, run_baseline, run_iteration, check_convergence,
 )
-from checkpoint_manager import CheckpointManager  # noqa: E402
-from judge_loop_driver import shade_implementer  # noqa: E402
+from charon.automation.checkpoint_manager import CheckpointManager  # noqa: E402
+from charon.judge.judge_loop_driver import shade_implementer  # noqa: E402
 
 SOLVER = '''import math
 

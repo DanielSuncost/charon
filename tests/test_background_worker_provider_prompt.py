@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-import worker_provider
+from charon.providers import worker_provider
 
 
 def _write_auth(state_dir: Path, *, codex: bool = False):

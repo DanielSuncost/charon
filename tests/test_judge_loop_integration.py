@@ -1,12 +1,12 @@
 """Integration test — full judge loop: create → baseline → iterate → converge."""
 
 import pytest
-from judge_engine import (
+from charon.judge.judge_engine import (
     create_loop, run_baseline, run_iteration, check_convergence,
     save_loop, load_loop, format_status,
     create_judge,
 )
-from checkpoint_manager import CheckpointManager
+from charon.automation.checkpoint_manager import CheckpointManager
 
 
 class TestFullQuantitativeLoop:
@@ -297,8 +297,8 @@ class TestToolIntegration:
     """Test the SpawnJudgeLoop tool creates loops correctly."""
 
     def test_tool_create(self, tmp_path):
-        from tools import ToolContext
-        from tools.judge_loop_tool import execute_judge_loop
+        from charon.tools import ToolContext
+        from charon.tools.judge_loop_tool import execute_judge_loop
 
         state_dir = tmp_path / 'state'
         state_dir.mkdir()
@@ -326,15 +326,15 @@ class TestToolIntegration:
         assert result.details and result.details.get('loop_id')
 
         # Verify persistence
-        from judge_engine import load_loop
+        from charon.judge.judge_engine import load_loop
         loop = load_loop(state_dir, result.details['loop_id'])
         assert loop.goal == 'optimize performance'
         assert loop.target_score == 50.0
         assert loop.max_iterations == 15
 
     def test_tool_status(self, tmp_path):
-        from tools import ToolContext
-        from tools.judge_loop_tool import execute_judge_loop
+        from charon.tools import ToolContext
+        from charon.tools.judge_loop_tool import execute_judge_loop
 
         state_dir = tmp_path / 'state'
         state_dir.mkdir()
@@ -358,8 +358,8 @@ class TestToolIntegration:
         assert 'test status' in status_result.content
 
     def test_tool_list(self, tmp_path):
-        from tools import ToolContext
-        from tools.judge_loop_tool import execute_judge_loop
+        from charon.tools import ToolContext
+        from charon.tools.judge_loop_tool import execute_judge_loop
 
         state_dir = tmp_path / 'state'
         state_dir.mkdir()
@@ -375,8 +375,8 @@ class TestToolIntegration:
         assert 'loop2' in result.content
 
     def test_tool_stop(self, tmp_path):
-        from tools import ToolContext
-        from tools.judge_loop_tool import execute_judge_loop
+        from charon.tools import ToolContext
+        from charon.tools.judge_loop_tool import execute_judge_loop
 
         state_dir = tmp_path / 'state'
         state_dir.mkdir()
@@ -394,7 +394,7 @@ class TestToolIntegration:
         assert not stop_result.is_error
         assert 'stopped' in stop_result.content.lower()
 
-        from judge_engine import load_loop
+        from charon.judge.judge_engine import load_loop
         loop = load_loop(state_dir, loop_id)
         assert loop.status == 'completed'
         assert loop.convergence.reason == 'user_stopped'

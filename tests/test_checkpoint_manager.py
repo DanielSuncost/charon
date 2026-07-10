@@ -1,7 +1,7 @@
 """Tests for checkpoint_manager.py — shadow git snapshots."""
 import pytest
 
-from checkpoint_manager import CheckpointManager
+from charon.automation.checkpoint_manager import CheckpointManager
 
 
 @pytest.fixture

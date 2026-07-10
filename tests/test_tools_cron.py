@@ -1,20 +1,8 @@
-from pathlib import Path
-import importlib.util
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-TOOLS_PATH = ROOT / 'apps' / 'core-daemon' / 'tools' / '__init__.py'
-CRON_PATH = ROOT / 'apps' / 'core-daemon' / 'tools' / 'cron_tool.py'
 
-spec_tools = importlib.util.spec_from_file_location('tools', TOOLS_PATH)
-tools_mod = importlib.util.module_from_spec(spec_tools)
-sys.modules['tools'] = tools_mod
-spec_tools.loader.exec_module(tools_mod)
+from charon import tools as tools_mod
 
-spec_cron = importlib.util.spec_from_file_location('cron_tool', CRON_PATH)
-cron_mod = importlib.util.module_from_spec(spec_cron)
-sys.modules['cron_tool'] = cron_mod
-spec_cron.loader.exec_module(cron_mod)
+from charon.tools import cron_tool as cron_mod
 
 
 def _ctx(tmp_path):

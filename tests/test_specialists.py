@@ -30,7 +30,7 @@ def _restore_polluted_modules():
 def _fresh_lifecycle(tmp_path):
     """Load an isolated agent_lifecycle bound to a temp state dir."""
     spec = importlib.util.spec_from_file_location(
-        'agent_lifecycle', ROOT / 'apps' / 'core-daemon' / 'agent_lifecycle.py')
+        'agent_lifecycle', ROOT / 'src' / 'charon' / 'agents' / 'agent_lifecycle.py')
     mod = importlib.util.module_from_spec(spec)
     sys.modules['agent_lifecycle'] = mod
     spec.loader.exec_module(mod)
@@ -41,7 +41,7 @@ def _fresh_lifecycle(tmp_path):
 
 def _fresh_specialists(lifecycle):
     spec = importlib.util.spec_from_file_location(
-        'specialists', ROOT / 'apps' / 'core-daemon' / 'specialists.py')
+        'specialists', ROOT / 'src' / 'charon' / 'agents' / 'specialists.py')
     mod = importlib.util.module_from_spec(spec)
     sys.modules['specialists'] = mod
     spec.loader.exec_module(mod)
@@ -108,7 +108,7 @@ def test_soft_specialization_respects_lock(tmp_path, monkeypatch):
                                project=str(tmp_path), require_tmux=False,
                                specialization='release engineer', charter='c')
 
-    import soft_specialization as ss
+    from charon.agents import soft_specialization as ss
     ss._last_refresh.clear()
     # would normally derive a label; the lock must short-circuit first
     label = ss.refresh_specialization(lifecycle.STATE_DIR, a['id'])
@@ -119,7 +119,7 @@ def test_soft_specialization_respects_lock(tmp_path, monkeypatch):
 
 
 def test_charter_appears_in_system_prompt():
-    import system_prompt_builder as spb
+    from charon.context import system_prompt_builder as spb
     agent = {'id': 'AG-0042', 'name': 'rel-01', 'specialization': 'release engineer',
              'charter': 'You own releases end to end: never ship from a dirty tree.'}
     identity = spb._build_identity(agent, {})
@@ -133,10 +133,10 @@ def test_charter_appears_in_system_prompt():
 def test_task_promotion_creates_attributed_episode(tmp_path):
     """The wired pipeline: a completed daemon task becomes an Episode with typed
     events and the agent's id as source_agent — the WHO for cross-agent threads."""
-    import agent_runtime
-    from memory_engine import MemoryEngine
-    import episodic as ep
-    import threads as th
+    from charon.agents import agent_runtime
+    from charon.memory.memory_engine import MemoryEngine
+    from charon.memory import episodic as ep
+    from charon.agents import threads as th
 
     state = tmp_path / 'state'
     state.mkdir()
@@ -169,7 +169,7 @@ def test_task_promotion_creates_attributed_episode(tmp_path):
 
 
 def test_promotion_never_raises(tmp_path):
-    import agent_runtime
+    from charon.agents import agent_runtime
     # bogus everything — must swallow, task completion cannot break
     agent_runtime._promote_task_to_episode(
         Path('/nonexistent/dir'), {}, {},

@@ -4,12 +4,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tools import ToolContext
-from tools.http_tool import execute_http
-from tools.git_tool import execute_git
+from charon.tools import ToolContext
+from charon.tools.http_tool import execute_http
+from charon.tools.git_tool import execute_git
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / 'apps' / 'core-daemon' / 'charon_loop.py'
+SCRIPT = ROOT / 'src' / 'charon' / 'charon_loop.py'
 
 
 # ── HTTP tool ───────────────────────────────────────────────────────

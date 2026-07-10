@@ -2,9 +2,9 @@
 advances loops one step per tick using a pluggable implementer."""
 from pathlib import Path
 
-from judge_engine import create_loop, load_loop, save_loop
-from checkpoint_manager import CheckpointManager
-from judge_loop_driver import advance_loop, tick_judge_loops
+from charon.judge.judge_engine import create_loop, load_loop, save_loop
+from charon.automation.checkpoint_manager import CheckpointManager
+from charon.judge.judge_loop_driver import advance_loop, tick_judge_loops
 
 
 def _make_implementer(values):

@@ -1,15 +1,7 @@
-from pathlib import Path
-import importlib.util
 import json
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-MOD_PATH = ROOT / 'apps' / 'core-daemon' / 'agent_runtime.py'
 
-spec = importlib.util.spec_from_file_location('agent_runtime', MOD_PATH)
-agent_runtime = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = agent_runtime
-spec.loader.exec_module(agent_runtime)
+from charon.agents import agent_runtime
 
 
 def test_run_task_tick_with_shell_instruction_updates_memory_and_inbox(tmp_path):

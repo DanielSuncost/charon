@@ -9,7 +9,7 @@ retrieval confuses them and recall@1 falls. Exact keyword match does not.
 We build N records of the form "record <id>: <fact>", query by a held id, and
 measure recall@1 for vector-only / FTS-only / hybrid+RRF as N grows.
 
-  PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
+  PYTHONPATH=src CHARON_EMBED_BACKEND=local \
     python scripts/experiments/exp_fts_scale.py
 """
 import hashlib
@@ -20,9 +20,9 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from memory_engine import MemoryEngine, embed_one  # noqa: E402
+from charon.memory.memory_engine import MemoryEngine, embed_one  # noqa: E402
 
 FACTS = [
     "rotated the api credentials and restarted the worker pool",

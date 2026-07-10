@@ -9,7 +9,7 @@ flattery, padding) and score BOTH with Judge A (drives the loop) and Judge B
 (held out). If A rewards the gamed version while B penalizes it, the detector
 works. If A doesn't reward it either, the judge itself resists padding.
 
-  PYTHONPATH=apps/core-daemon CHARON_STATE_DIR=$PWD/.charon_state \
+  PYTHONPATH=src CHARON_STATE_DIR=$PWD/.charon_state \
     python scripts/experiments/exp_aesthetic_heldout_control.py
 """
 import copy
@@ -19,10 +19,10 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from judge_engine import create_loop, create_judge  # noqa: E402
-from provider_bridge import create_provider_and_model  # noqa: E402
+from charon.judge.judge_engine import create_loop, create_judge  # noqa: E402
+from charon.providers.provider_bridge import create_provider_and_model  # noqa: E402
 from exp_aesthetic_heldout import RUBRIC_A, RUBRIC_B  # noqa: E402
 
 GENUINE = """\

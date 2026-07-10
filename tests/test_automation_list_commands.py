@@ -17,7 +17,7 @@ def test_automate_list_filtered_outputs(monkeypatch, tmp_path):
     monkeypatch.setattr(common, 'emit', lambda event: emitted.append(event))
     monkeypatch.setattr(common, 'STATE_DIR', tmp_path / 'state')
 
-    from automation_runtime import create_automation
+    from charon.automation.automation_runtime import create_automation
 
     project_root = tmp_path / 'project'
     project_root.mkdir()

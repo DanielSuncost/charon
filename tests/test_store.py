@@ -1,7 +1,7 @@
 """Tests for the Charon SQLite persistence layer (libs/store.py)."""
 import json
 
-from libs.store import (
+from charon.infra.store import (
     open_db, DB,
     # agents
     agent_insert, agent_get, agent_list, agent_update, agent_count,

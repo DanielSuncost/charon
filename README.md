@@ -228,23 +228,27 @@ available after `/tools reload`.
 
 ```
 charon/
-├── apps/core-daemon/              # Python agent runtime
-│   ├── conversation_engine.py     # Multi-turn LLM with tool use and steering
-│   ├── memory_engine.py           # Hybrid vector + FTS5 search
-│   ├── judge_engine.py            # Iterative optimization with scoring
-│   ├── shade_orchestrator.py      # Sequential shade contracts
-│   ├── batch_orchestrator.py      # Parallel shade swarms
-│   ├── harbor.py                  # Remote task dispatch (Harbor protocol)
-│   ├── autonomous.py              # Goal-driven self-assignment
+├── src/charon/                    # Python agent runtime (installable package)
+│   ├── charon_loop.py             # Daemon entry point
+│   ├── agents/                    # Agent lifecycle, runtime, policy, specialists
+│   ├── conversation/              # Multi-turn LLM engine with tool use and steering
+│   ├── context/                   # Context store, compaction, system prompts
+│   ├── memory/                    # Hybrid vector + FTS5 search, episodic, consolidation
+│   ├── libris/                    # Research operations (Libris)
+│   ├── judge/                     # Iterative optimization with scoring
+│   ├── shade/                     # Sequential shade contracts
+│   ├── automation/                # Schedulers, batch shade swarms, checkpoints
+│   ├── devop/                     # Devop orchestration
+│   ├── fleet/                     # Remote dispatch (Harbor protocol), fleet sync
 │   ├── providers/                 # Anthropic, OpenAI, local (httpx)
-│   └── tools/                     # Built-in + dynamic plugin loader
+│   ├── tools/                     # Built-in + dynamic plugin loader
+│   └── infra/                     # SQLite persistence (WAL), diagnostics, registry
 ├── crates/charon-tui/             # Rust TUI (crossterm + vte + portable-pty)
 │   ├── src/main.rs                # Event loop, views, rendering
 │   ├── src/backend.rs             # LocalPty, TmuxPane, BoatPane, CharonPane
 │   ├── src/terminal.rs            # Screen buffer + scrollback
 │   └── src/clipboard.rs           # Cross-platform clipboard (pbcopy, OSC52)
 ├── tools/charons-boat/            # External agent bridge + Harbor worker
-├── libs/store.py                  # SQLite persistence (WAL)
 └── docs/                          # Design documents
 ```
 

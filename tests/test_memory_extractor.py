@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-from memory_extractor import (
+from charon.memory.memory_extractor import (
     parse_extraction_response,
     extract_facts_sync,
     _format_session,

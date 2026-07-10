@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'apps' / 'core-daemon' / 'charon_loop.py'
+SCRIPT = Path(__file__).resolve().parents[1] / 'src' / 'charon' / 'charon_loop.py'
 
 
 def _read_json(path: Path):

@@ -1,10 +1,10 @@
 import json
 from pathlib import Path
 
-from tools import ToolContext
-from tools.shade_tool import execute_spawn_shade
-from tools.x_tool import execute_x
-import worker_provider
+from charon.tools import ToolContext
+from charon.tools.shade_tool import execute_spawn_shade
+from charon.tools.x_tool import execute_x
+from charon.providers import worker_provider
 
 
 def _ctx(tmp_path):

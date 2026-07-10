@@ -6,7 +6,7 @@ import types
 
 from backend import common
 from chat_backend import ChatBackend
-from provider_bridge import save_session_provider_config
+from charon.providers.provider_bridge import save_session_provider_config
 
 
 def test_natural_language_devop_prompt_routes_to_devop_command(monkeypatch):
@@ -77,7 +77,9 @@ def test_setup_provider_persists_global_onboarding_even_for_session_override(tmp
     }))
 
     fake_charon_auth = types.SimpleNamespace(login_oauth=lambda provider_id, status_cb=None: {'access_token': 'test-token'})
-    monkeypatch.setitem(sys.modules, 'charon_auth', fake_charon_auth)
+    import charon.providers as _providers_pkg
+    monkeypatch.setattr(_providers_pkg, 'charon_auth', fake_charon_auth, raising=False)
+    monkeypatch.setitem(sys.modules, 'charon.providers.charon_auth', fake_charon_auth)
 
     backend = ChatBackend()
     backend._active_agent_id = 'sess-auth'
@@ -153,7 +155,9 @@ def test_setup_provider_codex_preserves_existing_refresh_token(tmp_path, monkeyp
         _save_auth=lambda store: auth_path.write_text(json.dumps(store)),
         _now=lambda: 'now',
     )
-    monkeypatch.setitem(sys.modules, 'charon_auth', fake_charon_auth)
+    import charon.providers as _providers_pkg
+    monkeypatch.setattr(_providers_pkg, 'charon_auth', fake_charon_auth, raising=False)
+    monkeypatch.setitem(sys.modules, 'charon.providers.charon_auth', fake_charon_auth)
 
     backend = ChatBackend()
     backend.handle_command('/setup provider codex', 'req-1')
@@ -197,7 +201,9 @@ def test_setup_provider_codex_completes_when_existing_model_is_known(tmp_path, m
         _save_auth=lambda store: auth_path.write_text(json.dumps(store)),
         _now=lambda: 'now',
     )
-    monkeypatch.setitem(sys.modules, 'charon_auth', fake_charon_auth)
+    import charon.providers as _providers_pkg
+    monkeypatch.setattr(_providers_pkg, 'charon_auth', fake_charon_auth, raising=False)
+    monkeypatch.setitem(sys.modules, 'charon.providers.charon_auth', fake_charon_auth)
 
     backend = ChatBackend()
     backend.handle_command('/setup provider codex', 'req-1')

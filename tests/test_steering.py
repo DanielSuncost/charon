@@ -1,8 +1,8 @@
 """Tests for conversation engine steering and follow-up queues."""
 import asyncio
 
-from conversation_engine import ConversationEngine
-from providers import ModelInfo, StreamDelta, ToolCall
+from charon.conversation.conversation_engine import ConversationEngine
+from charon.providers import ModelInfo, StreamDelta, ToolCall
 
 
 # ── Mock provider that returns tool calls then text ─────────────────

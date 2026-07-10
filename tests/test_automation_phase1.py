@@ -1,12 +1,12 @@
 import time
 
-from automation_runtime import (
+from charon.automation.automation_runtime import (
     create_automation,
     get_automation_state,
     reconcile_stale_automation_runs,
     set_automation_webhook,
 )
-from automation_scheduler import run_due_automations_once
+from charon.automation.automation_scheduler import run_due_automations_once
 from chat_backend import ChatBackend
 
 
@@ -34,7 +34,7 @@ def test_browser_workflow_automation_runs_steps(tmp_path, monkeypatch):
         },
     )
 
-    import tools.browser_tool as browser_tool
+    import charon.tools.browser_tool as browser_tool
 
     class FakeResult:
         def __init__(self, content, is_error=False):
@@ -90,8 +90,8 @@ def test_webhook_alert_delivery_and_recovery_reconcile(tmp_path, monkeypatch):
     )
     set_automation_webhook(state_dir, doc['automation_id'], 'https://hooks.example.test/alert')
 
-    import automation_runtime
-    import automation_scheduler
+    from charon.automation import automation_runtime
+    from charon.automation import automation_scheduler
 
     delivered = {}
     def fake_deliver(url, payload):
@@ -131,7 +131,7 @@ def test_webhook_alert_delivery_and_recovery_reconcile(tmp_path, monkeypatch):
         schedule={'type': 'continuous', 'poll_seconds': 30},
         action={'url': 'https://example.com'},
     )
-    from automation_runtime import update_automation_doc
+    from charon.automation.automation_runtime import update_automation_doc
     update_automation_doc(
         state_dir,
         stale['automation_id'],

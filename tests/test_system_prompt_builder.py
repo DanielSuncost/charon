@@ -2,8 +2,8 @@
 import json
 from pathlib import Path
 
-import store_adapter
-from system_prompt_builder import (
+from charon.infra import store_adapter
+from charon.context.system_prompt_builder import (
     build_system_prompt,
     _build_identity,
     _build_shade_identity,
@@ -67,7 +67,7 @@ def test_identity_shade():
 def test_user_model_structured(tmp_path):
     state_dir = tmp_path / 'state'
     db = store_adapter.get_db(state_dir)
-    from libs.store import user_model_set
+    from charon.infra.store import user_model_set
     user_model_set(db, 'coding', {'naming': 'snake_case', 'error_handling': 'explicit exceptions'})
     user_model_set(db, 'corrections', ['Never use bare except'])
 
@@ -102,7 +102,7 @@ def test_user_model_from_flat_entries(tmp_path):
 def test_working_memory_from_sqlite(tmp_path):
     state_dir = tmp_path / 'state'
     db = store_adapter.get_db(state_dir)
-    from libs.store import agent_memory_upsert
+    from charon.infra.store import agent_memory_upsert
     agent_memory_upsert(db, 'AG-001', {
         'agent_id': 'AG-001',
         'notes': [
@@ -141,7 +141,7 @@ def test_working_memory_from_json(tmp_path):
 def test_goal_context_from_sqlite(tmp_path):
     state_dir = tmp_path / 'state'
     db = store_adapter.get_db(state_dir)
-    from libs.store import goal_context_packet_upsert
+    from charon.infra.store import goal_context_packet_upsert
     goal_context_packet_upsert(db, 'AG-001', {
         'agent_id': 'AG-001',
         'active_goals': [
@@ -173,7 +173,7 @@ def test_goal_context_empty(tmp_path):
 def test_coordination_shows_other_agents(tmp_path):
     state_dir = tmp_path / 'state'
     db = store_adapter.get_db(state_dir)
-    from libs.store import agent_insert
+    from charon.infra.store import agent_insert
     agent_insert(db, {
         'id': 'AG-001', 'name': 'charon-api', 'mode': 'persistent',
         'goal': 'Build API', 'status': 'running', 'role': 'charon',
@@ -196,7 +196,7 @@ def test_coordination_shows_other_agents(tmp_path):
 def test_coordination_shows_pending_boundaries(tmp_path):
     state_dir = tmp_path / 'state'
     db = store_adapter.get_db(state_dir)
-    from libs.store import boundary_insert
+    from charon.infra.store import boundary_insert
     boundary_insert(db, {
         'id': 'bnd-001', 'status': 'proposed',
         'proposer_agent_id': 'AG-002', 'target_agent_id': 'AG-001',
@@ -275,7 +275,7 @@ def test_full_prompt_persistent_agent(tmp_path):
     state_dir = tmp_path / 'state'
     db = store_adapter.get_db(state_dir)
 
-    from libs.store import user_model_set, agent_memory_upsert
+    from charon.infra.store import user_model_set, agent_memory_upsert
     user_model_set(db, 'coding', {'naming': 'snake_case'})
     user_model_set(db, 'corrections', ['Never use bare except'])
     agent_memory_upsert(db, 'AG-001', {

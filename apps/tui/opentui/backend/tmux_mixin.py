@@ -53,7 +53,7 @@ class TmuxMixin:
     def handle_tmux_capture(self, session_name: str, request_id: str | None):
         """Capture tmux pane content for the session grid."""
         try:
-            from tmux_capture import capture_pane
+            from charon.fleet.tmux_capture import capture_pane
             content = capture_pane(session_name, width=120, height=40)
 
             # Detect state (only re-detect if content changed)
@@ -80,7 +80,7 @@ class TmuxMixin:
     def handle_tmux_send(self, session_name: str, keys: str, literal: bool, request_id: str | None):
         """Send keys to a tmux session."""
         try:
-            from tmux_capture import send_keys, send_key_literal
+            from charon.fleet.tmux_capture import send_keys, send_key_literal
             if literal:
                 ok = send_key_literal(session_name, keys)
             else:

@@ -33,12 +33,12 @@ import sys
 import threading
 
 from backend import common
-from conversation_engine import ConversationEngine
+from charon.conversation.conversation_engine import ConversationEngine
 
 # Backward-compat re-exports: these names were historically importable
 # from chat_backend (tests and tooling rely on some of them).
 from backend.common import ROOT, STATE_DIR, emit, _load_json  # noqa: F401
-from tools import ALL_TOOL_DEFS  # noqa: F401
+from charon.tools import ALL_TOOL_DEFS  # noqa: F401
 from backend.boat import (
     _terminate_boat_session,
 )  # noqa: F401
@@ -64,7 +64,7 @@ from backend.tmux_mixin import TmuxMixin
 class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, RoomsMixin, LibrisMixin, DashboardMixin, HarvestMixin, FleetSetupMixin, SetupMixin, ConsolidationMixin, TmuxMixin):
     def __init__(self):
         try:
-            from automation_scheduler import start_scheduler
+            from charon.automation.automation_scheduler import start_scheduler
             start_scheduler(common.STATE_DIR, poll_seconds=2.0)
         except Exception:
             pass
@@ -112,7 +112,7 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, RoomsMixin, LibrisMi
         # Resume a specific agent's conversation
         if requested_resume:
             try:
-                from conversation_store import load_conversation, list_conversations
+                from charon.conversation.conversation_store import load_conversation, list_conversations
                 if requested_resume == 'latest':
                     convos = list_conversations(common.STATE_DIR)
                     if convos:
@@ -135,7 +135,7 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, RoomsMixin, LibrisMi
                 pass
             # Silently ensure an agent exists
             try:
-                from agent_lifecycle import list_agents, create_agent
+                from charon.agents.agent_lifecycle import list_agents, create_agent
                 existing = list_agents()
                 has_charon = any(
                     a.get('role') == 'charon' and a.get('status') != 'stopped'
@@ -160,7 +160,7 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, RoomsMixin, LibrisMi
 
         # Pre-populate notified batches so old completions don't spam on startup
         try:
-            from batch_orchestrator import list_batches
+            from charon.automation.batch_orchestrator import list_batches
             for b in list_batches(common.STATE_DIR):
                 if b.get('status') in ('completed', 'partial'):
                     self._notified_batches.add(b.get('id', ''))
@@ -231,7 +231,7 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, RoomsMixin, LibrisMi
                         break
             elif req_type == 'approval_response':
                 try:
-                    from tools import respond_to_approval
+                    from charon.tools import respond_to_approval
                     respond_to_approval(msg.get('approved', False))
                 except Exception:
                     pass
@@ -244,7 +244,7 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, RoomsMixin, LibrisMi
                 steer_msg = msg.get('message', '')
                 if target and steer_msg:
                     try:
-                        from session_registry import send_steer
+                        from charon.agents.session_registry import send_steer
                         send_steer(common.STATE_DIR, target, steer_msg)
                         common.emit({'type': 'status', 'message': f'📡 Sent to {target.split("-")[-1][:6]}: {steer_msg[:40]}', 'request_id': request_id})
                     except Exception as e:
@@ -254,7 +254,7 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, RoomsMixin, LibrisMi
                 session_id = msg.get('session_id', '')
                 if session_id:
                     try:
-                        from conversation_store import load_conversation
+                        from charon.conversation.conversation_store import load_conversation
                         msgs = load_conversation(common.STATE_DIR, session_id)
                         # Format conversation with tool calls, streaming feel
                         preview_lines = []

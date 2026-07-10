@@ -1,20 +1,8 @@
-from pathlib import Path
-import importlib.util
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-IG_PATH = ROOT / 'apps' / 'core-daemon' / 'intervention_graph.py'
-IDX_PATH = ROOT / 'apps' / 'core-daemon' / 'conversation_index.py'
 
-ig_spec = importlib.util.spec_from_file_location('intervention_graph', IG_PATH)
-intervention_graph = importlib.util.module_from_spec(ig_spec)
-sys.modules[ig_spec.name] = intervention_graph
-ig_spec.loader.exec_module(intervention_graph)
+from charon.agents import intervention_graph
 
-idx_spec = importlib.util.spec_from_file_location('conversation_index', IDX_PATH)
-conversation_index = importlib.util.module_from_spec(idx_spec)
-sys.modules[idx_spec.name] = conversation_index
-idx_spec.loader.exec_module(conversation_index)
+from charon.conversation import conversation_index
 
 
 def test_rebuild_index_tracks_conversation_and_interventions(tmp_path):

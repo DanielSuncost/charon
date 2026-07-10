@@ -3,7 +3,7 @@ import base64
 import json
 import time
 
-from providers.httpx_codex import HttpxCodexProvider
+from charon.providers.httpx_codex import HttpxCodexProvider
 
 
 def _jwt_with_exp(exp: int, account_id: str = 'acct-test') -> str:

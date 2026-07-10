@@ -7,7 +7,7 @@ import sys
 import time
 
 from backend import common
-from provider_bridge import load_session_provider_config, save_session_provider_config
+from charon.providers.provider_bridge import load_session_provider_config, save_session_provider_config
 
 
 class SetupMixin:
@@ -76,7 +76,7 @@ class SetupMixin:
                     if session_override:
                         save_session_provider_config(common.STATE_DIR, self._active_agent_id, session_override)
                     else:
-                        from provider_bridge import clear_session_provider_config
+                        from charon.providers.provider_bridge import clear_session_provider_config
                         clear_session_provider_config(common.STATE_DIR, self._active_agent_id)
                 else:
                     self._save_onboarding(onboarding)
@@ -114,7 +114,7 @@ class SetupMixin:
                             existing_tokens = {'access_token': existing_token}
                     if existing_token:
                         try:
-                            import charon_auth
+                            from charon.providers import charon_auth
                             store = charon_auth._load_auth()
                             store['active_provider'] = provider_id
                             store.setdefault('providers', {})
@@ -139,7 +139,7 @@ class SetupMixin:
 
                 # Run OAuth with local callback server in a background thread
                 try:
-                    import charon_auth
+                    from charon.providers import charon_auth
                     import threading
 
                     common.emit({'type': 'status', 'message': f'Setting up OAuth for {arg}...', 'request_id': request_id})
@@ -314,7 +314,7 @@ class SetupMixin:
                 })
                 return
             if arg in ('same', 'skip'):
-                from model_registry import load_registry, save_registry
+                from charon.providers.model_registry import load_registry, save_registry
                 reg = load_registry(common.STATE_DIR)
                 reg['shade_model_mode'] = 'same'
                 save_registry(common.STATE_DIR, reg)
@@ -360,7 +360,7 @@ class SetupMixin:
                 common.emit({'type': 'error', 'error': 'Usage: /setup shade-model <model_name>', 'request_id': request_id})
                 return
             # Save model to registry
-            from model_registry import load_registry, save_registry
+            from charon.providers.model_registry import load_registry, save_registry
             reg = load_registry(common.STATE_DIR)
             reg['shade_model_mode'] = 'fixed'
             # Parse provider/model format (e.g., lmstudio/qwen3-30b)
@@ -395,7 +395,7 @@ class SetupMixin:
                 common.emit({'type': 'error', 'error': 'No pending auth. Run /setup provider claude-code first.', 'request_id': request_id})
                 return
             try:
-                import charon_auth
+                from charon.providers import charon_auth
                 import urllib.parse
 
                 pa = self._pending_auth
@@ -629,7 +629,7 @@ class SetupMixin:
         agent_created = None
         if provider_mode != 'no-provider':
             try:
-                from agent_lifecycle import list_agents, create_agent
+                from charon.agents.agent_lifecycle import list_agents, create_agent
                 existing = list_agents()
                 has_charon = any(
                     a.get('role') == 'charon' and a.get('status') != 'stopped'
@@ -667,7 +667,7 @@ class SetupMixin:
 
         # 3. Sync to SQLite store
         try:
-            from store_adapter import get_db, onboarding_set as db_onboarding_set
+            from charon.infra.store_adapter import get_db, onboarding_set as db_onboarding_set
             db = get_db(common.STATE_DIR)
             db_onboarding_set(db, onboarding)
         except Exception:

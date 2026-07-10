@@ -1,6 +1,6 @@
 """Shared bootstrap and low-level helpers for the chat backend package.
 
-Holds the sys.path bootstrap for apps/core-daemon plus the module-level
+Holds the sys.path bootstrap for src/ (the charon package) plus the module-level
 state (ROOT, STATE_DIR) and the emit/_load_json primitives. Other backend
 modules access mutable/patchable state via attribute lookup (common.emit,
 common.STATE_DIR) so tests can monkeypatch it in one place.
@@ -19,7 +19,7 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 ROOT = Path(__file__).resolve().parents[4]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
+sys.path.insert(0, str(ROOT / 'src'))
 
 STATE_DIR = ROOT / '.charon_state'
 

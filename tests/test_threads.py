@@ -2,9 +2,9 @@
 import tempfile
 from pathlib import Path
 
-from memory_engine import MemoryEngine
-import episodic as ep
-import threads as th
+from charon.memory.memory_engine import MemoryEngine
+from charon.memory import episodic as ep
+from charon.agents import threads as th
 
 
 def _engine():
@@ -85,8 +85,8 @@ def test_get_or_create_episode_for_session_dedups():
 
 
 def test_timeline_tool_thread_why_log_decision(tmp_path):
-    from tools import ToolContext
-    from tools.timeline_tool import execute_timeline
+    from charon.tools import ToolContext
+    from charon.tools.timeline_tool import execute_timeline
     state = tmp_path / "state"
     state.mkdir()
     ctx = ToolContext(project_root=Path(tmp_path / "proj"), agent_id="architect", state_dir=state)

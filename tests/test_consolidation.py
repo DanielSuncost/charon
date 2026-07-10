@@ -1,7 +1,7 @@
 """Tests for user model consolidation."""
 
-import store_adapter
-from consolidation import (
+from charon.infra import store_adapter
+from charon.memory.consolidation import (
     load_config, save_config, should_run, save_trace, list_traces,
     _collect_recent_signals, _apply_changes, _ensure_conversation_messages,
 )

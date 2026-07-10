@@ -1,7 +1,7 @@
 """Tests for the dynamic tool loader."""
 
-from tools import ToolContext, execute_tool
-from tools.dynamic_loader import (
+from charon.tools import ToolContext, execute_tool
+from charon.tools.dynamic_loader import (
     load_dynamic_tools, get_all_tool_defs, execute_dynamic_tool,
     list_dynamic_tools,
 )

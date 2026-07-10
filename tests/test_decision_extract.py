@@ -3,7 +3,7 @@ decisions from agent output, and its wiring into task-completion episodes.
 (Accuracy is measured separately: scripts/experiments/exp_decision_extraction.py.)"""
 from pathlib import Path
 
-from decision_extract import extract_decisions
+from charon.agents.decision_extract import extract_decisions
 
 
 def test_extracts_decision_with_rationale():
@@ -52,11 +52,11 @@ def test_caps_and_dedupes():
 def test_task_completion_auto_captures_decision(tmp_path):
     """Integration: a completed task whose response states a decision produces a
     queryable decision event with rationale — without any log_decision call."""
-    from execution_memory import create_task_episode
-    from memory_engine import MemoryEngine
-    import threads as th
+    from charon.memory.execution_memory import create_task_episode
+    from charon.memory.memory_engine import MemoryEngine
+    from charon.agents import threads as th
     import json as _json
-    import episodic as ep
+    from charon.memory import episodic as ep
 
     state = tmp_path / "state"
     state.mkdir()

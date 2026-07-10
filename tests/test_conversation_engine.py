@@ -7,8 +7,8 @@ import asyncio
 import json
 from typing import AsyncIterator
 
-from providers import Message, ModelInfo, StreamDelta, ToolCall
-from conversation_engine import (
+from charon.providers import Message, ModelInfo, StreamDelta, ToolCall
+from charon.conversation.conversation_engine import (
     ConversationEngine, build_system_prompt, estimate_tokens,
     should_compact, EngineEvent,
 )

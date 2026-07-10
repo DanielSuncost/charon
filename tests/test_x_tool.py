@@ -1,12 +1,12 @@
 """Tests for the X tool's workflow helpers and bookmark investigation index."""
 import json
 
-from tools import ToolContext
-from tools.x_tool import execute_x
-import tools.x_tool as x_tool
-from conversation_runtime import load_queue
-from goal_runtime import list_goals
-from tool_approval import classify_tool_risk
+from charon.tools import ToolContext
+from charon.tools.x_tool import execute_x
+import charon.tools.x_tool as x_tool
+from charon.conversation.conversation_runtime import load_queue
+from charon.agents.goal_runtime import list_goals
+from charon.infra.tool_approval import classify_tool_risk
 
 
 def _ctx(tmp_path):

@@ -1,14 +1,10 @@
 """Unified orchestration trace/span substrate: span lifecycle, correlation IDs,
 coalescing reader, span tree, cost estimation, cross-system timeline."""
-import sys
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'apps' / 'core-daemon'))
-
-import orchestration_trace as ot
+from charon.infra import orchestration_trace as ot
 
 
 def test_cost_estimation_tiers_models_and_fallback():
@@ -70,7 +66,7 @@ def test_coalesce_terminal_status_wins(tmp_path):
 def test_span_tree_nesting(tmp_path):
     tid = ot.new_trace_id()
     with ot.span(tmp_path, name='op', system='libris', kind='operation',
-                 trace_id=tid, span_id='sp_root') as root:
+                 trace_id=tid, span_id='sp_root'):
         pass
     ot.record_span(tmp_path, name='child1', system='libris', kind='agent_run',
                    trace_id=tid, span_id='sp_c1', parent_span_id='sp_root')

@@ -2,7 +2,7 @@
 """Reference runner for charon-gym: drive each task with a trivial scripted
 policy to prove the loop closes (reset -> N steps -> scored reward).
 
-  PYTHONPATH=apps/core-daemon CHARON_STATE_DIR=$PWD/.charon_state \
+  PYTHONPATH=src CHARON_STATE_DIR=$PWD/.charon_state \
     python scripts/charon_gym_runner.py            # all 5 tasks, once
   ... python scripts/charon_gym_runner.py --episodes 10 --task maximize_output
 
@@ -17,9 +17,9 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-import charon_gym  # noqa: E402
+from charon import charon_gym  # noqa: E402
 
 BETTER_SUMMARIZE = (
     "def mean(numbers):\n"
@@ -54,7 +54,7 @@ POLICIES = {
 
 def _provider():
     try:
-        from provider_bridge import create_provider_and_model
+        from charon.providers.provider_bridge import create_provider_and_model
         p, m, ready = create_provider_and_model(Path(".charon_state"))
         return (p, m) if ready else (None, None)
     except Exception:

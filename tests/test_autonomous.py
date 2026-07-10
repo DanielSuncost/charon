@@ -1,8 +1,8 @@
 """Tests for autonomous goal-driven work."""
 from pathlib import Path
 
-import store_adapter
-from autonomous import (
+from charon.infra import store_adapter
+from charon.agents.autonomous import (
     load_autonomous_config, save_autonomous_config,
     propose_goal, confirm_goal, reject_goal,
     start_executing, complete_goal, fail_goal,

@@ -3,9 +3,9 @@ queryable Episode in the live memory engine — i.e. episodic memory is wired in
 not just a library."""
 from pathlib import Path
 
-from execution_memory import create_task_episode
-from memory_engine import MemoryEngine
-import episodic as ep
+from charon.memory.execution_memory import create_task_episode
+from charon.memory.memory_engine import MemoryEngine
+from charon.memory import episodic as ep
 
 
 def test_task_completion_creates_queryable_episode(tmp_path):
@@ -60,8 +60,8 @@ def test_two_tasks_are_ordered_episodes(tmp_path):
 
 
 def test_timeline_tool_registered_and_queries_episodes(tmp_path):
-    from tools import ToolContext, ALL_TOOL_DEFS, TOOL_EXECUTORS
-    from tools.timeline_tool import execute_timeline
+    from charon.tools import ToolContext, ALL_TOOL_DEFS, TOOL_EXECUTORS
+    from charon.tools.timeline_tool import execute_timeline
 
     # registered alongside the other tools
     assert 'Timeline' in TOOL_EXECUTORS

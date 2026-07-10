@@ -1,16 +1,6 @@
-from pathlib import Path
-import importlib.util
 import json
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-CORE_DAEMON = ROOT / 'apps' / 'core-daemon'
-MOD_PATH = CORE_DAEMON / 'conversation_runtime.py'
-
-spec = importlib.util.spec_from_file_location('conversation_runtime', MOD_PATH)
-conversation_runtime = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = conversation_runtime
-spec.loader.exec_module(conversation_runtime)
+from charon.conversation import conversation_runtime
 
 
 def test_enqueue_message_task_appends_pending_item(tmp_path):

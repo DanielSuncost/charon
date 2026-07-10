@@ -1,20 +1,8 @@
-from pathlib import Path
-import importlib.util
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-TOOLS_PATH = ROOT / 'apps' / 'core-daemon' / 'tools' / '__init__.py'
-EC_PATH = ROOT / 'apps' / 'core-daemon' / 'tools' / 'execute_code_tool.py'
 
-spec_tools = importlib.util.spec_from_file_location('tools', TOOLS_PATH)
-tools_mod = importlib.util.module_from_spec(spec_tools)
-sys.modules['tools'] = tools_mod
-spec_tools.loader.exec_module(tools_mod)
+from charon import tools as tools_mod
 
-spec_ec = importlib.util.spec_from_file_location('execute_code_tool', EC_PATH)
-ec_mod = importlib.util.module_from_spec(spec_ec)
-sys.modules['execute_code_tool'] = ec_mod
-spec_ec.loader.exec_module(ec_mod)
+from charon.tools import execute_code_tool as ec_mod
 
 
 def _ctx(tmp_path):

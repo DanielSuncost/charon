@@ -7,14 +7,14 @@ from pathlib import Path
 
 from backend import common
 from backend.settings_io import _load_project_registry
-from provider_bridge import load_session_provider_config
+from charon.providers.provider_bridge import load_session_provider_config
 
 
 def _collect_devop_rooms(state_dir: Path, project_root: Path) -> list[dict]:
     rooms = []
     try:
-        from devop_runtime import software_ops_root, get_operation_state
-        from devop_projection import project_graph, project_f4_stream, summarize_operation
+        from charon.devop.devop_runtime import software_ops_root, get_operation_state
+        from charon.devop.devop_projection import project_graph, project_f4_stream, summarize_operation
 
         ops_dir = software_ops_root(state_dir)
         if not ops_dir.exists():
@@ -90,7 +90,7 @@ def _load_workflow_steps_spec(project_root: Path, raw_value: str) -> list[dict] 
 
 def _project_goal_tree(state_dir: Path, project_path: str) -> list[dict]:
     try:
-        from goal_runtime import list_goals
+        from charon.agents.goal_runtime import list_goals
         goals = list_goals(state_dir, project=project_path)
     except Exception:
         goals = []
@@ -127,7 +127,7 @@ def _project_usage_summary(state_dir: Path, project_path: str) -> dict:
         'devop_operations': 0,
     }
     try:
-        from libris_runtime import research_root
+        from charon.libris.libris_runtime import research_root
         rroot = research_root(state_dir, Path(project_path))
         ops_dir = rroot / 'operations'
         if ops_dir.exists():
@@ -148,7 +148,7 @@ def _project_usage_summary(state_dir: Path, project_path: str) -> dict:
     except Exception:
         pass
     try:
-        from devop_runtime import software_ops_root, get_operation_state
+        from charon.devop.devop_runtime import software_ops_root, get_operation_state
         for op_path in (software_ops_root(state_dir)).glob('*'):
             if not op_path.is_dir():
                 continue
@@ -204,7 +204,7 @@ class DashboardMixin:
         # Load agents
         agents = []
         try:
-            from agent_lifecycle import list_agents
+            from charon.agents.agent_lifecycle import list_agents
             for a in list_agents():
                 agent_id = a.get('id', '')
                 # Load recent actions from inbox
@@ -254,7 +254,7 @@ class DashboardMixin:
 
                 # Add ledger entries for rear-view
                 try:
-                    from task_ledger import get_agent_ledger
+                    from charon.agents.task_ledger import get_agent_ledger
                     ledger = get_agent_ledger(common.STATE_DIR, agent_id, limit=10)
                     agents[-1]['ledger'] = ledger
                 except Exception:
@@ -262,7 +262,7 @@ class DashboardMixin:
 
                 # Add shade usage stats
                 try:
-                    from shade_stats import get_agent_shade_stats
+                    from charon.shade.shade_stats import get_agent_shade_stats
                     agents[-1]['shade_stats'] = get_agent_shade_stats(common.STATE_DIR, agent_id)
                 except Exception:
                     agents[-1]['shade_stats'] = {}
@@ -271,8 +271,8 @@ class DashboardMixin:
 
         # Remote fleet agents
         try:
-            from fleet_registry import load_fleet
-            from fleet_sync import get_cached_fleet_status
+            from charon.fleet.fleet_registry import load_fleet
+            from charon.fleet.fleet_sync import get_cached_fleet_status
             fleet = load_fleet()
             fleet_status = get_cached_fleet_status()
             for server in fleet.get('servers', []):
@@ -384,7 +384,7 @@ class DashboardMixin:
             goal_tree = _project_goal_tree(common.STATE_DIR, path or str(common.ROOT))
             flat_goals = []
             try:
-                from goal_runtime import list_goals
+                from charon.agents.goal_runtime import list_goals
                 flat_goals = list_goals(common.STATE_DIR, project=path or str(common.ROOT))
             except Exception:
                 flat_goals = []
@@ -404,7 +404,7 @@ class DashboardMixin:
         live_tmux: dict[str, dict] = {}
         claimed_tmux: set[str] = set()
         try:
-            from tmux_capture import list_sessions as tmux_list
+            from charon.fleet.tmux_capture import list_sessions as tmux_list
             for ts in tmux_list():
                 live_tmux[ts.name] = {
                     'name': ts.name,
@@ -509,8 +509,8 @@ class DashboardMixin:
 
         # Remote fleet agent sessions
         try:
-            from fleet_registry import load_fleet as _fleet_load
-            from fleet_sync import get_cached_fleet_status as _fleet_status
+            from charon.fleet.fleet_registry import load_fleet as _fleet_load
+            from charon.fleet.fleet_sync import get_cached_fleet_status as _fleet_status
             _fleet = _fleet_load()
             _fstatus = _fleet_status()
             for _srv in _fleet.get('servers', []):
@@ -686,14 +686,14 @@ class DashboardMixin:
 
         transfer_events = []
         try:
-            from context_transfer import list_transfer_events
+            from charon.context.context_transfer import list_transfer_events
             transfer_events = list_transfer_events(common.STATE_DIR, limit=12)
         except Exception:
             transfer_events = []
 
         inter_agent_rooms = []
         try:
-            from inter_agent_rooms import list_rooms, list_events
+            from charon.agents.inter_agent_rooms import list_rooms, list_events
             for room in list_rooms(common.STATE_DIR, limit=40):
                 rid = str(room.get('id') or '')
                 if not rid:
@@ -708,7 +708,7 @@ class DashboardMixin:
         # F4 can render them with a graph-first layout later.
         project_root = Path(str(onboarding.get('project') or str(common.ROOT)).strip() or str(common.ROOT))
         try:
-            from libris_runtime import rebuild_project_index, get_libris_swarm_state
+            from charon.libris.libris_runtime import rebuild_project_index, get_libris_swarm_state
             idx = rebuild_project_index(common.STATE_DIR, project_root)
             for op in idx.get('operations') or []:
                 op_id = str(op.get('operation_id') or '').strip()
@@ -777,7 +777,7 @@ class DashboardMixin:
 
         automations = []
         try:
-            from automation_runtime import list_automations, get_automation_state
+            from charon.automation.automation_runtime import list_automations, get_automation_state
             automations = [get_automation_state(common.STATE_DIR, str(a.get('automation_id') or '')) for a in list_automations(common.STATE_DIR)]
         except Exception:
             automations = []
@@ -813,7 +813,7 @@ class DashboardMixin:
 
         # Include recent consolidation traces for dashboard
         try:
-            from consolidation import list_traces
+            from charon.memory.consolidation import list_traces
             payload['consolidation_traces'] = list_traces(common.STATE_DIR, limit=5)
         except Exception:
             payload['consolidation_traces'] = []
@@ -829,7 +829,7 @@ class DashboardMixin:
         # Check for incoming steering messages from other Charon instances
         if self._active_agent_id:
             try:
-                from session_registry import read_steers
+                from charon.agents.session_registry import read_steers
                 steers = read_steers(common.STATE_DIR, self._active_agent_id)
                 for steer in steers:
                     msg = steer.get('message', '')
@@ -851,7 +851,7 @@ class DashboardMixin:
 
         # Heartbeat + include live Charon sessions
         try:
-            from session_registry import heartbeat, list_live_sessions
+            from charon.agents.session_registry import heartbeat, list_live_sessions
             if self._active_agent_id:
                 heartbeat(common.STATE_DIR, self._active_agent_id)
             live = list_live_sessions(common.STATE_DIR)
@@ -945,7 +945,7 @@ class DashboardMixin:
 
         # Goals: session-level + project-level
         try:
-            from goal_runtime import list_goals, _safe_id, _read_json, _session_path
+            from charon.agents.goal_runtime import list_goals, _safe_id, _read_json, _session_path
             onboarding = common._load_json(common.STATE_DIR / 'onboarding.json', {})
             project = str(onboarding.get('project') or str(common.ROOT)).strip()
             import time as _time
@@ -1015,7 +1015,7 @@ class DashboardMixin:
 
         # User model (rendered)
         try:
-            from user_model_structured import load_structured, render_for_prompt
+            from charon.memory.user_model_structured import load_structured, render_for_prompt
             model = load_structured(common.STATE_DIR)
             info['user_model'] = render_for_prompt(model)
         except Exception:
@@ -1046,7 +1046,7 @@ class DashboardMixin:
 
         # Token usage from consolidation traces
         try:
-            from consolidation import list_traces
+            from charon.memory.consolidation import list_traces
             traces = list_traces(common.STATE_DIR, limit=10)
             # Rough estimate: each consolidation uses ~1K tokens
             info['tokens']['consolidation_tokens'] = len(traces) * 1000
@@ -1058,7 +1058,7 @@ class DashboardMixin:
     def _get_batch_progress(self) -> str:
         """Short progress string for active batches."""
         try:
-            from batch_orchestrator import list_batches
+            from charon.automation.batch_orchestrator import list_batches
             running = [b for b in list_batches(common.STATE_DIR) if b.get('status') == 'running']
             if not running:
                 return ''

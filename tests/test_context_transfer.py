@@ -1,11 +1,11 @@
-from providers import ModelInfo
-from context_transfer import (
+from charon.providers import ModelInfo
+from charon.context.context_transfer import (
     resolve_transfer_profile,
     compile_transfer_bundle,
     apply_transfer_to_engine,
     estimate_transfer_budget,
 )
-from execution_memory import record_tool_event, get_last_validation_event
+from charon.memory.execution_memory import record_tool_event, get_last_validation_event
 
 
 class DummyEngine:
@@ -22,15 +22,15 @@ def _bundle(with_validation: bool = True) -> dict:
         'git': {
             'branch': 'main',
             'head': 'abc123def456',
-            'status': ' M apps/core-daemon/context_transfer.py',
-            'diff_stat': ' apps/core-daemon/context_transfer.py | 42 +++++++++++++',
+            'status': ' M src/charon/context/context_transfer.py',
+            'diff_stat': ' src/charon/context/context_transfer.py | 42 +++++++++++++',
         },
         'files_touched': [
-            'apps/core-daemon/context_transfer.py',
-            'apps/core-daemon/execution_memory.py',
+            'src/charon/context/context_transfer.py',
+            'src/charon/memory/execution_memory.py',
         ],
         'last_validation': {
-            'command': 'python -m py_compile apps/core-daemon/context_transfer.py',
+            'command': 'python -m py_compile src/charon/context/context_transfer.py',
             'tool': 'Bash',
             'status': 'passed',
             'summary': 'py_compile completed successfully',
@@ -66,8 +66,8 @@ def _bundle(with_validation: bool = True) -> dict:
         },
         'execution': {
             'recent_tool_events': [
-                {'summary': 'Edited file apps/core-daemon/context_transfer.py.'},
-                {'summary': 'Ran command: `python -m py_compile apps/core-daemon/context_transfer.py` → success'},
+                {'summary': 'Edited file src/charon/context/context_transfer.py'},
+                {'summary': 'Ran command: `python -m py_compile src/charon/context/context_transfer.py` → success'},
             ],
             'relevant_execution_memories': [
                 {'content': 'Task episode: adaptive transfer planning and provider-aware replay', 'category': 'task_episode'},
@@ -104,7 +104,7 @@ def test_compile_transfer_bundle_preserves_core_fields_for_small_budget():
     assert compiled['tier'] == 'minimal'
     assert compiled['sections']['objective']
     assert compiled['sections']['next_step']
-    assert 'apps/core-daemon/context_transfer.py' in compiled['sections']['files_touched']
+    assert 'src/charon/context/context_transfer.py' in compiled['sections']['files_touched']
     assert 'py_compile' in compiled['sections']['validation']
     assert compiled['restore_messages'] == []
 
@@ -160,8 +160,8 @@ def test_get_last_validation_event_detects_recent_validation_command(tmp_path):
         agent_id='agent-1',
         provider='openai',
         tool_name='Bash',
-        params={'command': 'rg -n "transfer" apps/core-daemon'},
-        result_content='apps/core-daemon/context_transfer.py:1:Context transfer',
+        params={'command': 'rg -n "transfer" src'},
+        result_content='src/charon/context/context_transfer.py:1:Context transfer',
         is_error=False,
         project_root=str(project_root),
     )
@@ -171,7 +171,7 @@ def test_get_last_validation_event_detects_recent_validation_command(tmp_path):
         agent_id='agent-1',
         provider='openai',
         tool_name='Bash',
-        params={'command': 'python -m py_compile apps/core-daemon/context_transfer.py'},
+        params={'command': 'python -m py_compile src/charon/context/context_transfer.py'},
         result_content='',
         is_error=False,
         project_root=str(project_root),

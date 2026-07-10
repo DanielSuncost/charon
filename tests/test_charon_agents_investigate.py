@@ -6,19 +6,15 @@ import json
 import sys
 from contextlib import redirect_stdout
 
+from charon.shade import shade_orchestrator
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = ROOT / 'scripts' / 'charon_agents.py'
-SHADE_PATH = ROOT / 'apps' / 'core-daemon' / 'shade_orchestrator.py'
 
 spec_cli = importlib.util.spec_from_file_location('charon_agents_cli_test', SCRIPT_PATH)
 charon_agents = importlib.util.module_from_spec(spec_cli)
 sys.modules[spec_cli.name] = charon_agents
 spec_cli.loader.exec_module(charon_agents)
-
-spec_shade = importlib.util.spec_from_file_location('shade_orchestrator_test_mod', SHADE_PATH)
-shade_orchestrator = importlib.util.module_from_spec(spec_shade)
-sys.modules[spec_shade.name] = shade_orchestrator
-spec_shade.loader.exec_module(shade_orchestrator)
 
 
 def test_shade_investigate_outputs_recommendation(tmp_path):

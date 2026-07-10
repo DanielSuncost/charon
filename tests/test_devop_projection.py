@@ -1,5 +1,5 @@
-from devop_runtime import init_operation, init_workstream, save_checkpoint, save_review, append_decision
-from devop_projection import project_graph, project_room_messages, project_f4_stream, summarize_operation, summarize_workstream
+from charon.devop.devop_runtime import init_operation, init_workstream, save_checkpoint, save_review, append_decision
+from charon.devop.devop_projection import project_graph, project_room_messages, project_f4_stream, summarize_operation, summarize_workstream
 
 
 def test_devop_projection_outputs(tmp_path):

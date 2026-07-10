@@ -1,20 +1,8 @@
-from pathlib import Path
-import importlib.util
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-TOOLS_PATH = ROOT / 'apps' / 'core-daemon' / 'tools' / '__init__.py'
-SKILLS_PATH = ROOT / 'apps' / 'core-daemon' / 'tools' / 'skills_tool.py'
 
-spec_tools = importlib.util.spec_from_file_location('tools', TOOLS_PATH)
-tools_mod = importlib.util.module_from_spec(spec_tools)
-sys.modules['tools'] = tools_mod
-spec_tools.loader.exec_module(tools_mod)
+from charon import tools as tools_mod
 
-spec_sk = importlib.util.spec_from_file_location('skills_tool', SKILLS_PATH)
-sk_mod = importlib.util.module_from_spec(spec_sk)
-sys.modules['skills_tool'] = sk_mod
-spec_sk.loader.exec_module(sk_mod)
+from charon.tools import skills_tool as sk_mod
 
 
 def _ctx(tmp_path):

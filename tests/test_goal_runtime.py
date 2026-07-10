@@ -1,15 +1,7 @@
-from pathlib import Path
-import importlib.util
 import json
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-MOD_PATH = ROOT / 'apps' / 'core-daemon' / 'goal_runtime.py'
 
-spec = importlib.util.spec_from_file_location('goal_runtime', MOD_PATH)
-goal_runtime = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = goal_runtime
-spec.loader.exec_module(goal_runtime)
+from charon.agents import goal_runtime
 
 
 def test_ingest_intent_and_context_packet(tmp_path):

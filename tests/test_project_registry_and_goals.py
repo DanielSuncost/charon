@@ -1,22 +1,9 @@
-import importlib.util
 import json
-import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-
-def _load(name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-project_registry = _load('project_registry_test', ROOT / 'apps' / 'core-daemon' / 'project_registry.py')
-goal_runtime = _load('goal_runtime_proj_test', ROOT / 'apps' / 'core-daemon' / 'goal_runtime.py')
-mem_tools = _load('memory_tools_proj_test', ROOT / 'apps' / 'core-daemon' / 'tools' / 'memory_tools.py')
-tools_mod = _load('tools_mod_proj_test', ROOT / 'apps' / 'core-daemon' / 'tools' / '__init__.py')
+from charon.infra import project_registry
+from charon.agents import goal_runtime
+from charon.tools import memory_tools as mem_tools
+from charon import tools as tools_mod
 
 
 def test_project_registry_reuses_same_root(tmp_path):

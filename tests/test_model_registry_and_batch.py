@@ -1,13 +1,13 @@
 """Tests for model registry and batch orchestrator."""
 from pathlib import Path
 
-from model_registry import load_registry, save_registry
-from batch_orchestrator import (
+from charon.providers.model_registry import load_registry, save_registry
+from charon.automation.batch_orchestrator import (
     create_batch, get_batch, list_batches, summarize_batch,
     get_next_batch_tasks, mark_batch_task_started,
     mark_batch_task_completed, mark_batch_task_failed,
 )
-import store_adapter
+from charon.infra import store_adapter
 
 
 def setup_function():

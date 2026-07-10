@@ -10,7 +10,7 @@ class ConsolidationMixin:
     def handle_consolidation_traces(self, request_id: str | None):
         """Return recent consolidation scan traces for dashboard display."""
         try:
-            from consolidation import list_traces
+            from charon.memory.consolidation import list_traces
             traces = list_traces(common.STATE_DIR, limit=20)
             common.emit({
                 'type': 'consolidation_traces',
@@ -22,7 +22,7 @@ class ConsolidationMixin:
 
     def handle_consolidation_config(self, msg: dict, request_id: str | None):
         """Get or update consolidation config."""
-        from consolidation import load_config, save_config
+        from charon.memory.consolidation import load_config, save_config
         action = msg.get('action', 'get')
         if action == 'get':
             config = load_config(common.STATE_DIR)
@@ -48,7 +48,7 @@ class ConsolidationMixin:
         if not agent_id:
             # Default to the primary charon agent
             try:
-                from agent_lifecycle import list_agents
+                from charon.agents.agent_lifecycle import list_agents
                 for a in list_agents():
                     if a.get('role') == 'charon' and a.get('status') != 'stopped':
                         agent_id = a.get('id', '')
@@ -56,7 +56,7 @@ class ConsolidationMixin:
             except Exception:
                 pass
         try:
-            from task_ledger import get_agent_ledger_summary
+            from charon.agents.task_ledger import get_agent_ledger_summary
             result = get_agent_ledger_summary(common.STATE_DIR, agent_id)
             common.emit({
                 'type': 'agent_ledger',
@@ -71,7 +71,7 @@ class ConsolidationMixin:
     def handle_consolidation_run(self, request_id: str | None):
         """Manually trigger a consolidation scan."""
         try:
-            from consolidation import load_config, run_consolidation
+            from charon.memory.consolidation import load_config, run_consolidation
             config = load_config(common.STATE_DIR)
             result = run_consolidation(common.STATE_DIR, config)
             changes = result.get('changes', [])

@@ -1,14 +1,6 @@
-from pathlib import Path
-import importlib.util
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-MOD_PATH = ROOT / 'apps' / 'core-daemon' / 'shade_orchestrator.py'
 
-spec = importlib.util.spec_from_file_location('shade_orchestrator', MOD_PATH)
-shade_orchestrator = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = shade_orchestrator
-spec.loader.exec_module(shade_orchestrator)
+from charon.shade import shade_orchestrator
 
 
 def test_contract_create_and_branch_from_phase(tmp_path):

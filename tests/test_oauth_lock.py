@@ -2,7 +2,7 @@
 import asyncio
 import fcntl
 
-from oauth_lock import locked_refresh
+from charon.providers.oauth_lock import locked_refresh
 
 
 def _run(coro):

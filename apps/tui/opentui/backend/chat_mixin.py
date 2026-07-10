@@ -266,9 +266,9 @@ class ChatMixin:
             # Record task in working memory + task queue (zero LLM cost)
             if self._active_agent_id and engine:
                 try:
-                    from task_summarizer import summarize_fast
-                    from agent_runtime import update_working_memory
-                    from execution_memory import create_task_episode
+                    from charon.agents.task_summarizer import summarize_fast
+                    from charon.agents.agent_runtime import update_working_memory
+                    from charon.memory.execution_memory import create_task_episode
                     import uuid as _uuid
 
                     task_id = f'chat-{_uuid.uuid4().hex[:8]}'
@@ -386,7 +386,7 @@ class ChatMixin:
                     # to SQLite on every turn.  Write JSONL as backup using the
                     # FULL history from the store (not engine.messages which may
                     # have been truncated by legacy compaction).
-                    from conversation_store import save_conversation, message_to_dict
+                    from charon.conversation.conversation_store import save_conversation, message_to_dict
                     msgs_to_save = None
                     if engine.has_lossless_store:
                         msgs_to_save = _full_messages_from_store(self._active_agent_id)
@@ -398,7 +398,7 @@ class ChatMixin:
                     if not hasattr(self, '_session_registered'):
                         self._session_registered = True
                         try:
-                            from session_registry import register_session
+                            from charon.agents.session_registry import register_session
                             register_session(common.STATE_DIR, self._active_agent_id)
                         except Exception:
                             pass
@@ -415,8 +415,8 @@ class ChatMixin:
             try:
                 bound_agent_id = getattr(self, '_bound_agent_id', None)
                 if bound_agent_id:
-                    from store_adapter import get_db
-                    from libs.store import agent_inbox_push
+                    from charon.infra.store_adapter import get_db
+                    from charon.infra.store import agent_inbox_push
                     db = get_db(common.STATE_DIR)
                     agent_inbox_push(db, bound_agent_id,
                         event_type='task_received',
@@ -455,8 +455,8 @@ class ChatMixin:
                 # Heartbeat event for the run log (so dashboard activity picks it up)
                 if cycle % 30 == 0:
                     try:
-                        from store_adapter import get_db
-                        from libs.store import run_log_append
+                        from charon.infra.store_adapter import get_db
+                        from charon.infra.store import run_log_append
                         db = get_db(common.STATE_DIR)
                         run_log_append(db, 'heartbeat', cycle=cycle,
                                        uptime_seconds=cycle * 2)
@@ -467,7 +467,7 @@ class ChatMixin:
                 if cycle - last_consolidation >= consolidation_interval:
                     last_consolidation = cycle
                     try:
-                        from consolidation import load_config, should_run, run_consolidation
+                        from charon.memory.consolidation import load_config, should_run, run_consolidation
                         config = load_config(common.STATE_DIR)
                         if config.get('enabled', True) and should_run(common.STATE_DIR, config):
                             result = run_consolidation(common.STATE_DIR, config)
@@ -485,7 +485,7 @@ class ChatMixin:
                 if cycle - last_goal_inference >= goal_inference_interval:
                     last_goal_inference = cycle
                     try:
-                        from autonomous import (
+                        from charon.agents.autonomous import (
                             infer_goals_from_conversation,
                             propose_goal, get_proposed_goals,
                         )
@@ -500,7 +500,7 @@ class ChatMixin:
                             # Check if we already have proposed goals waiting
                             existing_proposed = get_proposed_goals(common.STATE_DIR, project=project)
                             if len(existing_proposed) < 3:  # don't spam proposals
-                                from provider_bridge import create_provider_and_model
+                                from charon.providers.provider_bridge import create_provider_and_model
                                 provider, model, ready = create_provider_and_model(common.STATE_DIR)
                                 if ready:
                                     self._goal_inference_token_estimate += 1000
@@ -536,7 +536,7 @@ class ChatMixin:
                     try:
                         from datetime import datetime as _dt, timezone as _tz, timedelta as _td
                         import uuid as _uuid
-                        from conversation_runtime import load_queue, save_queue
+                        from charon.conversation.conversation_runtime import load_queue, save_queue
                         queue = load_queue(common.STATE_DIR)
                         now_iso = _dt.now(_tz.utc).isoformat()
 
@@ -558,7 +558,7 @@ class ChatMixin:
                             task = pending[0]
                             agent_id = task.get('owner_agent_id') or task.get('actor_agent_id', '')
                             if agent_id:
-                                from agent_lifecycle import list_agents
+                                from charon.agents.agent_lifecycle import list_agents
                                 agent = None
                                 for a in list_agents():
                                     if a.get('id') == agent_id:
@@ -569,7 +569,7 @@ class ChatMixin:
                                     task['started_at'] = now_iso
                                     save_queue(common.STATE_DIR, queue)
 
-                                    from agent_runtime import run_task_tick
+                                    from charon.agents.agent_runtime import run_task_tick
                                     ok, result = run_task_tick(common.STATE_DIR, task, agent=agent)
 
                                     task['status'] = 'completed' if ok else 'failed'
@@ -614,7 +614,7 @@ class ChatMixin:
                 # Monitor batches and report completion
                 if cycle % 5 == 0:  # check every 10 seconds
                     try:
-                        from batch_orchestrator import list_batches, summarize_batch
+                        from charon.automation.batch_orchestrator import list_batches, summarize_batch
                         # _notified_batches is pre-populated at startup
 
                         all_batches = list_batches(common.STATE_DIR)
@@ -646,8 +646,8 @@ class ChatMixin:
 
                     # Update agent mode based on state
                     try:
-                        from batch_orchestrator import list_batches
-                        from autonomous import load_autonomous_config
+                        from charon.automation.batch_orchestrator import list_batches
+                        from charon.agents.autonomous import load_autonomous_config
                         running_batches = list_batches(common.STATE_DIR, status='running')
                         auto_cfg = load_autonomous_config(common.STATE_DIR)
 
@@ -671,7 +671,7 @@ class ChatMixin:
         """Save current conversation state immediately (called on exit)."""
         if self._active_agent_id and self.engine and self.engine.messages:
             try:
-                from conversation_store import save_conversation, message_to_dict
+                from charon.conversation.conversation_store import save_conversation, message_to_dict
                 # Use full history from lossless store when available
                 msgs_to_save = None
                 if self.engine.has_lossless_store:
@@ -685,7 +685,7 @@ class ChatMixin:
         # Unregister live session
         if self._active_agent_id:
             try:
-                from session_registry import unregister_session
+                from charon.agents.session_registry import unregister_session
                 unregister_session(common.STATE_DIR, self._active_agent_id)
             except Exception:
                 pass
@@ -693,7 +693,7 @@ class ChatMixin:
     def handle_abort(self, request_id: str | None):
         stopped_tool = False
         try:
-            from tools import abort_running_bash
+            from charon.tools import abort_running_bash
             stopped_tool = abort_running_bash()
         except Exception:
             stopped_tool = False

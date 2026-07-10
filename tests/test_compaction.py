@@ -1,7 +1,7 @@
 """Tests for compaction with file tracking."""
 
-from conversation_engine import _extract_file_ops, _format_file_ops
-from providers import Message, ToolCall
+from charon.conversation.conversation_engine import _extract_file_ops, _format_file_ops
+from charon.providers import Message, ToolCall
 
 
 # ── File operation extraction ───────────────────────────────────────

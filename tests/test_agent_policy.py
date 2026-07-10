@@ -1,14 +1,6 @@
-from pathlib import Path
-import importlib.util
-import sys
 
-ROOT = Path(__file__).resolve().parents[1]
-MOD_PATH = ROOT / 'apps' / 'core-daemon' / 'agent_policy.py'
 
-spec = importlib.util.spec_from_file_location('agent_policy', MOD_PATH)
-agent_policy = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = agent_policy
-spec.loader.exec_module(agent_policy)
+from charon.agents import agent_policy
 
 
 def test_should_delegate_to_shade_for_complex_task():

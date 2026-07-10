@@ -8,7 +8,7 @@ floor, the loop will "keep" changes that are really just judge noise (hill-climb
 noise). This script measures the noise so `min_delta` can be set from data.
 
 Usage:
-  PYTHONPATH=apps/core-daemon CHARON_EMBED_BACKEND=local \
+  PYTHONPATH=src CHARON_EMBED_BACKEND=local \
     python scripts/experiments/measure_judge_variance.py --n 20 --out results/judge_variance.json
 
 The Aesthetic measurement needs a configured provider (it makes N real LLM
@@ -23,9 +23,9 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from judge_engine import create_loop, create_judge  # noqa: E402
+from charon.judge.judge_engine import create_loop, create_judge  # noqa: E402
 
 SAMPLE_CODE = '''\
 def summarize(nums):
@@ -102,7 +102,7 @@ def main():
         report["judges"]["aesthetic"] = {"skipped": "disabled via --no-aesthetic"}
     else:
         try:
-            from provider_bridge import create_provider_and_model
+            from charon.providers.provider_bridge import create_provider_and_model
             provider, model, ready = create_provider_and_model(state if (state).exists() else Path(".charon_state"),
                                                                )
             if not ready:
@@ -110,7 +110,7 @@ def main():
         except Exception:
             # fall back to the repo's configured state dir
             try:
-                from provider_bridge import create_provider_and_model
+                from charon.providers.provider_bridge import create_provider_and_model
                 provider, model, ready = create_provider_and_model(Path(".charon_state"))
                 if not ready:
                     raise RuntimeError("no provider ready")

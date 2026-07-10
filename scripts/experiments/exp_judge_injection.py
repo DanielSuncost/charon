@@ -9,7 +9,7 @@ We hold the *actual code quality fixed* (a plain, mediocre function) and vary
 only injected text (comments/docstrings). Any score increase is pure injection,
 not real improvement. Each variant is scored N times.
 
-  PYTHONPATH=apps/core-daemon CHARON_STATE_DIR=$PWD/.charon_state \
+  PYTHONPATH=src CHARON_STATE_DIR=$PWD/.charon_state \
     python scripts/experiments/exp_judge_injection.py --n 6
 """
 import argparse
@@ -20,9 +20,9 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "apps" / "core-daemon"))
+sys.path.insert(0, str(ROOT / "src"))
 
-from judge_engine import create_loop, create_judge  # noqa: E402
+from charon.judge.judge_engine import create_loop, create_judge  # noqa: E402
 
 BASE = (
     "def summarize(nums):\n"
@@ -82,7 +82,7 @@ def main():
     ap.add_argument("--out", default="results/exp_judge_injection.json")
     args = ap.parse_args()
 
-    from provider_bridge import create_provider_and_model
+    from charon.providers.provider_bridge import create_provider_and_model
     provider, model, ready = create_provider_and_model(Path(".charon_state"))
     assert ready, "no provider configured"
     mid = getattr(model, "model_id", str(model))
