@@ -12,6 +12,7 @@ from pathlib import Path
 from backend import common
 from backend.settings_io import _hermes_conversation_runtime_dir, _write_hermes_runtime_home
 from charon.providers.provider_bridge import resolve_provider_config
+from charon.infra import config
 
 
 class RoomsMixin:
@@ -1515,7 +1516,7 @@ class RoomsMixin:
         meta = dict(meta or {})
         onboarding = common._load_json(common.STATE_DIR / 'onboarding.json', {})
         cfg = resolve_provider_config(common.STATE_DIR, session_id=self._active_agent_id or None)
-        base_url = str(meta.get('base_url') or os.environ.get('CHARON_LOCAL_BASE_URL') or os.environ.get('CHARON_LMSTUDIO_BASE_URL') or '').strip().rstrip('/')
+        base_url = str(meta.get('base_url') or config.local_base_url() or config.lmstudio_base_url() or '').strip().rstrip('/')
         if not base_url:
             base_url = str(cfg.get('base_url') or '').strip().rstrip('/')
         if not base_url:
@@ -1535,5 +1536,5 @@ class RoomsMixin:
             if candidate and not lowered.startswith('claude-') and not lowered.startswith('gpt-') and lowered not in ('o3', 'o4-mini', 'o3-mini', 'codex-mini-latest'):
                 model = candidate
         if not model:
-            model = os.environ.get('CHARON_LOCAL_MODEL', '').strip() or 'qwen3-30b-a3b'
+            model = config.local_model() or 'qwen3-30b-a3b'
         return {'provider': 'lmstudio', 'base_url': base_url, 'model': model}

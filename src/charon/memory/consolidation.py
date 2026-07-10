@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from charon.infra import config as env_config
 
 
 def _now() -> str:
@@ -43,11 +43,13 @@ def load_config(state_dir: Path) -> dict:
     except Exception:
         pass
     # Also check env vars
-    if os.environ.get('CHARON_CONSOLIDATION_MODEL'):
-        config['model_tier'] = os.environ['CHARON_CONSOLIDATION_MODEL']
-    if os.environ.get('CHARON_CONSOLIDATION_INTERVAL'):
-        config['scan_interval_heartbeats'] = int(os.environ['CHARON_CONSOLIDATION_INTERVAL'])
-    if os.environ.get('CHARON_CONSOLIDATION_ENABLED', '').lower() == 'false':
+    model_override = env_config.consolidation_model()
+    if model_override:
+        config['model_tier'] = model_override
+    interval_override = env_config.consolidation_interval()
+    if interval_override is not None:
+        config['scan_interval_heartbeats'] = interval_override
+    if env_config.consolidation_disabled():
         config['enabled'] = False
     return config
 

@@ -25,10 +25,10 @@ Slash command support (handled in conversation_engine):
 from __future__ import annotations
 
 import json
-import os
 import threading
 from pathlib import Path
 from typing import Optional
+from charon.infra import config
 
 
 _SETTINGS_FILE = 'settings.json'
@@ -144,7 +144,7 @@ def should_show_browser(
             return persistent
 
     # 3. Env var (legacy)
-    env = os.environ.get('CHARON_BROWSER_HEADLESS', '')
+    env = config.browser_headless_raw()
     if env:
         return env == '0'
 
@@ -166,7 +166,7 @@ def needs_session_prompt(session_id: str, state_dir: Path | None) -> bool:
     if state_dir and get_persistent_default(state_dir) is not None:
         return False
     # Also skip if env var is set explicitly
-    if os.environ.get('CHARON_BROWSER_HEADLESS', ''):
+    if config.browser_headless_raw():
         return False
     return True
 
@@ -176,7 +176,7 @@ def needs_session_prompt(session_id: str, state_dir: Path | None) -> bool:
 def status_string(session_id: str = '', state_dir: Path | None = None) -> str:
     session_override = get_session_override(session_id) if session_id else None
     persistent = get_persistent_default(state_dir) if state_dir else None
-    env_val = os.environ.get('CHARON_BROWSER_HEADLESS', '')
+    env_val = config.browser_headless_raw()
     resolved = should_show_browser(session_id, state_dir)
 
     lines = ['**Browser visibility settings**']

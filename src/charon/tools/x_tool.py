@@ -25,7 +25,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 import re
 import threading
 from datetime import datetime, timezone
@@ -33,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from charon.tools import ToolContext, ToolResult
+from charon.infra import config
 
 
 X_TOOL_DEF = {
@@ -170,9 +170,9 @@ def _now_iso() -> str:
 
 
 def _profile_dir(ctx: ToolContext) -> Path:
-    custom = os.environ.get('CHARON_X_PROFILE_DIR', '').strip()
+    custom = config.x_profile_dir()
     if custom:
-        return Path(custom).expanduser()
+        return custom
     if ctx.state_dir:
         return Path(ctx.state_dir) / 'browser' / 'x'
     return Path.home() / '.charon-x-profile'
@@ -551,7 +551,7 @@ async def _ensure_browser(ctx: ToolContext, *, headless: bool | None = None):
                 getattr(ctx, 'state_dir', None),
             )
         except Exception:
-            launch_headless = os.environ.get('CHARON_BROWSER_HEADLESS', '1') != '0'
+            launch_headless = config.browser_headless()
     else:
         launch_headless = headless
 

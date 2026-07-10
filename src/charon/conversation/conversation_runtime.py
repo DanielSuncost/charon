@@ -11,9 +11,9 @@ from typing import Callable
 
 from charon.conversation.conversation_participants import ConversationParticipantSpec, get_conversation_adapter
 
-import os
 import uuid
 from datetime import datetime, timezone
+from charon.infra import config
 
 # SQLite store adapter (optional)
 try:
@@ -39,7 +39,7 @@ class ConversationTurnResult:
 
 
 def _use_store() -> bool:
-    return _HAS_STORE and os.environ.get('CHARON_NO_SQLITE', '0') != '1'
+    return _HAS_STORE and not config.no_sqlite()
 
 
 def _utc_now_iso() -> str:

@@ -10,12 +10,12 @@ Uses Playwright Chromium with CDP for:
 from __future__ import annotations
 
 import asyncio
-import os
 import secrets
 import threading
 from pathlib import Path
 
 from charon.tools import ToolContext, ToolResult
+from charon.infra import config
 
 # ── Dedicated browser thread ─────────────────────────────────────────────────
 
@@ -74,7 +74,7 @@ async def _ensure_page():
         from charon.providers.browser_settings import should_show_browser
         headless = not should_show_browser(_session_id_ctx, _state_dir_ctx)
     except Exception:
-        headless = os.environ.get('CHARON_BROWSER_HEADLESS', '1') != '0'
+        headless = config.browser_headless()
 
     _pw = await async_playwright().start()
     _browser = await _pw.chromium.launch(headless=headless)

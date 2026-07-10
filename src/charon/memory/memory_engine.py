@@ -35,8 +35,8 @@ except Exception:  # diagnostics is best-effort and must never block import
 # Supported: "BAAI/bge-base-en-v1.5" (768d, recommended),
 #            "all-MiniLM-L6-v2" (384d, lightweight fallback),
 #            "BAAI/bge-large-en-v1.5" (1024d, highest quality).
-import os as _os
-EMBEDDING_MODEL = _os.environ.get("CHARON_EMBED_MODEL", "BAAI/bge-base-en-v1.5")
+from charon.infra import config as _config
+EMBEDDING_MODEL = _config.embed_model()
 # Dimension is detected at load time from the model itself.
 EMBEDDING_DIM: int | None = None  # set lazily by _get_model()
 DEFAULT_RECALL_LIMIT = 20

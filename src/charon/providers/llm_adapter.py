@@ -2,15 +2,15 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import urllib.request
 from pathlib import Path
+from charon.infra import config
 
 ROOT = Path(__file__).resolve().parents[3]
 STATE_DIR = ROOT / '.charon_state'
 DEFAULT_MODEL = 'qwen3.5-27b-uncensored-hauhaucs-aggressive'
-DEFAULT_BASE_URL = os.environ.get('CHARON_LMSTUDIO_BASE_URL', 'http://127.0.0.1:1234/v1')
+DEFAULT_BASE_URL = config.lmstudio_base_url() or config.DEFAULT_LOCAL_BASE_URL
 
 
 def _load_onboarding() -> dict:
@@ -34,7 +34,7 @@ def _detect_model_from_onboarding() -> str | None:
 
 
 def detect_base_url() -> str:
-    env = os.environ.get('CHARON_LMSTUDIO_BASE_URL', '').strip()
+    env = config.lmstudio_base_url()
     if env:
         return env.rstrip('/')
 
@@ -63,7 +63,7 @@ def _detect_model_from_user_state() -> str | None:
 
 
 def detect_model() -> str:
-    env = os.environ.get('CHARON_LOCAL_MODEL', '').strip()
+    env = config.local_model()
     if env:
         return env.split('/', 1)[1] if env.startswith('lmstudio/') else env
 

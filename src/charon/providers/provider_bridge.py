@@ -12,6 +12,7 @@ from pathlib import Path
 
 from charon.providers import ModelInfo, get_provider
 from charon.providers import Provider
+from charon.infra import config
 
 
 def _session_provider_dir(state_dir: Path) -> Path:
@@ -194,7 +195,7 @@ def _detect_model_fallback(onboarding: dict) -> str:
                 val = val.split('/', 1)[1]
             return val
 
-    env = os.environ.get('CHARON_LOCAL_MODEL', '').strip()
+    env = config.local_model()
     if env:
         return env.split('/', 1)[1] if '/' in env else env
 
@@ -203,7 +204,7 @@ def _detect_model_fallback(onboarding: dict) -> str:
 
 def _detect_base_url(onboarding: dict) -> str:
     """Detect base URL for local/API providers."""
-    env = os.environ.get('CHARON_LOCAL_BASE_URL') or os.environ.get('CHARON_LMSTUDIO_BASE_URL')
+    env = config.local_base_url() or config.lmstudio_base_url()
     if env:
         return env.strip().rstrip('/')
 
@@ -275,7 +276,7 @@ def _resolve_api_key(
 
     # 5. Local providers don't need a key
     if provider_name == 'local':
-        return os.environ.get('CHARON_LOCAL_API_KEY', 'not-needed')
+        return config.local_api_key()
 
     return ''
 
@@ -377,7 +378,7 @@ def _refresh_token(provider_raw: str, refresh_token: str) -> str | None:
             if new_token:
                 # Update auth store
                 import time
-                state_dir = Path.home() / '.charon_state' if not os.environ.get('CHARON_STATE_DIR') else Path(os.environ['CHARON_STATE_DIR'])
+                state_dir = config.state_dir() or (Path.home() / '.charon_state')
                 auth_file = state_dir / 'auth' / 'auth.json'
                 if auth_file.exists():
                     try:

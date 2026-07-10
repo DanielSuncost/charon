@@ -14,6 +14,7 @@ import json
 import os
 import threading
 from pathlib import Path
+from charon.infra import config
 
 
 DEFAULT_REGISTRY = {
@@ -71,10 +72,10 @@ def load_registry(state_dir: Path) -> dict:
         pass
 
     # Env overrides
-    env_mode = os.environ.get('CHARON_SHADE_MODEL_MODE', '').strip()
+    env_mode = config.shade_model_mode()
     if env_mode:
         reg['shade_model_mode'] = env_mode
-    env_model = os.environ.get('CHARON_SHADE_MODEL', '').strip()
+    env_model = config.shade_model()
     if env_model:
         reg['shade_model'] = env_model
         reg['shade_model_mode'] = 'fixed'

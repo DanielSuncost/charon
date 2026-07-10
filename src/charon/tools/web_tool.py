@@ -17,6 +17,7 @@ from html.parser import HTMLParser
 from urllib.parse import quote_plus
 
 from charon.tools import ToolContext, ToolResult
+from charon.infra import config
 
 
 # ── HTML to text (stdlib only) ──────────────────────────────────────
@@ -304,7 +305,7 @@ def execute_web(params: dict, ctx: ToolContext) -> ToolResult:
 
         # Provider priority: Brave (best) > SearXNG (self-hosted) > DDG (zero config)
         brave_key = os.environ.get('BRAVE_SEARCH_API_KEY', '').strip()
-        searxng_url = os.environ.get('CHARON_SEARXNG_URL', '').strip()
+        searxng_url = config.searxng_url()
 
         if brave_key:
             results = _search_brave(query, brave_key, max_results)

@@ -15,10 +15,11 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from charon.infra import config
 
-MODEL_NAME = os.environ.get('CHARON_EMBED_MODEL', 'BAAI/bge-base-en-v1.5')
-MODEL_DEVICE = os.environ.get('CHARON_EMBED_DEVICE', '').strip() or None
-IDLE_TIMEOUT_SECS = max(15, int(os.environ.get('CHARON_EMBED_IDLE_SECS', '120') or '120'))
+MODEL_NAME = config.embed_model()
+MODEL_DEVICE = config.embed_device()
+IDLE_TIMEOUT_SECS = config.embed_idle_secs()
 
 _model = None
 _model_dim: int | None = None

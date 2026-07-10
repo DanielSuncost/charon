@@ -95,6 +95,7 @@ def _github_repo_search(query: str, limit: int = 5) -> list[dict[str, Any]]:
 def _targeted_web_search(query: str, site_filters: list[str], limit: int = 5, source_type: str = 'web') -> list[dict[str, Any]]:
     try:
         from charon.tools.web_tool import _search_ddg, _search_brave, _search_searxng
+        from charon.infra import config
         import os
     except Exception:
         return []
@@ -104,7 +105,7 @@ def _targeted_web_search(query: str, site_filters: list[str], limit: int = 5, so
         scoped_query += ' ' + ' '.join(f'site:{s}' for s in site_filters)
 
     brave_key = os.environ.get('BRAVE_SEARCH_API_KEY', '').strip()
-    searxng_url = os.environ.get('CHARON_SEARXNG_URL', '').strip()
+    searxng_url = config.searxng_url()
     if brave_key:
         rows = _search_brave(scoped_query, brave_key, limit)
     elif searxng_url:

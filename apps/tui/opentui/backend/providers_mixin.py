@@ -9,6 +9,7 @@ from backend.settings_io import _full_messages_from_store
 from backend.textutils import _sanitize_saved_messages
 from charon.conversation.conversation_engine import ConversationEngine
 from charon.providers.provider_bridge import create_provider_and_model, resolve_provider_config
+from charon.infra import config
 
 
 class ProvidersMixin:
@@ -60,7 +61,7 @@ class ProvidersMixin:
         try:
             from charon.context.system_prompt_builder import build_system_prompt as build_layered_prompt
             agent_info = {'id': '', 'name': 'Charon', 'role': 'charon', 'goal': '', 'project': project}
-            requested_agent = os.environ.get('CHARON_AGENT', '').strip()
+            requested_agent = config.requested_agent()
             self._bound_agent_id = None
             if requested_agent:
                 try:
@@ -124,7 +125,7 @@ class ProvidersMixin:
         # (don't clutter the session list with empty sessions)
 
         # Only resume when explicitly requested via --resume flag or /resume command
-        if self._active_agent_id and os.environ.get('CHARON_RESUME', '').strip():
+        if self._active_agent_id and config.requested_resume():
             try:
                 saved = None
                 aid = self._active_agent_id

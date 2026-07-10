@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import json
-import os
 from datetime import datetime, timezone
 
 import subprocess
 import shutil
 import re
 from pathlib import Path
+from charon.infra import config
 
 # SQLite store adapter (optional — gracefully degrades to JSON)
 try:
@@ -91,7 +91,7 @@ def now() -> str:
 
 def _use_store() -> bool:
     """Check if SQLite store should be used."""
-    return _HAS_STORE and os.environ.get('CHARON_NO_SQLITE', '0') != '1'
+    return _HAS_STORE and not config.no_sqlite()
 
 
 def load_agents(state_dir: Path | None = None) -> list[dict]:
@@ -172,7 +172,7 @@ def create_agent(
     agent_id = next_id(agents, custom_id=agent_id)
 
     if require_tmux is None:
-        require_tmux = os.environ.get('CHARON_REQUIRE_TMUX', '1') == '1'
+        require_tmux = config.require_tmux()
 
     final_name = (name or '').strip()
     if not final_name and role == 'charon':

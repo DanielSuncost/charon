@@ -8,17 +8,18 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+from charon.infra import config
 
 ROOT = Path(__file__).resolve().parents[3]
 WORKER_SCRIPT = ROOT / 'src' / 'charon' / 'memory' / 'embedding_worker.py'
-MODEL_NAME = os.environ.get('CHARON_EMBED_MODEL', 'BAAI/bge-base-en-v1.5')
-BACKEND = os.environ.get('CHARON_EMBED_BACKEND', 'worker').strip().lower()
+MODEL_NAME = config.embed_model()
+BACKEND = config.embed_backend()
 
 
 def _backend() -> str:
     """Resolve the backend at call time so it can be overridden per-process
     (e.g. tests set CHARON_EMBED_BACKEND=local to avoid the worker subprocess)."""
-    return os.environ.get('CHARON_EMBED_BACKEND', 'worker').strip().lower()
+    return config.embed_backend()
 
 
 _LOCAL_MODEL = None
@@ -34,7 +35,7 @@ def _get_local_model():
     if _LOCAL_MODEL is None:
         from sentence_transformers import SentenceTransformer
         _LOCAL_MODEL = SentenceTransformer(
-            MODEL_NAME, device=(os.environ.get('CHARON_EMBED_DEVICE') or None)
+            MODEL_NAME, device=config.embed_device()
         )
     return _LOCAL_MODEL
 
@@ -97,7 +98,7 @@ def _health_ok(meta: dict[str, Any]) -> bool:
             return False
         if str(data.get('model') or meta.get('model') or '') != MODEL_NAME:
             return False
-        want_device = os.environ.get('CHARON_EMBED_DEVICE', '').strip() or 'auto'
+        want_device = config.embed_device() or 'auto'
         got_device = str(data.get('device') or meta.get('device') or 'auto')
         return got_device == want_device
     except Exception:
