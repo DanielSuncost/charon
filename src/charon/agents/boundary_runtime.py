@@ -7,6 +7,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 # SQLite store adapter (optional)
 try:
     from charon.infra.store_adapter import (
@@ -42,8 +48,8 @@ def load_boundaries(state_dir: Path) -> list[dict]:
     if _use_store():
         try:
             return _db_boundary_list(_get_db(state_dir))
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('boundary_runtime', 'SQLite boundary list failed; falling back to boundaries.json', error=e)
     p = _path(state_dir)
     if not p.exists():
         return []
@@ -51,8 +57,8 @@ def load_boundaries(state_dir: Path) -> list[dict]:
         data = json.loads(p.read_text())
         if isinstance(data, list):
             return data
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('boundary_runtime', 'boundaries.json unreadable; boundary list returned empty', error=e)
     return []
 
 
@@ -98,8 +104,8 @@ def create_proposal(
             db = _get_db(state_dir)
             if not _db_boundary_get(db, rec['id']):
                 _db_boundary_insert(db, dict(rec))
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('boundary_runtime', 'proposal mirror to SQLite failed; store diverges from boundaries.json', error=e)
     return rec
 
 
@@ -130,8 +136,8 @@ def resolve_proposal(
                 _db_boundary_update(_get_db(state_dir), rec['id'],
                                     status=rec['status'], resolved_at=rec['resolved_at'],
                                     resolved_by=resolver_agent_id, resolution_reason=reason)
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('boundary_runtime', 'resolution mirror to SQLite failed; store diverges from boundaries.json', error=e, proposal_id=proposal_id)
         return rec
     return None
 

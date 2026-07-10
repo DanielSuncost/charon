@@ -11,6 +11,12 @@ from charon.conversation.conversation_engine import ConversationEngine
 from charon.providers.provider_bridge import create_provider_and_model, resolve_provider_config
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 class ProvidersMixin:
     """Engine/provider lifecycle: creation, switching, and context transfer."""
@@ -31,8 +37,8 @@ class ProvidersMixin:
                     'reason': reason,
                 })
             set_approval_callback(_emit_approval)
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag('providers_mixin', 'tool approval callback registration failed; approval prompts disabled', error=exc)
 
         if self.engine is not None:
             return self.engine, ''
@@ -71,8 +77,8 @@ class ProvidersMixin:
                             agent_info = a
                             self._bound_agent_id = a.get('id') or None
                             break
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _diag('providers_mixin', 'requested agent lookup failed; session not bound to persistent agent', error=exc, name=requested_agent)
             task_info = {'project': project}
             system_prompt = build_layered_prompt(
                 state_dir=common.STATE_DIR, agent=agent_info, task=task_info,
@@ -118,8 +124,8 @@ class ProvidersMixin:
                     'type': 'status',
                     'message': f'Applied context transfer {pending_transfer.get("id", "")}. Session continued on new provider.',
                 })
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag('providers_mixin', 'pending context transfer failed to apply; new provider session starts without transferred context', error=exc)
 
         # Session registration deferred until first message is sent
         # (don't clutter the session list with empty sessions)
@@ -156,8 +162,8 @@ class ProvidersMixin:
                         'count': len(saved),
                         'agent_id': aid,
                     })
-            except Exception:
-                pass
+            except Exception as exc:
+                _diag('providers_mixin', 'conversation resume failed; session starts with empty history', error=exc)
 
         return self.engine, ''
 
@@ -174,7 +180,8 @@ class ProvidersMixin:
         try:
             session_id = self._active_agent_id or None
             return resolve_provider_config(common.STATE_DIR, session_id=session_id)
-        except Exception:
+        except Exception as e:
+            _diag('providers_mixin', 'provider config resolution failed; falling back to raw onboarding state', error=e)
             onboarding = common._load_json(common.STATE_DIR / 'onboarding.json', {})
             return {
                 'provider_raw': str(onboarding.get('provider') or '').strip(),
@@ -192,7 +199,8 @@ class ProvidersMixin:
         try:
             from charon.context.context_transfer import session_has_transferable_context
             return bool(self.engine and session_has_transferable_context(self.engine.messages))
-        except Exception:
+        except Exception as e:
+            _diag('providers_mixin', 'transferable-context check failed; using message-count heuristic', error=e)
             return bool(self.engine and len(self.engine.messages) >= 4)
 
     def _prompt_provider_switch(self, target_provider: str, request_id: str | None, source: str):
@@ -285,8 +293,8 @@ class ProvidersMixin:
                 'target_provider': target_provider,
                 'session_id': self._active_agent_id or '',
             })
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('providers_mixin', 'clearing pending transfer before fresh provider switch failed; stale transfer may apply later', error=e)
         self._run_setup_command(f'provider {target_provider}', request_id, skip_prompt=True)
 
     def _detect_lmstudio_models(self) -> list[str]:

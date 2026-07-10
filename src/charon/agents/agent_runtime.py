@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 if TYPE_CHECKING:
     from charon.conversation.conversation_engine import ConversationEngine
 
@@ -47,7 +53,8 @@ def _read_json(path: Path, default):
         return default
     try:
         return json.loads(path.read_text())
-    except Exception:
+    except Exception as e:
+        _diag('agent_runtime', 'unreadable JSON state file; returning default (stored state ignored)', error=e, path=str(path))
         return default
 
 
@@ -108,8 +115,8 @@ def ensure_agent_runtime_state(state_dir: Path, agent: dict) -> dict:
             db = _get_db(state_dir)
             _db_profile_upsert(db, agent_id, profile)
             _db_memory_upsert(db, agent_id, memory)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('agent_runtime', 'agent profile/memory sync to SQLite failed; store diverges from JSON', error=e)
 
     return {
         'agent_dir': str(adir),
@@ -129,8 +136,8 @@ def append_inbox_event(state_dir: Path, agent_id: str, event_type: str, payload:
     if _use_store():
         try:
             _db_inbox_append(_get_db(state_dir), agent_id, event_type, payload)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('agent_runtime', 'inbox event mirror to SQLite failed; store misses this event', error=e, event_type=event_type)
 
 
 def record_attempt_event(state_dir: Path, agent_id: str, task_id: str, attempt_id: str, stage: str, payload: dict | None = None) -> None:
@@ -146,8 +153,8 @@ def record_attempt_event(state_dir: Path, agent_id: str, task_id: str, attempt_i
     if _use_store():
         try:
             _db_attempt_append(_get_db(state_dir), agent_id, task_id, attempt_id, stage, payload)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('agent_runtime', 'attempt event mirror to SQLite failed; store misses this attempt stage', error=e, stage=stage)
 
 
 def update_working_memory(state_dir: Path, agent_id: str, *, task_id: str, summary: str) -> None:
@@ -168,8 +175,8 @@ def update_working_memory(state_dir: Path, agent_id: str, *, task_id: str, summa
     if _use_store():
         try:
             _db_memory_upsert(_get_db(state_dir), agent_id, memory)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('agent_runtime', 'working-memory sync to SQLite failed; store diverges from JSON', error=e)
 
 
 def _extract_json_object(text: str) -> dict | None:
@@ -213,8 +220,8 @@ def _resolve_planner_mode(state_dir: Path) -> str:
     if _use_store():
         try:
             onboarding = _db_onboarding_get(_get_db(state_dir))
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('agent_runtime', 'onboarding lookup via SQLite failed; falling back to onboarding.json', error=e)
 
     # Fallback to JSON
     if not onboarding:
@@ -222,7 +229,8 @@ def _resolve_planner_mode(state_dir: Path) -> str:
         if onboarding_path.exists():
             try:
                 onboarding = json.loads(onboarding_path.read_text())
-            except Exception:
+            except Exception as e:
+                _diag('agent_runtime', 'onboarding.json unreadable; planner mode falls back to heuristic', error=e)
                 onboarding = {}
 
     if isinstance(onboarding, dict):
@@ -365,8 +373,8 @@ def _build_task_system_prompt(state_dir: Path, agent: dict, task: dict) -> str:
         try:
             from charon.shade import shade_orchestrator as _shade_orch
             contract = _shade_orch.get_contract(state_dir, contract_id)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('agent_runtime', 'shade contract load failed; task runs without contract constraints', error=e)
 
     return build_layered_prompt(
         state_dir=state_dir,
@@ -456,8 +464,8 @@ def _promote_task_to_episode(
             input_tokens=0,
             output_tokens=0,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('agent_runtime', 'episodic promotion failed; task episode not recorded', error=e, task_id=task_id)
 
 
 def _run_task_with_engine(

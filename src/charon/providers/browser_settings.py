@@ -30,6 +30,12 @@ from pathlib import Path
 from typing import Optional
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 _SETTINGS_FILE = 'settings.json'
 _KEY = 'browser_visible'
@@ -55,7 +61,8 @@ def _load_settings(state_dir: Path) -> dict:
         return {}
     try:
         return json.loads(path.read_text())
-    except Exception:
+    except Exception as e:
+        _diag('browser_settings', 'settings.json unreadable; using empty settings', error=e)
         return {}
 
 

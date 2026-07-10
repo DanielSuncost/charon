@@ -12,6 +12,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _conv_dir(state_dir: Path) -> Path:
     d = state_dir / 'conversations'
@@ -124,8 +130,8 @@ def list_conversations(state_dir: Path) -> list[dict]:
                 'last_timestamp': last_ts,
                 'path': '',
             })
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('conversation_store', 'SQLite session merge failed; store-only conversations missing from list', error=e)
 
     return result
 

@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Any
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 ROOT = Path(__file__).resolve().parents[3]
 WORKER_SCRIPT = ROOT / 'src' / 'charon' / 'memory' / 'embedding_worker.py'
 MODEL_NAME = config.embed_model()
@@ -58,7 +64,8 @@ def _is_pid_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    except Exception:
+    except Exception as e:
+        _diag('embedding_client', 'pid liveness check failed; treating worker as dead', error=e)
         return False
 
 
@@ -70,7 +77,8 @@ def _read_meta(state_dir: Path) -> dict[str, Any] | None:
         data = json.loads(path.read_text())
         if isinstance(data, dict):
             return data
-    except Exception:
+    except Exception as e:
+        _diag('embedding_client', 'worker meta file unreadable; treating worker as absent', error=e)
         return None
     return None
 
@@ -121,8 +129,8 @@ def _release_lock(lock_path: Path) -> None:
     try:
         if lock_path.exists():
             lock_path.unlink()
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('embedding_client', 'failed to remove worker lock file; next worker start may be delayed', error=e)
 
 
 def ensure_worker(state_dir: Path) -> dict[str, Any]:
@@ -143,8 +151,8 @@ def ensure_worker(state_dir: Path) -> dict[str, Any]:
                 try:
                     os.kill(pid, 15)
                     time.sleep(0.2)
-                except Exception:
-                    pass
+                except Exception as e:
+                    _diag('embedding_client', 'failed to terminate stale embedding worker', error=e, pid=pid)
 
         env = os.environ.copy()
         cmd = ['python3', str(WORKER_SCRIPT), '--state-dir', str(state_dir)]

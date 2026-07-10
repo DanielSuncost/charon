@@ -18,6 +18,12 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 CATEGORIES = ('style', 'coding', 'tooling', 'workflow', 'corrections', 'intentions', 'patterns', 'interests', 'mental_model', 'ideas')
 CHAR_LIMIT = 5000
@@ -77,18 +83,20 @@ def load_structured(state_dir: Path) -> dict:
             if isinstance(meta, str):
                 try:
                     meta = json.loads(meta)
-                except Exception:
+                except Exception as e:
+                    _diag('user_model_structured', 'user-model _meta unparseable; consolidation metadata reset to empty', error=e)
                     meta = {}
             if isinstance(meta, dict) and 'value' in meta:
                 meta = meta['value']
                 if isinstance(meta, str):
                     try:
                         meta = json.loads(meta)
-                    except Exception:
+                    except Exception as e:
+                        _diag('user_model_structured', 'user-model _meta value unparseable; consolidation metadata reset to empty', error=e)
                         meta = {}
             model['_meta'] = meta
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('user_model_structured', 'structured user model load from SQLite failed; using defaults', error=e)
 
     # Migrate flat entries if structured categories are empty
     if all(not model.get(c) for c in CATEGORIES):
@@ -114,8 +122,8 @@ def _migrate_flat_entries(state_dir: Path, model: dict) -> dict:
             # Put all flat entries into corrections as a safe default
             # (they'll get properly categorized on first consolidation)
             model['corrections'] = flat_entries
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('user_model_structured', 'flat-entry migration from SQLite failed; legacy entries not migrated', error=e)
 
     # Also try JSON file
     if not model.get('corrections'):
@@ -127,8 +135,8 @@ def _migrate_flat_entries(state_dir: Path, model: dict) -> dict:
                 flat = [str(v.get('value', '')) for v in prefs.values() if v.get('value')]
                 if flat:
                     model['corrections'] = flat
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('user_model_structured', 'user_model.json migration read failed; legacy entries not migrated', error=e)
 
     return model
 
@@ -147,8 +155,8 @@ def save_structured(state_dir: Path, model: dict) -> None:
                 user_model_set(db, cat, model[cat])
         if model.get('_meta'):
             user_model_set(db, '_meta', model['_meta'])
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('user_model_structured', 'user model SQLite save failed; profile changes not persisted', error=e)
 
     # Export to USER.md
     try:
@@ -156,8 +164,8 @@ def save_structured(state_dir: Path, model: dict) -> None:
         md_path = state_dir / 'USER.md'
         md_path.parent.mkdir(parents=True, exist_ok=True)
         md_path.write_text(md, encoding='utf-8')
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('user_model_structured', 'USER.md export failed; markdown profile is stale', error=e)
 
     # Also write JSON for backward compat
     try:
@@ -167,8 +175,8 @@ def save_structured(state_dir: Path, model: dict) -> None:
         for cat in CATEGORIES:
             export[cat] = model.get(cat, {} if cat != 'corrections' else [])
         um_path.write_text(json.dumps(export, indent=2, ensure_ascii=False))
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('user_model_structured', 'user_model.json compat export failed; JSON profile is stale', error=e)
 
 
 # ── Ideas ──────────────────────────────────────────────────────────
@@ -240,8 +248,8 @@ def record_idea(
             text=summary,
             priority='normal',
         )
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('user_model_structured', 'idea-to-goal cross-link failed; idea saved without backlog goal', error=e)
 
     return idea
 
@@ -280,7 +288,8 @@ def lookup_idea_context(state_dir: Path, idea_id: str) -> dict | None:
                 {'role': m.role, 'content': m.content[:500], 'seq': i}
                 for i, m in enumerate(messages[start:end], start=start)
             ]
-        except Exception:
+        except Exception as e:
+            _diag('user_model_structured', 'idea context lookup failed; returning idea without conversation slice', error=e)
             result['context_messages'] = []
     return result
 

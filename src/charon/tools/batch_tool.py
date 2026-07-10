@@ -9,6 +9,12 @@ import threading
 
 from charon.tools import ToolContext, ToolResult
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 SPAWN_BATCH_TOOL_DEF = {
     'name': 'SpawnBatch',
@@ -93,8 +99,8 @@ def execute_spawn_batch(params: dict, ctx: ToolContext) -> ToolResult:
                 is_error=True,
                 details=provider_status,
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        _diag('batch_tool', 'worker-provider preflight check failed; batch proceeds without provider validation', error=exc)
 
     # Validate tasks
     clean_tasks = []
@@ -132,8 +138,8 @@ def execute_spawn_batch(params: dict, ctx: ToolContext) -> ToolResult:
         def _run():
             try:
                 run_batch_worker(ctx.state_dir, batch['id'])
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('batch_tool', 'background batch worker crashed; batch dies silently while reported as running', error=e, batch_id=str(batch.get('id') or ''))
 
         t = threading.Thread(target=_run, daemon=True)
         t.start()

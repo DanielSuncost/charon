@@ -34,6 +34,12 @@ from typing import Any
 from charon.tools import ToolContext, ToolResult
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 X_TOOL_DEF = {
     'name': 'X',
@@ -192,8 +198,8 @@ def _load_records(ctx: ToolContext) -> dict[str, Any]:
         data = json.loads(path.read_text())
         if isinstance(data, dict) and isinstance(data.get('items'), list):
             return data
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('x_tool', 'x_bookmarks.json unreadable/corrupt; resetting to empty bookmark record store', error=e)
     return {'version': 1, 'items': []}
 
 
@@ -550,7 +556,8 @@ async def _ensure_browser(ctx: ToolContext, *, headless: bool | None = None):
                 getattr(ctx, 'agent_id', '') or '',
                 getattr(ctx, 'state_dir', None),
             )
-        except Exception:
+        except Exception as exc:
+            _diag('x_tool', 'headless-flag resolution failed; falling back to config default', error=exc)
             launch_headless = config.browser_headless()
     else:
         launch_headless = headless
@@ -738,8 +745,8 @@ def execute_x(params: dict, ctx: ToolContext) -> ToolResult:
                         'message': provider_status.get('question') or 'No usable provider is configured for X bookmark triage.',
                     }
                     return ToolResult(content=json.dumps(payload, indent=2), is_error=True, details=payload)
-            except Exception:
-                pass
+            except Exception as exc:
+                _diag('x_tool', 'worker-provider preflight check failed; bookmark triage proceeds without provider validation', error=exc)
             fetched = _run(_fetch_bookmarks_impl(ctx, limit, new_only=True))
             bookmarks = list(fetched.get('bookmarks') or [])
             if not bookmarks:

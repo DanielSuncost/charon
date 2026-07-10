@@ -22,6 +22,12 @@ from charon.agents import agent_policy as AGENT_POLICY
 from charon.agents import goal_runtime as GOAL_RUNTIME
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 # SQLite store adapter (optional)
 try:
     from charon.infra.store_adapter import (
@@ -63,8 +69,8 @@ def log_event(log_file: Path, event: str, **data):
         try:
             state_dir = log_file.parent
             _db_run_log_append(_get_db(state_dir), event, **data)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('charon_loop', 'run-log mirror to SQLite failed; store misses this event', error=e, event=event)
 
 
 def trace_event(trace_file: Path | None, event: str, **data):
@@ -81,7 +87,8 @@ def load_queue(queue_file: Path):
         return []
     try:
         return json.loads(queue_file.read_text())
-    except Exception:
+    except Exception as e:
+        _diag('charon_loop', 'queue.json unreadable; treating queue as empty this cycle', error=e)
         return []
 
 
@@ -121,8 +128,8 @@ def _sync_task_to_db(state_dir: Path, task: dict) -> None:
                 _db_task_update(db, task_id, **updates)
         else:
             _db_task_insert(db, dict(task))
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('charon_loop', 'task sync to SQLite failed; store diverges from queue.json', error=e)
 
 
 def _is_task_stale(task: dict, *, threshold_sec: int) -> bool:
@@ -131,7 +138,8 @@ def _is_task_stale(task: dict, *, threshold_sec: int) -> bool:
         return True
     try:
         dt = datetime.fromisoformat(started)
-    except Exception:
+    except Exception as e:
+        _diag('charon_loop', 'unparseable started_at on in_progress task; treating task as stale', error=e)
         return True
     age = (datetime.now(timezone.utc) - dt).total_seconds()
     return age >= threshold_sec
@@ -159,7 +167,8 @@ def _lookup_agent(agent_id: str, state_dir: Path | None = None) -> dict | None:
         if p.exists():
             try:
                 rows = json.loads(p.read_text())
-            except Exception:
+            except Exception as e:
+                _diag('charon_loop', 'agents.json unreadable; agent lookup degrades to lifecycle registry', error=e)
                 rows = []
             for agent in rows:
                 if isinstance(agent, dict) and agent.get('id') == agent_id:
@@ -891,13 +900,13 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
     try:
         from charon.fleet.fleet_sync import start_fleet_sync
         start_fleet_sync()
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('charon_loop', 'fleet sync failed to start; fleet state will not synchronize', error=e)
     try:
         from charon.fleet.fleet_memory import start_fleet_memory
         start_fleet_memory()
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('charon_loop', 'fleet memory failed to start; cross-fleet memory disabled', error=e)
 
     stale_in_progress_sec = config.stale_in_progress_sec()
 
@@ -937,8 +946,8 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
                         trace_event(trace_file, 'consolidation_complete',
                                     cycle=cycles, changes=change_count,
                                     error=result.get('error'))
-            except Exception:
-                pass  # Consolidation is best-effort
+            except Exception as e:
+                _diag('charon_loop', 'user-model consolidation heartbeat failed; consolidation skipped', error=e)  # Consolidation is best-effort
 
             # Soft specialization refresh on heartbeat
             try:
@@ -949,8 +958,8 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
                     for aid, label in updated.items():
                         log_event(log_file, 'specialization_updated', agent_id=aid, label=label)
                         trace_event(trace_file, 'specialization_updated', cycle=cycles, agent_id=aid, label=label)
-            except Exception:
-                pass  # Specialization is best-effort
+            except Exception as e:
+                _diag('charon_loop', 'soft specialization refresh failed; agent labels not updated', error=e)  # Specialization is best-effort
 
             # Judge-loop driver: advance running optimization loops one step
             try:
@@ -960,8 +969,8 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
                         continue
                     log_event(log_file, 'judge_loop_tick', **ev)
                     trace_event(trace_file, 'judge_loop_tick', cycle=cycles, **ev)
-            except Exception:
-                pass  # Judge loops are best-effort
+            except Exception as e:
+                _diag('charon_loop', 'judge-loop tick failed; optimization loops not advanced', error=e)  # Judge loops are best-effort
 
         if stop_file.exists():
             log_event(log_file, 'loop_stop_file_detected', stop_file=str(stop_file))
@@ -1010,8 +1019,8 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
                                     trace_event(trace_file, 'autonomous_task_created',
                                                 cycle=cycles, task_id=auto_task.get('id'))
                                 break
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('charon_loop', 'autonomous self-assignment failed; no task self-assigned this cycle', error=e)
 
             if not auto_task:
                 log_event(log_file, 'loop_idle', reason='no_pending_tasks')

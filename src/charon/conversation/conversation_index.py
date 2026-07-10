@@ -5,6 +5,12 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -28,8 +34,8 @@ def load_index(index_path: Path) -> dict:
         data = json.loads(index_path.read_text())
         if isinstance(data, dict):
             return data
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('conversation_index', 'index file unreadable or corrupt; rebuilding from empty index', error=e)
     return _empty_index()
 
 

@@ -10,6 +10,12 @@ import json
 import re
 from typing import Any
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 # ── Extraction prompt ───────────────────────────────────────────────
 
@@ -141,11 +147,13 @@ def extract_facts_from_session(
                 ).result(timeout=60)
         else:
             response = asyncio.run(provider_call(messages, model))
-    except Exception:
+    except Exception as e:
+        _diag('memory_extractor', 'provider call failed on event-loop path; retrying with asyncio.run', error=e)
         try:
             import asyncio
             response = asyncio.run(provider_call(messages, model))
-        except Exception:
+        except Exception as exc:
+            _diag('memory_extractor', 'provider call failed after retry; session yields no facts', error=exc)
             return []
 
     return parse_extraction_response(response)
@@ -177,7 +185,8 @@ def extract_facts_sync(
 
     try:
         response = llm_call(messages)
-    except Exception:
+    except Exception as e:
+        _diag('memory_extractor', 'LLM call failed; extraction returns no facts', error=e)
         return []
 
     return parse_extraction_response(response)

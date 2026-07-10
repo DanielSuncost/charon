@@ -6,6 +6,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _role_prompt(role: str, operation_id: str, topic_slug: str = '', user_goal: str = '') -> str:
     base = [
@@ -203,8 +209,8 @@ def _agent_status(agent_id: str) -> str:
         for a in list_agents():
             if a.get('id') == agent_id:
                 return str(a.get('status') or '')
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('libris_agents', 'agent registry status lookup failed; treating agent status as unknown', error=e, agent_id=agent_id)
     return ''
 
 
@@ -289,8 +295,8 @@ def start_autonomous_libris_research(
     try:
         from charon.libris.libris_runtime import update_operation_budget
         update_operation_budget(state_dir, project_root, op['operation_id'], budget=budget or {}, model_policy=model_policy or {})
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('libris_agents', 'operation budget update failed; operation runs with default budget', error=e)
 
     try:
         from charon.libris.libris_runtime import append_operation_event
@@ -299,8 +305,8 @@ def start_autonomous_libris_research(
             'parent_agent_id': parent_agent_id,
             'coordinator_agent_id': coordinator.get('id', ''),
         })
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('libris_agents', 'autonomous_research_started event emission failed; operation timeline missing start marker', error=e)
 
     try:
         from charon.libris.libris_runtime import get_operation_state
@@ -313,8 +319,8 @@ def start_autonomous_libris_research(
             note='Coordinator spawned for autonomous Libris run.',
         )
         op = get_operation_state(state_dir, project_root, op['operation_id'])
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('libris_agents', 'recording coordinator on operation runtime failed; operation state may miss coordinator id/status', error=e)
 
     thread = threading.Thread(
         target=_run_operation_controller,
@@ -503,8 +509,8 @@ def _run_operation_controller(
                 try:
                     from charon.libris.libris_procurement_ingest import ingest_procurement_contracts
                     ingest_procurement_contracts(state_dir, project_root, operation_id, topic['slug'])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _diag('libris_agents', 'procurement-contract ingest failed; topic starts without procured sources/claims', error=exc, operation_id=operation_id)
                 try:
                     from charon.libris.libris_specialists import (
                         spawn_topic_claim_extraction_shades,
@@ -522,10 +528,10 @@ def _run_operation_controller(
                     if contradiction_contracts:
                         wait_for_contradiction_check_contracts(state_dir, project_root, operation_id, topic['slug'], min_completed=1, timeout_seconds=18)
                         ingest_contradiction_check_contracts(state_dir, project_root, operation_id, topic['slug'])
-                except Exception:
-                    pass
-            except Exception:
-                pass
+                except Exception as exc:
+                    _diag('libris_agents', 'claim-extraction/contradiction specialist pass failed; topic proceeds without specialist claims', error=exc, operation_id=operation_id)
+            except Exception as exc:
+                _diag('libris_agents', 'topic procurement pre-pass failed; researcher starts without source leads', error=exc, operation_id=operation_id)
             emit_agent_phase(
                 state_dir, project_root, operation_id,
                 agent_id=coordinator.get('id', ''), role='coordinator',
@@ -635,8 +641,8 @@ def _run_operation_controller(
                 try:
                     from charon.libris.libris_convergence import should_request_additional_revision
                     revision_plan = should_request_additional_revision(state_dir, project_root, operation_id, topic)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _diag('libris_agents', 'revision-decision computation failed; topic converges without revision check', error=exc, topic_slug=slug)
 
                 if revision_plan.get('should_revise'):
                     try:
@@ -647,8 +653,8 @@ def _run_operation_controller(
                             'reasons': revision_plan.get('reasons') or [],
                             'metrics': revision_plan.get('metrics') or {},
                         })
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _diag('libris_agents', 'topic_revision_requested event emission failed; revision happens without timeline record', error=exc, topic_slug=slug)
                     try:
                         from charon.libris.libris_refinement import (
                             plan_critique_followups,
@@ -659,8 +665,8 @@ def _run_operation_controller(
                         if followups.get('contracts'):
                             wait_for_gap_fill_contracts(state_dir, project_root, operation_id, slug, min_completed=1, timeout_seconds=18)
                             ingest_gap_fill_contracts(state_dir, project_root, operation_id, slug)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _diag('libris_agents', 'critique-followup planning/gap-fill failed; revision proceeds without gap-fill evidence', error=exc, topic_slug=slug)
                     researcher = spawn_libris_role(
                         state_dir,
                         project_root,
@@ -727,8 +733,8 @@ def _run_operation_controller(
                             'metrics': revision_plan.get('metrics') or {},
                             'note': final_note,
                         })
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _diag('libris_agents', 'topic_convergence_decided event emission failed; convergence decision missing from timeline', error=exc, topic_slug=slug)
                 else:
                     all_ready = False
 
@@ -749,8 +755,8 @@ def _run_operation_controller(
                 try:
                     from charon.libris.libris_runtime import finalize_operation_selection
                     finalize_operation_selection(state_dir, project_root, operation_id)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _diag('libris_agents', 'finalize_operation_selection failed; operation reports ready but final selection was never written', error=exc, operation_id=operation_id)
                 emit_agent_phase(
                     state_dir, project_root, operation_id,
                     agent_id=coordinator.get('id', ''), role='coordinator',
@@ -769,8 +775,8 @@ def _run_operation_controller(
             from charon.libris.libris_runtime import append_operation_event, set_operation_status
             append_operation_event(state_dir, project_root, operation_id, 'operation_controller_failed', {'error': str(e)})
             set_operation_status(state_dir, project_root, operation_id, 'failed', str(e))
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag('libris_agents', 'reporting controller failure failed; operation stuck without failed status', error=exc, operation_id=operation_id)
 
 
 
@@ -893,7 +899,8 @@ def _run_libris_role(
                 agent_id=agent.get('id', ''), task_id=topic_slug or None,
                 model=_model_id, attributes={'role': role},
             )
-        except Exception:
+        except Exception as exc:
+            _diag('libris_agents', 'orchestration trace span setup failed; role run untraced', error=exc, operation_id=operation_id)
             _trace_cm = None
         if _trace_cm is not None:
             with _trace_cm as _sp:
@@ -902,8 +909,8 @@ def _run_libris_role(
                 try:
                     _sp.add_usage(model=_model_id, input_tokens=input_tokens,
                                   output_tokens=output_tokens)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _diag('libris_agents', 'recording usage on trace span failed; span misses token counts', error=exc, operation_id=operation_id)
         else:
             response, events = asyncio.run(engine.submit_and_collect(instruction))
             input_tokens, output_tokens = _collect_usage(events)
@@ -919,8 +926,8 @@ def _run_libris_role(
                 output_tokens=output_tokens,
                 note=response[:500],
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag('libris_agents', 'record_usage failed; operation usage/budget accounting misses this role run', error=exc, operation_id=operation_id)
 
         emit_agent_phase(
             state_dir, project_root, operation_id,
@@ -948,11 +955,11 @@ def _run_libris_role(
                 'topic_slug': topic_slug,
                 'error': str(e),
             })
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag('libris_agents', 'reporting role failure failed; role death invisible to operation timeline', error=exc, operation_id=operation_id)
     finally:
         try:
             from charon.agents.agent_lifecycle import set_status
             set_status(agent.get('id', ''), 'stopped')
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag('libris_agents', 'setting agent status to stopped failed; registry may show role as running forever', error=exc, operation_id=operation_id)

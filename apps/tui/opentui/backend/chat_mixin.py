@@ -10,6 +10,12 @@ from backend import common
 from backend.nlparse import _natural_language_to_cron
 from backend.settings_io import _full_messages_from_store
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 class ChatMixin:
     """Chat turn handling: streaming worker, abort/steer, conversation save."""
@@ -182,7 +188,8 @@ class ChatMixin:
                                     len((getattr(m, 'content', '') or '')) // 4
                                     for m in self.engine.messages[:-1]
                                 )
-                            except Exception:
+                            except Exception as exc:
+                                _diag('chat_mixin', 'input token estimate from engine messages failed; usage reports 0 input tokens', error=exc)
                                 input_tokens = 0
                         if output_tokens <= 0:
                             output_tokens = len((event.data.get('content', '') or '')) // 4
@@ -199,7 +206,8 @@ class ChatMixin:
                         if self.engine:
                             try:
                                 context_window = int(getattr(self.engine.model, 'context_window', 200000) or 200000)
-                            except Exception:
+                            except Exception as exc:
+                                _diag('chat_mixin', 'context window lookup on engine model failed; assuming 200k window', error=exc)
                                 context_window = 200000
 
                         if context_tokens > 0:
@@ -304,7 +312,8 @@ class ChatMixin:
                                 val = args.get(key)
                                 if key == 'path' and isinstance(val, str) and val and val not in files_touched:
                                     files_touched.append(val)
-                    except Exception:
+                    except Exception as exc:
+                        _diag('chat_mixin', 'files-touched extraction from tool calls failed; outcome ledger omits file list', error=exc)
                         files_touched = []
 
                     # Determine if the agent concluded the task or is mid-flight
@@ -374,10 +383,10 @@ class ChatMixin:
                             input_tokens=_total_input_tokens,
                             output_tokens=_total_output_tokens,
                         )
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
+                    except Exception as exc:
+                        _diag('chat_mixin', 'task episode recording failed; execution memory misses this chat turn', error=exc)
+                except Exception as exc:
+                    _diag('chat_mixin', 'post-chat working-memory/outcome-ledger update failed; task not recorded', error=exc)
 
             # Persist conversation
             if self._active_agent_id and engine:
@@ -400,10 +409,10 @@ class ChatMixin:
                         try:
                             from charon.agents.session_registry import register_session
                             register_session(common.STATE_DIR, self._active_agent_id)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        except Exception as exc:
+                            _diag('chat_mixin', 'session registration failed; session missing from live session list', error=exc)
+                except Exception as exc:
+                    _diag('chat_mixin', 'conversation JSONL backup save failed after chat turn', error=exc)
 
             common.emit({
                 'type': 'chat_complete',
@@ -421,8 +430,8 @@ class ChatMixin:
                     agent_inbox_push(db, bound_agent_id,
                         event_type='task_received',
                         payload={'instruction': message[:200], 'summary': full_text[:200]})
-            except Exception:
-                pass
+            except Exception as exc:
+                _diag('chat_mixin', 'agent inbox push failed; bound agent misses task_received event', error=exc)
 
         asyncio.run(_run())
 
@@ -460,8 +469,8 @@ class ChatMixin:
                         db = get_db(common.STATE_DIR)
                         run_log_append(db, 'heartbeat', cycle=cycle,
                                        uptime_seconds=cycle * 2)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _diag('chat_mixin', 'run-log heartbeat append failed; dashboard activity misses heartbeats', error=e)
 
                 # Consolidation check
                 if cycle - last_consolidation >= consolidation_interval:
@@ -477,8 +486,8 @@ class ChatMixin:
                                     'type': 'status',
                                     'message': f'🧠 User model updated: {len(changes)} change(s)',
                                 })
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _diag('chat_mixin', 'background consolidation cycle failed; user model not updated', error=e)
 
                 # Goal inference — always runs when there are enough messages
                 # (independent of autonomous mode, which controls self-assignment)
@@ -528,8 +537,8 @@ class ChatMixin:
                                             ),
                                         })
                                         common.emit({'type': 'refresh', 'payload': {'session_info': self._get_session_info()}})
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _diag('chat_mixin', 'background goal inference cycle failed; no goals proposed', error=e)
 
                 # Process queued shade phase + cron tasks (when not chatting)
                 if cycle % 3 == 0 and not self._chat_busy:
@@ -608,8 +617,8 @@ class ChatMixin:
                                             }
                                             queue.append(recurring_copy)
                                             save_queue(common.STATE_DIR, queue)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _diag('chat_mixin', 'queued shade/cron task processing cycle failed; pending tasks not executed', error=e)
 
                 # Monitor batches and report completion
                 if cycle % 5 == 0:  # check every 10 seconds
@@ -641,8 +650,8 @@ class ChatMixin:
 
                         if not has_running and self.agent_mode == 'delegating':
                             self.agent_mode = 'interactive'
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _diag('chat_mixin', 'batch completion monitor cycle failed; batch results not reported', error=e)
 
                     # Update agent mode based on state
                     try:
@@ -661,8 +670,8 @@ class ChatMixin:
                             self.agent_mode = 'autonomous'
                         else:
                             self.agent_mode = 'idle' if not self.engine else 'interactive'
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _diag('chat_mixin', 'agent mode update failed; status bar mode may be stale', error=e)
 
         t = threading.Thread(target=_bg_loop, daemon=True)
         t.start()
@@ -680,22 +689,23 @@ class ChatMixin:
                     msgs_to_save = list(self.engine.messages)
                 save_conversation(common.STATE_DIR, self._active_agent_id,
                     [message_to_dict(m) for m in msgs_to_save])
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('chat_mixin', 'conversation save on exit failed; latest turns not persisted to JSONL', error=e)
         # Unregister live session
         if self._active_agent_id:
             try:
                 from charon.agents.session_registry import unregister_session
                 unregister_session(common.STATE_DIR, self._active_agent_id)
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('chat_mixin', 'session unregister on exit failed; session may linger in live list', error=e)
 
     def handle_abort(self, request_id: str | None):
         stopped_tool = False
         try:
             from charon.tools import abort_running_bash
             stopped_tool = abort_running_bash()
-        except Exception:
+        except Exception as e:
+            _diag('chat_mixin', 'abort_running_bash failed; active bash command may keep running after abort', error=e)
             stopped_tool = False
         if self.engine:
             self.engine.abort()

@@ -22,6 +22,12 @@ from dataclasses import dataclass
 from charon.context.context_store import ContextStore, ContextItem, StoredSummary, _estimate_tokens
 from charon.providers import Message, ModelInfo, Provider
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 # ── Configuration ───────────────────────────────────────────────────
 
@@ -266,8 +272,10 @@ async def _call_summarizer(
     try:
         await asyncio.wait_for(_stream(), timeout=timeout)
     except asyncio.TimeoutError:
+        _diag('context_compactor', 'summarizer LLM timed out; using fallback summary')
         return ''
-    except Exception:
+    except Exception as e:
+        _diag('context_compactor', 'summarizer LLM call failed; using fallback summary', error=e)
         return ''
 
     return ''.join(parts).strip()

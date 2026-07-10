@@ -25,6 +25,12 @@ try:
 except ImportError:
     _HAS_STORE = False
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 @dataclass
 class ConversationTurnResult:
@@ -57,7 +63,8 @@ def _load_queue(state_dir: Path) -> list[dict]:
     try:
         data = json.loads(path.read_text(encoding='utf-8'))
         return data if isinstance(data, list) else []
-    except Exception:
+    except Exception as e:
+        _diag('conversation_runtime', 'queue.json unreadable or corrupt; treating queue as empty', error=e)
         return []
 
 
@@ -82,8 +89,8 @@ def _enqueue_task(state_dir: Path, task: dict) -> dict:
     if _use_store():
         try:
             _db_task_insert(_get_db(state_dir), dict(task))
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('conversation_runtime', 'SQLite task-insert mirror failed; task exists only in queue.json', error=e)
     return task
 
 
@@ -285,7 +292,8 @@ def list_conversations(state_dir: Path) -> list[dict]:
     index_file = Path(state_dir) / 'conversation_index.json'
     try:
         raw = json.loads(index_file.read_text(encoding='utf-8'))
-    except Exception:
+    except Exception as e:
+        _diag('conversation_runtime', 'conversation_index.json unreadable; listing no conversations', error=e)
         return []
     conversations = raw.get('conversations') if isinstance(raw, dict) else None
     if not isinstance(conversations, dict):
@@ -388,7 +396,8 @@ class BoatConversationRuntime(ConversationSessionRuntime):
             return None
         try:
             data = json.loads(reg.read_text())
-        except Exception:
+        except Exception as e:
+            _diag('conversation_runtime', 'boat registry file unreadable; session has no socket', error=e, session=self.session_name)
             return None
         sock = str(data.get('socket') or '').strip()
         return sock or None
@@ -413,7 +422,8 @@ class BoatConversationRuntime(ConversationSessionRuntime):
                 sock.connect(sock_path)
                 sock.sendall((json.dumps({'type': 'input', 'data': payload}) + '\n').encode('utf-8'))
             return True
-        except Exception:
+        except Exception as e:
+            _diag('conversation_runtime', 'sending input to boat socket failed; turn not delivered', error=e, session=self.session_name)
             return False
 
     def capture_output(

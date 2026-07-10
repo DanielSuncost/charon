@@ -4,6 +4,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 FLEET_PATH = Path.home() / '.charon' / 'fleet.json'
 
 _DEFAULTS = {
@@ -23,7 +29,8 @@ def load_fleet(path: Path | None = None) -> dict:
         return {'version': 1, 'servers': []}
     try:
         data = json.loads(p.read_text())
-    except Exception:
+    except Exception as e:
+        _diag('fleet_registry', 'unreadable fleet.json; fleet treated as empty', error=e)
         return {'version': 1, 'servers': []}
 
     for server in data.get('servers', []):

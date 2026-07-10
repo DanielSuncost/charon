@@ -14,6 +14,12 @@ from backend.settings_io import _hermes_conversation_runtime_dir, _write_hermes_
 from charon.providers.provider_bridge import resolve_provider_config
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 class RoomsMixin:
     """Conversation rooms, multi-agent runners, and the intent/outcome ledger."""
@@ -79,7 +85,8 @@ class RoomsMixin:
         try:
             from charon.agents.inter_agent_rooms import list_events
             events = list_events(common.STATE_DIR, room_id, limit=limit * 3)
-        except Exception:
+        except Exception as e:
+            _diag('rooms_mixin', 'room event history unavailable; turn prompt built without recent transcript', error=e, room=room_id)
             events = []
         lines: list[str] = []
         for ev in events[-limit:]:
@@ -832,8 +839,8 @@ class RoomsMixin:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(self._session_tasks, indent=2, ensure_ascii=False))
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('rooms_mixin', 'session outcome ledger save failed; outcomes lost on restart', error=e)
 
     def _is_ack_message(self, text: str) -> bool:
         t = text.strip().lower()
@@ -1066,7 +1073,8 @@ class RoomsMixin:
                 max_tokens=600,
             )
             reply, _events = asyncio.run(engine.submit_and_collect(prompt))
-        except Exception:
+        except Exception as e:
+            _diag('rooms_mixin', 'shades orchestration LLM parse failed; request falls through to normal chat', error=e)
             return None
 
         data = self._parse_orchestration_json(reply)
@@ -1299,7 +1307,8 @@ class RoomsMixin:
             try:
                 from charon.agents.task_summarizer import summarize_instruction_fast
                 title = summarize_instruction_fast(message)
-            except Exception:
+            except Exception as e:
+                _diag('rooms_mixin', 'fast instruction summarizer failed; raw message used as outcome title', error=e)
                 title = message[:80].strip() or 'Working on task'
         self._session_tasks.append({
             'task_id': f'outcome-{int(time.time() * 1000)}',
@@ -1334,7 +1343,8 @@ class RoomsMixin:
                 try:
                     from charon.providers.model_registry import get_shade_provider_and_model
                     provider, model, ready = get_shade_provider_and_model(common.STATE_DIR, phase_name='analysis', task_complexity='normal')
-                except Exception:
+                except Exception as e:
+                    _diag('rooms_mixin', 'shade provider lookup failed; outcome title falls back to fast summarizer', error=e)
                     provider = model = None
                     ready = False
                 if ready and provider is not None and model is not None:
@@ -1359,7 +1369,8 @@ class RoomsMixin:
                     self._save_session_outcomes()
                     common.emit({'type': 'refresh', 'payload': {'session_info': self._get_session_info()}, 'request_id': request_id})
                     return
-            except Exception:
+            except Exception as e:
+                _diag('rooms_mixin', 'background outcome-title improvement failed; initial title kept', error=e)
                 return
 
         threading.Thread(target=_run, daemon=True).start()
@@ -1377,7 +1388,8 @@ class RoomsMixin:
         try:
             data = json.loads(path.read_text())
             self._session_tasks = data if isinstance(data, list) else []
-        except Exception:
+        except Exception as e:
+            _diag('rooms_mixin', 'session outcome ledger unreadable; session outcomes reset to empty', error=e)
             self._session_tasks = []
 
     def _project_root_for_rooms(self) -> Path:
@@ -1416,7 +1428,8 @@ class RoomsMixin:
                 'nodes': swarm.get('nodes') or [],
                 'topics': swarm.get('topics') or [],
             }
-        except Exception:
+        except Exception as e:
+            _diag('rooms_mixin', 'libris swarm state load failed; room treated as unknown', error=e, operation=op_id)
             return None
 
     def _resolve_libris_targets(self, room: dict, target: str) -> tuple[list[dict], str]:

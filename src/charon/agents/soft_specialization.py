@@ -22,6 +22,12 @@ from pathlib import Path
 from typing import Any
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -158,7 +164,8 @@ async def derive_label_llm(summaries: list[str], *, provider: Any, model: Any) -
         ):
             if hasattr(delta, 'type') and delta.type == 'text':
                 text_parts.append(delta.text)
-    except Exception:
+    except Exception as e:
+        _diag('soft_specialization', 'LLM label call failed; using heuristic specialization label', error=e)
         return derive_label_heuristic(summaries)
 
     label = ''.join(text_parts).strip().strip('"\'').lower()
@@ -181,8 +188,8 @@ def _get_summaries(state_dir: Path, agent_id: str) -> list[str]:
         from charon.infra.store_adapter import get_db, agent_memory_get
         db = get_db(state_dir)
         memory = agent_memory_get(db, agent_id)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('soft_specialization', 'SQLite working-memory read failed; trying JSON fallback', error=e, agent_id=agent_id)
 
     # Fallback to JSON
     if not memory:
@@ -190,8 +197,8 @@ def _get_summaries(state_dir: Path, agent_id: str) -> list[str]:
             mem_path = state_dir / 'agents' / agent_id / 'working_memory.json'
             if mem_path.exists():
                 memory = json.loads(mem_path.read_text())
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('soft_specialization', 'working_memory.json unreadable; no summaries for labeling', error=e, agent_id=agent_id)
 
     if not memory:
         return []
@@ -208,8 +215,8 @@ def _get_current_specialization(state_dir: Path, agent_id: str) -> str:
         agent = agent_get(db, agent_id)
         if agent:
             return agent.get('specialization', '')
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('soft_specialization', 'current-specialization read failed; assuming empty label', error=e, agent_id=agent_id)
     return ''
 
 
@@ -223,8 +230,8 @@ def _is_locked(state_dir: Path, agent_id: str) -> bool:
         agent = agent_get(db, agent_id)
         if agent and agent.get('specialization_locked'):
             return True
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('soft_specialization', 'SQLite lock-flag read failed; checking agents.json fallback', error=e, agent_id=agent_id)
     # agents.json fallback (store may be disabled)
     try:
         agents_file = state_dir / 'agents.json'
@@ -232,8 +239,8 @@ def _is_locked(state_dir: Path, agent_id: str) -> bool:
             for a in json.loads(agents_file.read_text()):
                 if a.get('id') == agent_id:
                     return bool(a.get('specialization_locked'))
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('soft_specialization', 'agents.json lock-flag read failed; treating specialization as unlocked', error=e, agent_id=agent_id)
     return False
 
 
@@ -243,8 +250,8 @@ def _set_specialization(state_dir: Path, agent_id: str, label: str) -> None:
         from charon.infra.store_adapter import get_db, agent_update
         db = get_db(state_dir)
         agent_update(db, agent_id, specialization=label)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('soft_specialization', 'specialization write to SQLite failed; store misses new label', error=e, agent_id=agent_id)
 
     # Also update agents.json for backward compat
     try:
@@ -256,8 +263,8 @@ def _set_specialization(state_dir: Path, agent_id: str, label: str) -> None:
                     a['specialization'] = label
                     break
             agents_file.write_text(json.dumps(agents, indent=2))
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('soft_specialization', 'specialization write to agents.json failed; JSON misses new label', error=e, agent_id=agent_id)
 
 
 # Track last refresh time per agent
@@ -299,7 +306,8 @@ def refresh_specialization(
         import asyncio
         try:
             label = asyncio.run(derive_label_llm(summaries, provider=provider, model=model))
-        except Exception:
+        except Exception as e:
+            _diag('soft_specialization', 'LLM label refresh failed; using heuristic specialization label', error=e, agent_id=agent_id)
             label = derive_label_heuristic(summaries)
     else:
         label = derive_label_heuristic(summaries)
@@ -327,12 +335,14 @@ def refresh_all_agents(state_dir: Path, *, mode: str = 'heuristic') -> dict[str,
         from charon.infra.store_adapter import get_db, agent_list
         db = get_db(state_dir)
         agents = agent_list(db)
-    except Exception:
+    except Exception as e:
+        _diag('soft_specialization', 'SQLite agent list failed; falling back to agents.json', error=e)
         # Fallback to JSON
         try:
             agents_file = state_dir / 'agents.json'
             agents = json.loads(agents_file.read_text()) if agents_file.exists() else []
-        except Exception:
+        except Exception as exc:
+            _diag('soft_specialization', 'agents.json unreadable; refreshing no agents', error=exc)
             agents = []
 
     for agent in agents:

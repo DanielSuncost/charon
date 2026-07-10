@@ -16,6 +16,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 SSH_TIMEOUT = 15
 
 
@@ -58,7 +64,8 @@ def _build_manifest(
         from charon.memory.user_model_structured import load_structured, render_for_prompt
         model = load_structured(state_dir)
         manifest["user_profile"] = render_for_prompt(model)[:3000]
-    except Exception:
+    except Exception as e:
+        _diag('harbor', 'user profile prefetch failed; voyage manifest ships without user_profile', error=e)
         manifest["user_profile"] = ""
 
     # Pre-fetch relevant memories
@@ -70,7 +77,8 @@ def _build_manifest(
             {"content": m.memory.content, "score": m.score, "category": m.memory.category}
             for m in result.memories[:10]
         ]
-    except Exception:
+    except Exception as e:
+        _diag('harbor', 'memory prefetch failed; voyage manifest ships without relevant_memories', error=e)
         manifest["relevant_memories"] = []
 
     # Project knowledge
@@ -80,7 +88,8 @@ def _build_manifest(
     if knowledge_path.exists():
         try:
             manifest["project_knowledge"] = knowledge_path.read_text(errors="replace")[:5000]
-        except Exception:
+        except Exception as e:
+            _diag('harbor', 'KNOWLEDGE.md read failed; voyage manifest ships without project_knowledge', error=e)
             manifest["project_knowledge"] = ""
     else:
         manifest["project_knowledge"] = ""
@@ -96,7 +105,8 @@ def _build_manifest(
             capture_output=True, text=True, timeout=5,
         ).stdout.strip()
         manifest["git_context"] = {"branch": branch, "head": head}
-    except Exception:
+    except Exception as e:
+        _diag('harbor', 'git context lookup failed; voyage manifest ships without git_context', error=e)
         manifest["git_context"] = {}
 
     return manifest
@@ -140,8 +150,8 @@ def _load_voyage(state_dir: Path, voyage_id: str) -> dict | None:
         if path.exists():
             try:
                 return json.loads(path.read_text())
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('harbor', 'corrupt voyage JSON; voyage treated as missing', error=e, voyage_id=voyage_id)
     return None
 
 
@@ -206,8 +216,8 @@ def _ingest_result(voyage: dict, result_msg: dict, state_dir: Path) -> None:
                     container_tag=container_tag,
                     source_agent=container_tag,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('harbor', 'worker memory indexing failed; discovered memories dropped', error=e, voyage_id=voyage_id)
 
     # Update working memory for this remote agent
     try:
@@ -215,8 +225,8 @@ def _ingest_result(voyage: dict, result_msg: dict, state_dir: Path) -> None:
         summary = result.get("stdout", "")[:2000]
         if summary:
             _update_working_memory(state_dir, server_id, agent_name, summary)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('harbor', 'working-memory update after voyage failed; remote agent activity not recorded', error=e, server_id=server_id)
 
     # Move voyage to completed
     voyage["status"] = result_msg.get("status", "completed")
@@ -256,7 +266,8 @@ def dispatch_voyage(
     try:
         from charon.fleet.fleet_registry import load_fleet
         fleet = load_fleet()
-    except Exception:
+    except Exception as exc:
+        _diag('harbor', 'fleet registry load failed; dispatch sees an empty fleet', error=exc)
         fleet = {"servers": []}
 
     server = None
@@ -372,8 +383,8 @@ def dispatch_voyage(
                     try:
                         proc.stdin.write(json.dumps({"type": "harbor.pong"}, separators=(",", ":")) + "\n")
                         proc.stdin.flush()
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _diag('harbor', 'pong reply to worker ping failed; remote may drop the connection', error=exc, voyage_id=voyage_id)
 
         except Exception as e:
             emit(f"Voyage {voyage_id} reader error: {e}")

@@ -3,6 +3,12 @@ from __future__ import annotations
 
 from typing import Any
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 FLEET_STATUS_TOOL_DEF = {
     'name': 'FleetStatus',
     'description': 'Get the current status of all remote servers and agents in the fleet. Returns each server\'s connection status and the status of each agent on it (running, idle, offline).',
@@ -216,8 +222,8 @@ def execute_fleet_onboard(params: dict, context: Any) -> Any:
         try:
             from charon.fleet.fleet_sync import start_fleet_sync
             start_fleet_sync()
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('fleet_tool', 'fleet sync failed to start after onboarding; agents added but not synced', error=e)
     elif any(m.get('step') == 'ssh' and m.get('ok') for m in messages):
         # SSH works but no agents found — still add the server
         server = auto_configure_fleet(host, user, [])

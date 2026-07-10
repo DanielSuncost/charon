@@ -9,6 +9,12 @@ from pathlib import Path
 from charon.infra.project_registry_loader import load_ensure_project
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 _ensure_project = load_ensure_project(__file__, 'goal_runtime')
 
 # SQLite store adapter (optional)
@@ -68,7 +74,8 @@ def _read_json(path: Path, default):
     try:
         data = json.loads(path.read_text())
         return data
-    except Exception:
+    except Exception as e:
+        _diag('goal_runtime', 'goal JSON doc unreadable; using default doc (stored goals ignored)', error=e, path=str(path))
         return default
 
 
@@ -167,8 +174,8 @@ def ingest_user_intent(
             db = _get_db(state_dir)
             _db_project_upsert(db, project_id, proj)
             _db_session_upsert(db, session_id, project_id, ses)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('goal_runtime', 'intent-goal mirror to SQLite failed; store diverges from JSON', error=e, project_id=project_id)
 
     return {
         'goal': goal,
@@ -229,8 +236,8 @@ def ingest_idea(
             db = _get_db(state_dir)
             _db_project_upsert(db, project_id, proj)
             _db_session_upsert(db, session_id, project_id, ses)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('goal_runtime', 'idea-goal mirror to SQLite failed; store diverges from JSON', error=e, project_id=project_id)
 
     return {
         'goal': goal,
@@ -284,8 +291,8 @@ def promote_idea(
         if _use_store():
             try:
                 _db_project_upsert(_get_db(state_dir), project_id, proj)
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('goal_runtime', 'promoted-idea mirror to SQLite failed; store diverges from JSON', error=e, goal_id=goal_id)
 
     return found
 
@@ -333,8 +340,8 @@ def attach_task(
             db = _get_db(state_dir)
             _db_project_upsert(db, project_id, proj)
             _db_session_upsert(db, session_id, project_id, ses)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('goal_runtime', 'task-attach mirror to SQLite failed; store diverges from JSON', error=e, goal_id=goal_id)
 
 
 def record_result(
@@ -370,8 +377,8 @@ def record_result(
             db = _get_db(state_dir)
             _db_project_upsert(db, project_id, proj)
             _db_session_upsert(db, session_id, project_id, ses)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('goal_runtime', 'goal-result mirror to SQLite failed; store diverges from JSON', error=e, goal_id=goal_id)
 
 
 def build_context_packet(
@@ -427,8 +434,8 @@ def build_context_packet(
     if _use_store():
         try:
             _db_context_packet_upsert(_get_db(state_dir), agent_id, packet)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('goal_runtime', 'context-packet mirror to SQLite failed; store diverges from JSON', error=e, agent_id=agent_id)
     return packet
 
 
@@ -438,8 +445,8 @@ def load_context_packet(state_dir: Path, agent_id: str) -> dict:
             p = _db_context_packet_get(_get_db(state_dir), agent_id)
             if p:
                 return p
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('goal_runtime', 'context-packet read from SQLite failed; falling back to JSON packet', error=e, agent_id=agent_id)
     return _read_json(_context_packet_path(state_dir, agent_id), {})
 
 

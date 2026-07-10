@@ -9,6 +9,12 @@ import re
 from pathlib import Path
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 # SQLite store adapter (optional — gracefully degrades to JSON)
 try:
     from charon.infra.store_adapter import get_db as _get_db, agent_insert as _db_agent_insert, agent_get as _db_agent_get, agent_list as _db_agent_list, agent_update as _db_agent_update
@@ -55,7 +61,8 @@ def _project_suffix(project: str | None) -> str:
         return 'general'
     try:
         return _slug(Path(project).name)
-    except Exception:
+    except Exception as e:
+        _diag('agent_lifecycle', 'project path unparseable; agent name suffix falls back to general', error=e)
         return 'general'
 
 
@@ -100,14 +107,15 @@ def load_agents(state_dir: Path | None = None) -> list[dict]:
         try:
             db = _get_db(sd)
             return _db_agent_list(db)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('agent_lifecycle', 'SQLite agent list failed; falling back to agents.json', error=e)
     af = (sd / 'agents.json') if state_dir else AGENTS_FILE
     if not af.exists():
         return []
     try:
         return json.loads(af.read_text())
-    except Exception:
+    except Exception as e:
+        _diag('agent_lifecycle', 'agents.json unreadable; agent list returned empty', error=e)
         return []
 
 
@@ -215,8 +223,8 @@ def create_agent(
             db = _get_db(STATE_DIR)
             if not _db_agent_get(db, agent_id):
                 _db_agent_insert(db, dict(a))
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('agent_lifecycle', 'new-agent mirror to SQLite failed; store diverges from agents.json', error=e, agent_id=agent_id)
     return a
 
 
@@ -255,8 +263,8 @@ def assign_specialization(agent_id: str, specialization: str,
                         specialization_locked=a.get('specialization_locked', False),
                         charter=a.get('charter', ''),
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    _diag('agent_lifecycle', 'specialization mirror to SQLite failed; store diverges from agents.json', error=e, agent_id=agent_id)
             return a
     return None
 
@@ -272,8 +280,8 @@ def set_status(agent_id: str, status: str) -> dict | None:
                 try:
                     db = _get_db(STATE_DIR)
                     _db_agent_update(db, agent_id, status=status)
-                except Exception:
-                    pass
+                except Exception as e:
+                    _diag('agent_lifecycle', 'status mirror to SQLite failed; store diverges from agents.json', error=e, agent_id=agent_id)
             return a
     return None
 

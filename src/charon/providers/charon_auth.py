@@ -15,6 +15,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Callable, Optional
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 ROOT = Path(__file__).resolve().parents[3]
 STATE = ROOT / '.charon_state'
 AUTH_DIR = STATE / 'auth'
@@ -79,7 +85,8 @@ def _load_auth() -> dict:
         return {'version': 1, 'providers': {}, 'active_provider': ''}
     try:
         return json.loads(AUTH_FILE.read_text())
-    except Exception:
+    except Exception as e:
+        _diag('charon_auth', 'auth.json unreadable; starting with empty auth store', error=e)
         return {'version': 1, 'providers': {}, 'active_provider': ''}
 
 
@@ -87,13 +94,13 @@ def _save_auth(store: dict) -> None:
     AUTH_DIR.mkdir(parents=True, exist_ok=True)
     try:
         os.chmod(AUTH_DIR, 0o700)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('charon_auth', 'could not chmod auth dir to 0700', error=e)
     AUTH_FILE.write_text(json.dumps(store, indent=2))
     try:
         os.chmod(AUTH_FILE, 0o600)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('charon_auth', 'could not chmod auth.json to 0600', error=e)
 
 
 class _OAuthCallbackHandler(BaseHTTPRequestHandler):

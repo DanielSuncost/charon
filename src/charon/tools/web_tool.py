@@ -19,6 +19,12 @@ from urllib.parse import quote_plus
 from charon.tools import ToolContext, ToolResult
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 # ── HTML to text (stdlib only) ──────────────────────────────────────
 
@@ -101,8 +107,8 @@ def html_to_text(html_content: str) -> str:
     parser = _TextExtractor()
     try:
         parser.feed(html_content)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('web_tool', 'HTML parse aborted mid-document; extracted page text may be incomplete', error=e)
     return parser.get_text()
 
 
@@ -122,7 +128,8 @@ def _search_ddg(query: str, max_results: int = 8) -> list[dict]:
             resp = client.get(url, headers=headers)
             if resp.status_code != 200:
                 return []
-    except Exception:
+    except Exception as e:
+        _diag('web_tool', 'DuckDuckGo search request failed; returning no results', error=e)
         return []
 
     # Parse results from DDG HTML
@@ -176,7 +183,8 @@ def _search_brave(query: str, api_key: str, max_results: int = 8) -> list[dict]:
             if resp.status_code != 200:
                 return []
             data = resp.json()
-    except Exception:
+    except Exception as e:
+        _diag('web_tool', 'Brave search request failed; returning no results', error=e)
         return []
 
     results = []
@@ -202,7 +210,8 @@ def _search_searxng(query: str, base_url: str, max_results: int = 8) -> list[dic
             if resp.status_code != 200:
                 return []
             data = resp.json()
-    except Exception:
+    except Exception as e:
+        _diag('web_tool', 'SearXNG search request failed; returning no results', error=e)
         return []
 
     results = []
@@ -359,7 +368,8 @@ def execute_web(params: dict, ctx: ToolContext) -> ToolResult:
         if 'json' in content_type:
             try:
                 body = json.dumps(resp.json(), indent=2)
-            except Exception:
+            except Exception as exc:
+                _diag('web_tool', 'JSON response decode failed; returning raw response text instead', error=exc)
                 body = resp.text
             if len(body) > MAX_EXTRACT_CHARS:
                 body = body[:MAX_EXTRACT_CHARS] + '\n\n[Truncated]'

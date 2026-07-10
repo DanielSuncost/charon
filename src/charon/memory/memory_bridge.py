@@ -14,6 +14,12 @@ import os
 import sqlite3
 from pathlib import Path
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 HERMES_HOME = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
 ENTRY_DELIMITER = "\n§\n"
 
@@ -125,8 +131,8 @@ def import_hermes(
                         stats["messages"] += 1
                     except Exception:
                         stats["skipped"] += 1
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('memory_bridge', 'hermes state.db message import failed; conversation history not imported', error=e)
 
     engine.close()
     return stats

@@ -17,6 +17,12 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def tmux_available() -> bool:
     return bool(shutil.which('tmux'))
@@ -53,7 +59,8 @@ def list_sessions() -> list[TmuxSession]:
                     created=parts[3] if len(parts) > 3 else '',
                 ))
         return sessions
-    except Exception:
+    except Exception as e:
+        _diag('tmux_capture', 'tmux list-sessions raised; local sessions appear absent', error=e)
         return []
 
 
@@ -103,7 +110,8 @@ def send_keys(session_name: str, keys: str) -> bool:
             capture_output=True, timeout=5,
         )
         return result.returncode == 0
-    except Exception:
+    except Exception as e:
+        _diag('tmux_capture', 'tmux send-keys raised; keystrokes not delivered', error=e, session_name=session_name)
         return False
 
 
@@ -120,7 +128,8 @@ def send_key_literal(session_name: str, key: str) -> bool:
             capture_output=True, timeout=5,
         )
         return result.returncode == 0
-    except Exception:
+    except Exception as e:
+        _diag('tmux_capture', 'tmux send-keys (literal) raised; key not delivered', error=e, session_name=session_name)
         return False
 
 
@@ -147,7 +156,8 @@ def remote_list_sessions(ssh_target: str, control_path: str | None = None) -> li
                     created='',
                 ))
         return sessions
-    except Exception:
+    except Exception as e:
+        _diag('tmux_capture', 'remote tmux list-sessions raised; remote sessions appear absent', error=e, ssh_target=ssh_target)
         return []
 
 
@@ -175,7 +185,8 @@ def remote_send_keys(ssh_target: str, session_name: str, keys: str,
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=10)
         return result.returncode == 0
-    except Exception:
+    except Exception as e:
+        _diag('tmux_capture', 'remote tmux send-keys raised; keystrokes not delivered', error=e, ssh_target=ssh_target)
         return False
 
 
@@ -194,8 +205,8 @@ def setup_ssh_control(ssh_target: str) -> str:
              ssh_target],
             capture_output=True, timeout=15,
         )
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('tmux_capture', 'SSH ControlMaster setup raised; remote ops fall back to per-call connections', error=e, ssh_target=ssh_target)
     return control_path
 
 
@@ -223,6 +234,7 @@ def discover_boat_sessions() -> list[dict]:
             if name and any(s.name == name for s in list_sessions()):
                 data['source'] = 'boat'
                 sessions.append(data)
-        except Exception:
+        except Exception as e:
+            _diag('tmux_capture', 'unreadable boat registration file; boat session skipped', error=e, path=str(f))
             continue
     return sessions

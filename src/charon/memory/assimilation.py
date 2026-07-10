@@ -15,6 +15,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 # ── Agent repo configs ───────────────────────────────────────────────
 
 AGENT_REPOS: dict[str, dict] = {
@@ -92,8 +98,8 @@ def scan_available_repos(
                         ['git', '-C', str(path), 'pull', '--ff-only', '--quiet'],
                         capture_output=True, timeout=60,
                     )
-                except Exception:
-                    pass  # Non-fatal — use whatever's there
+                except Exception as exc:
+                    _diag('assimilation', 'git pull failed; scanning stale checkout', error=exc, repo=name)  # Non-fatal — use whatever's there
             available[name] = path
         elif auto_clone and git_url:
             # Clone into managed directory
@@ -250,7 +256,8 @@ def _scan_hermes_commands(repo: Path) -> list[dict]:
 
     try:
         text = cmd_file.read_text(errors='replace')
-    except Exception:
+    except Exception as e:
+        _diag('assimilation', 'hermes commands file unreadable; no commands scanned', error=e)
         return []
 
     commands = []
@@ -349,8 +356,8 @@ def get_charon_capabilities(charon_root: Path) -> dict:
             text = tools_init.read_text(errors='replace')
             for m in re.finditer(r"'(\w+)':\s*execute_", text):
                 tools.append(m.group(1))
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('assimilation', 'charon tools scan failed; capability comparison incomplete', error=e)
 
     # Extract commands from chat_backend._command_catalog
     backend = charon_root / 'apps' / 'tui' / 'opentui' / 'backend' / 'commands_mixin.py'
@@ -361,8 +368,8 @@ def get_charon_capabilities(charon_root: Path) -> dict:
                 cmd = m.group(1).split(' ')[0]  # Just the base command
                 if cmd not in commands:
                     commands.append(cmd)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('assimilation', 'charon commands scan failed; capability comparison incomplete', error=e)
 
     # Read feature index if available
     features = []
@@ -372,8 +379,8 @@ def get_charon_capabilities(charon_root: Path) -> dict:
             text = feature_idx.read_text(errors='replace')
             for m in re.finditer(r'(F\d+)\s*[-—]\s*(.+)', text):
                 features.append(f'{m.group(1)}: {m.group(2).strip()}')
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('assimilation', 'feature index read failed; capability comparison incomplete', error=e)
 
     return {
         'tools': tools,
@@ -817,7 +824,8 @@ def load_gap_review(state_dir: Path) -> list[dict]:
     try:
         data = json.loads(f.read_text())
         return data if isinstance(data, list) else []
-    except Exception:
+    except Exception as e:
+        _diag('assimilation', 'gap_review.json unreadable; returning empty review', error=e)
         return []
 
 
@@ -829,8 +837,8 @@ def load_saved_scan_results(state_dir: Path) -> dict[str, dict]:
     for f in abilities_dir.glob('*.json'):
         try:
             results[f.stem] = json.loads(f.read_text())
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('assimilation', 'saved scan file unreadable; agent omitted from results', error=e)
     return results
 
 
@@ -1028,7 +1036,8 @@ def load_last_scan(state_dir: Path) -> dict | None:
         return None
     try:
         return json.loads(scan_file.read_text())
-    except Exception:
+    except Exception as e:
+        _diag('assimilation', 'last_scan.json unreadable; reporting no previous scan', error=e)
         return None
 
 

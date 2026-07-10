@@ -16,6 +16,12 @@ from pathlib import Path
 
 from charon.tools import ToolContext, ToolResult
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 # ── Injection scanning ──────────────────────────────────────────────
 
 _THREAT_PATTERNS = [
@@ -121,7 +127,8 @@ def _load_user_entries(state_dir: Path) -> list[str]:
                 entries.append(str(value['value']))
             elif isinstance(value, str):
                 entries.append(value)
-    except Exception:
+    except Exception as e:
+        _diag('memory_tools', 'user-model SQLite read failed; falling back to user_model.json', error=e)
         try:
             um_path = state_dir / 'user_model.json'
             if um_path.exists():
@@ -129,8 +136,8 @@ def _load_user_entries(state_dir: Path) -> list[str]:
                 for v in model.get('preferences', {}).values():
                     if isinstance(v, dict) and v.get('value'):
                         entries.append(str(v['value']))
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag('memory_tools', 'user_model.json fallback read failed; user model loads as empty', error=exc)
     return entries
 
 
@@ -153,8 +160,8 @@ def _save_user_entries(state_dir: Path, entries: list[str]) -> None:
         db.execute("DELETE FROM user_model")
         for key, value in prefs.items():
             user_model_set(db, key, value)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('memory_tools', 'user-model SQLite save failed; preferences persisted to JSON only', error=e)
 
     # Save to JSON
     try:
@@ -163,21 +170,22 @@ def _save_user_entries(state_dir: Path, entries: list[str]) -> None:
         if um_path.exists():
             try:
                 model = json.loads(um_path.read_text())
-            except Exception:
+            except Exception as exc:
+                _diag('memory_tools', 'existing user_model.json unreadable/corrupt during save; overwriting with fresh model', error=exc)
                 model = {}
         model['preferences'] = prefs
         model['updated_at'] = now
         um_path.parent.mkdir(parents=True, exist_ok=True)
         um_path.write_text(json.dumps(model, indent=2))
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('memory_tools', 'user_model.json write failed; JSON copy of user model is stale', error=e)
 
     # Also write USER.md for human readability
     try:
         md_path = state_dir / 'USER.md'
         md_path.write_text(ENTRY_DELIMITER.join(entries) if entries else '(empty)')
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('memory_tools', 'USER.md write failed; human-readable user model is stale', error=e)
 
 
 def _format_entries(entries: list[str], char_limit: int, label: str) -> str:
@@ -380,8 +388,8 @@ def _knowledge_path(project_root: Path, state_dir: Path | None = None) -> Path:
             pid = str(proj.get('id') or '')
             if pid:
                 return state_dir / 'projects' / pid / 'KNOWLEDGE.md'
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('memory_tools', 'canonical project-knowledge path resolution failed; falling back to repo-local .charon file', error=e)
     return project_root / '.charon' / 'PROJECT_KNOWLEDGE.md'
 
 
@@ -395,7 +403,8 @@ def _load_knowledge_entries(project_root: Path, state_dir: Path | None = None) -
         if not raw or raw == '(empty)':
             return []
         return [e.strip() for e in raw.split(ENTRY_DELIMITER) if e.strip()]
-    except Exception:
+    except Exception as exc:
+        _diag('memory_tools', 'project-knowledge file read failed; knowledge loads as empty', error=exc)
         return []
 
 

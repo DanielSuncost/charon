@@ -14,6 +14,12 @@ from charon.providers import ModelInfo, get_provider
 from charon.providers import Provider
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _session_provider_dir(state_dir: Path) -> Path:
     d = Path(state_dir) / 'session_providers'
@@ -106,7 +112,8 @@ def _read_json(path: Path, default=None):
     try:
         data = json.loads(path.read_text())
         return data if isinstance(data, dict) else (default or {})
-    except Exception:
+    except Exception as e:
+        _diag('provider_bridge', 'JSON read failed; using default', error=e, file=str(path))
         return default or {}
 
 
@@ -271,8 +278,8 @@ def _resolve_api_key(
                 pi_token = pi_data.get('anthropic', {}).get('access', '').strip()
                 if pi_token:
                     return pi_token
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('provider_bridge', 'pi-agent auth.json unreadable; skipping pi token fallback', error=e)
 
     # 5. Local providers don't need a key
     if provider_name == 'local':
@@ -301,8 +308,8 @@ def _get_refresh_token(state_dir: Path, provider_raw: str) -> str | None:
             rt = tokens.get('refresh_token', '').strip()
             if rt:
                 return rt
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('provider_bridge', 'auth store refresh-token read failed', error=e)
 
     # Claude-backed providers: prefer Claude Code credentials before pi auth.
     if provider_raw in ('claude-code', 'anthropic'):
@@ -313,8 +320,8 @@ def _get_refresh_token(state_dir: Path, provider_raw: str) -> str | None:
                 rt = cred.get('claudeAiOauth', {}).get('refreshToken', '').strip()
                 if rt:
                     return rt
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('provider_bridge', 'Claude credentials refresh-token read failed', error=e)
 
     # Check pi-agent's auth store
     pi_auth = Path.home() / '.pi' / 'agent' / 'auth.json'
@@ -324,8 +331,8 @@ def _get_refresh_token(state_dir: Path, provider_raw: str) -> str | None:
             rt = pi_data.get('anthropic', {}).get('refresh', '').strip()
             if rt:
                 return rt
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('provider_bridge', 'pi-agent refresh-token read failed', error=e)
 
     # Fallback to Claude's credentials for any remaining Anthropic-ish callers
     claude_creds = Path.home() / '.claude' / '.credentials.json'
@@ -335,8 +342,8 @@ def _get_refresh_token(state_dir: Path, provider_raw: str) -> str | None:
             rt = cred.get('claudeAiOauth', {}).get('refreshToken', '').strip()
             if rt:
                 return rt
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('provider_bridge', 'Claude credentials fallback read failed', error=e)
     return None
 
 
@@ -391,8 +398,8 @@ def _refresh_token(provider_raw: str, refresh_token: str) -> str | None:
                                 store['providers'][auth_key]['tokens']['refresh_token'] = data['refresh_token']
                             store['providers'][auth_key]['last_login'] = time.strftime('%Y-%m-%dT%H:%M:%S+00:00')
                             auth_file.write_text(json.dumps(store, indent=2))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _diag('provider_bridge', 'failed to write refreshed token to auth store', error=e, provider=provider_raw)
 
                 # Also update Claude's credentials file
                 if provider_raw == 'claude-code':
@@ -405,12 +412,12 @@ def _refresh_token(provider_raw: str, refresh_token: str) -> str | None:
                                 cred_data['claudeAiOauth']['refreshToken'] = data['refresh_token']
                             cred_data['claudeAiOauth']['expiresAt'] = int(time.time() * 1000) + data.get('expires_in', 3600) * 1000
                             cred_path.write_text(json.dumps(cred_data))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _diag('provider_bridge', 'failed to sync refreshed token to .claude credentials', error=e)
 
                 return new_token
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('provider_bridge', 'token refresh flow failed; returning no token', error=e, provider=provider_raw)
     return None
 
 
@@ -433,7 +440,8 @@ def create_provider_and_model(state_dir: Path, session_id: str | None = None) ->
         # Return a local provider as fallback (may or may not be running)
         try:
             provider = get_provider('local')
-        except Exception:
+        except Exception as e:
+            _diag('provider_bridge', "get_provider('local') failed; constructing HttpxOpenAIProvider directly", error=e)
             from charon.providers.httpx_openai import HttpxOpenAIProvider
             provider = HttpxOpenAIProvider()
         return provider, model, False

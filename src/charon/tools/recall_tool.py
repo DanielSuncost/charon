@@ -13,6 +13,12 @@ from pathlib import Path
 
 from charon.tools import ToolContext, ToolResult
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 RECALL_TOOL_DEF = {
     'name': 'Recall',
@@ -51,7 +57,8 @@ def _get_engine(state_dir: Path):
         return MemoryEngine(state_dir)
     except ImportError:
         return None
-    except Exception:
+    except Exception as e:
+        _diag('recall_tool', 'memory engine construction failed; Recall reports semantic memory unavailable', error=e)
         return None
 
 

@@ -28,6 +28,12 @@ from charon.providers import (
 from charon.tools import ALL_TOOL_DEFS, ToolContext, execute_tool
 from charon.memory.execution_memory import record_tool_event
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 # Browser visibility settings (graceful fallback if unavailable)
 try:
     from charon.providers.browser_settings import (
@@ -298,7 +304,8 @@ async def compact_messages(
             elif delta.type == 'error':
                 summary_parts = [f'[Previous conversation with {len(to_summarize)} messages summarized]']
                 break
-    except Exception:
+    except Exception as e:
+        _diag('conversation_engine', 'compaction LLM summarization failed; using placeholder summary', error=e)
         summary_parts = [f'[Previous conversation with {len(to_summarize)} messages summarized]']
 
     summary = ''.join(summary_parts)
@@ -406,8 +413,8 @@ class ConversationEngine:
                 ))
                 self._ctx_assembler = ContextAssembler(fresh_tail_count=20)
                 self._lossless_enabled = True
-            except Exception:
-                pass  # Graceful fallback to legacy compaction
+            except Exception as e:
+                _diag('conversation_engine', 'lossless context store init failed; falling back to legacy compaction', error=e)  # Graceful fallback to legacy compaction
 
         # Load built-in + dynamic tools
         try:
@@ -416,7 +423,8 @@ class ConversationEngine:
                 state_dir=self.state_dir,
                 project_root=self.project_root,
             )
-        except Exception:
+        except Exception as e:
+            _diag('conversation_engine', 'dynamic tool loading failed; using built-in tool defs only', error=e)
             self.tools = ALL_TOOL_DEFS
         self._steering_queue: list[str] = []
         self._follow_up_queue: list[str] = []
@@ -479,16 +487,16 @@ class ConversationEngine:
         if self._lossless_enabled and self._ctx_db and self.agent_id:
             try:
                 ContextStore.clear_context_window(self._ctx_db, self.agent_id)
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('conversation_engine', 'clearing lossless context window failed; stale messages may persist in store', error=e)
 
     def _persist_message(self, msg: Message) -> None:
         """Persist a message to the lossless context store."""
         if self._lossless_enabled and self._ctx_db and self.agent_id:
             try:
                 ContextStore.persist_message(self._ctx_db, self.agent_id, msg)
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('conversation_engine', 'persisting message to lossless context store failed; resume history incomplete', error=e)
 
     def load_from_store(self) -> int:
         """Load full conversation from lossless context store into engine.
@@ -519,7 +527,8 @@ class ConversationEngine:
                 for sm in stored
             ]
             return len(self.messages)
-        except Exception:
+        except Exception as e:
+            _diag('conversation_engine', 'loading messages from lossless context store failed; resuming without stored history', error=e)
             return 0
 
     def import_into_store(self, messages: list[Message]) -> int:
@@ -534,7 +543,8 @@ class ConversationEngine:
             return ContextStore.import_messages(
                 self._ctx_db, self.agent_id, messages,
             )
-        except Exception:
+        except Exception as e:
+            _diag('conversation_engine', 'importing messages into lossless context store failed; JSONL migration skipped', error=e)
             return 0
 
     @property
@@ -606,7 +616,8 @@ class ConversationEngine:
 
             msgs = result.messages if result.messages else self.messages
             return self._repair_orphaned_tool_calls(msgs)
-        except Exception:
+        except Exception as e:
+            _diag('conversation_engine', 'lossless context assembly failed; falling back to in-memory messages', error=e)
             return self._repair_orphaned_tool_calls(self.messages)
 
     def _get_system_prompt(self) -> str:
@@ -847,8 +858,8 @@ class ConversationEngine:
                             info = json.loads(delta.text)
                             usage_data = info.get('usage', {})
                             stop_reason = info.get('stop_reason', 'end_turn')
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            _diag('conversation_engine', 'stream done-info parse failed; usage and stop_reason lost for this turn', error=exc)
                     elif delta.type == 'error':
                         error_msg = delta.error
                         stop_reason = 'error'
@@ -1008,8 +1019,8 @@ class ConversationEngine:
                             project_root=str(self.project_root),
                             duration_ms=_tool_dt,
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _diag('conversation_engine', 'tool event recording failed; execution memory misses this tool call', error=exc, tool=tc.name)
 
                 yield _evt('tool_execution_end',
                            tool_call_id=tc.id, tool_name=tc.name,

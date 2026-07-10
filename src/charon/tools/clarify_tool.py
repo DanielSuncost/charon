@@ -12,6 +12,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from charon.tools import ToolContext, ToolResult
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 CLARIFY_TOOL_DEF = {
     'name': 'Clarify',
@@ -51,8 +57,8 @@ def _load(state_dir: Path) -> dict:
         d = json.loads(p.read_text(encoding='utf-8'))
         if isinstance(d, dict) and isinstance(d.get('items'), list):
             return d
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('clarify_tool', 'clarifications.json unreadable/corrupt; resetting to empty clarification store', error=e)
     return {'items': []}
 
 
@@ -121,8 +127,8 @@ def execute_clarify(params: dict, ctx: ToolContext) -> ToolResult:
                             r['applied_at'] = _now_iso()
                             r['applied_result'] = applied
                             _save(state_dir, data)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _diag('clarify_tool', 'apply_worker_provider_choice failed after answer; user told success but provider choice not applied', error=exc, clarification_id=cid)
                     return ToolResult(content=f'Clarification answered: {cid}', details=r)
             return ToolResult(content=f'Clarification not found: {cid}', is_error=True)
 

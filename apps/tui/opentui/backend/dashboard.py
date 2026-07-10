@@ -9,6 +9,12 @@ from backend import common
 from backend.settings_io import _load_project_registry
 from charon.providers.provider_bridge import load_session_provider_config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _collect_devop_rooms(state_dir: Path, project_root: Path) -> list[dict]:
     rooms = []
@@ -62,7 +68,8 @@ def _collect_devop_rooms(state_dir: Path, project_root: Path) -> list[dict]:
                 'active_reviews': f4.get('active_reviews') or [],
                 'events': f4.get('stream') or [],
             })
-    except Exception:
+    except Exception as e:
+        _diag('dashboard', 'devop room collection failed; software-dev rooms omitted from dashboard', error=e)
         return []
     return rooms
 
@@ -83,7 +90,8 @@ def _load_workflow_steps_spec(project_root: Path, raw_value: str) -> list[dict] 
         if candidate.exists():
             data = json.loads(candidate.read_text(encoding='utf-8'))
             return data if isinstance(data, list) else None
-    except Exception:
+    except Exception as e:
+        _diag('dashboard', 'workflow steps file unreadable; workflow spec ignored', error=e)
         return None
     return None
 
@@ -92,7 +100,8 @@ def _project_goal_tree(state_dir: Path, project_path: str) -> list[dict]:
     try:
         from charon.agents.goal_runtime import list_goals
         goals = list_goals(state_dir, project=project_path)
-    except Exception:
+    except Exception as e:
+        _diag('dashboard', 'goal listing unavailable; project goal tree empty', error=e, project=project_path)
         goals = []
     if not goals:
         return []
@@ -141,8 +150,8 @@ def _project_usage_summary(state_dir: Path, project_path: str) -> dict:
                 summary['output_tokens'] += int(usage.get('output_tokens') or 0)
                 summary['total_tokens'] += int(usage.get('total_tokens') or 0)
                 summary['estimated_cost_usd'] += float(usage.get('estimated_cost_usd') or 0.0)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('dashboard', 'libris usage scan failed; project usage summary incomplete', error=e)
     try:
         pass  # type: ignore
     except Exception:
@@ -161,8 +170,8 @@ def _project_usage_summary(state_dir: Path, project_path: str) -> dict:
             summary['output_tokens'] += int(usage.get('output_tokens') or 0)
             summary['total_tokens'] += int(usage.get('total_tokens') or 0)
             summary['estimated_cost_usd'] += float(usage.get('estimated_cost_usd') or 0.0)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('dashboard', 'devop usage scan failed; project usage summary incomplete', error=e)
     summary['estimated_cost_usd'] = round(float(summary['estimated_cost_usd']), 6)
     summary['hours_spent_estimate'] = round((summary['total_tokens'] / 12000.0), 2) if summary['total_tokens'] else 0.0
     return summary
@@ -176,8 +185,8 @@ def _project_activity_points(state_dir: Path, project_path: str) -> list[int]:
             lines = run_log.read_text(encoding='utf-8', errors='replace').splitlines()[-240:]
             for i, _line in enumerate(lines[-12:]):
                 counts[min(11, i)] += 1
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('dashboard', 'run.log read failed; project activity sparkline empty', error=e)
     return _dashboard_spark_points(counts)
 
 
@@ -266,8 +275,8 @@ class DashboardMixin:
                     agents[-1]['shade_stats'] = get_agent_shade_stats(common.STATE_DIR, agent_id)
                 except Exception:
                     agents[-1]['shade_stats'] = {}
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('dashboard', 'agent listing failed; dashboard shows no local agents', error=e)
 
         # Remote fleet agents
         try:
@@ -304,8 +313,8 @@ class DashboardMixin:
                         'host': server.get('host', ''),
                         'transport': 'remote-boat',
                     })
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('dashboard', 'fleet registry/status unavailable; remote fleet agents omitted', error=e)
 
         # Derive projects from agents
         project_map: dict[str, dict] = {}
@@ -374,7 +383,8 @@ class DashboardMixin:
             for p in projects:
                 p['active'] = any(ad.get('status') == 'running' for ad in p.get('agent_details', []))
                 p['selected'] = bool(onboarding_project and str(p.get('path') or '').strip() == onboarding_project)
-        except Exception:
+        except Exception as e:
+            _diag('dashboard', 'project registry merge failed; explicit projects omitted', error=e)
             for p in projects:
                 p['active'] = any(ad.get('status') == 'running' for ad in p.get('agent_details', []))
 
@@ -386,7 +396,8 @@ class DashboardMixin:
             try:
                 from charon.agents.goal_runtime import list_goals
                 flat_goals = list_goals(common.STATE_DIR, project=path or str(common.ROOT))
-            except Exception:
+            except Exception as e:
+                _diag('dashboard', 'goal listing unavailable; project goal counts zeroed', error=e, project=path)
                 flat_goals = []
             p['usage'] = usage
             p['goal_tree'] = goal_tree
@@ -411,8 +422,8 @@ class DashboardMixin:
                     'windows': ts.windows,
                     'attached': ts.attached,
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('dashboard', 'tmux session listing failed; live tmux sessions omitted', error=e)
 
         # First: add Charon agents that have tmux sessions
         for a in agents:
@@ -504,8 +515,8 @@ class DashboardMixin:
                         'transport': transport or ('pty' if sock_path.exists() else ''),
                         'socket': str(sock_path) if sock_path else '',
                     })
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('dashboard', 'boat registry scan failed; boat sessions omitted', error=e)
 
         # Remote fleet agent sessions
         try:
@@ -540,8 +551,8 @@ class DashboardMixin:
                         'server_id': _sid,
                         'socket': '',
                     })
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('dashboard', 'fleet registry/status unavailable; remote fleet sessions omitted', error=e)
 
         # Second: discover ALL running agent processes (pi, hermes, claude, etc.)
         # and match them to tmux sessions where possible
@@ -585,8 +596,8 @@ class DashboardMixin:
                                     pass
                     except Exception:
                         pass
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('dashboard', 'tmux pane mapping failed; detected processes lack session names', error=e)
 
         try:
             sys.path.insert(0, str(common.ROOT / 'apps' / 'tui'))
@@ -619,8 +630,8 @@ class DashboardMixin:
                     'pid': proc.pid,
                     'command': proc.args[:80],
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('dashboard', 'agent process detection failed; detected sessions omitted', error=e)
 
         sessions.extend(detected_agents)
 
@@ -681,14 +692,15 @@ class DashboardMixin:
                         activity.append(f"{evt}: {tid} {reason}".strip())
                     except Exception:
                         pass
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('dashboard', 'run.log read failed; recent activity empty', error=e)
 
         transfer_events = []
         try:
             from charon.context.context_transfer import list_transfer_events
             transfer_events = list_transfer_events(common.STATE_DIR, limit=12)
-        except Exception:
+        except Exception as e:
+            _diag('dashboard', 'transfer event listing failed; transfer events empty', error=e)
             transfer_events = []
 
         inter_agent_rooms = []
@@ -701,7 +713,8 @@ class DashboardMixin:
                 item = dict(room)
                 item['events'] = list_events(common.STATE_DIR, rid, limit=80)
                 inter_agent_rooms.append(item)
-        except Exception:
+        except Exception as e:
+            _diag('dashboard', 'inter-agent room listing failed; rooms omitted', error=e)
             inter_agent_rooms = []
 
         # Map Libris and software-dev operations into the shared F4 room list so
@@ -751,13 +764,13 @@ class DashboardMixin:
                     'final_selection_markdown': swarm.get('final_selection_markdown') or '',
                     'events': swarm.get('events_tail') or [],
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('dashboard', 'libris swarm indexing failed; libris rooms omitted', error=e)
 
         try:
             inter_agent_rooms.extend(_collect_devop_rooms(common.STATE_DIR, project_root))
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('dashboard', 'devop room merge failed; software-dev rooms omitted', error=e)
 
         session_lookup = {}
         for s in sessions:
@@ -779,7 +792,8 @@ class DashboardMixin:
         try:
             from charon.automation.automation_runtime import list_automations, get_automation_state
             automations = [get_automation_state(common.STATE_DIR, str(a.get('automation_id') or '')) for a in list_automations(common.STATE_DIR)]
-        except Exception:
+        except Exception as e:
+            _diag('dashboard', 'automation listing failed; automations empty', error=e)
             automations = []
 
         payload = {
@@ -815,7 +829,8 @@ class DashboardMixin:
         try:
             from charon.memory.consolidation import list_traces
             payload['consolidation_traces'] = list_traces(common.STATE_DIR, limit=5)
-        except Exception:
+        except Exception as e:
+            _diag('dashboard', 'consolidation trace listing failed; traces omitted', error=e)
             payload['consolidation_traces'] = []
 
         return payload
@@ -846,8 +861,8 @@ class DashboardMixin:
                             args=(f'[Steering from another Charon session] {msg}', request_id),
                             daemon=True,
                         ).start()
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('dashboard', 'steer inbox check failed; cross-session steering messages dropped', error=e)
 
         # Heartbeat + include live Charon sessions
         try:
@@ -879,8 +894,8 @@ class DashboardMixin:
                     'isLive': True,
                     'liveSessionId': sid,
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('dashboard', 'session heartbeat/live-session listing failed; live sessions omitted', error=e)
 
         common.emit({
             'type': 'refresh',
@@ -940,8 +955,8 @@ class DashboardMixin:
         try:
             if self.engine and getattr(self.engine, 'model', None):
                 info['tokens']['max_context'] = int(getattr(self.engine.model, 'context_window', 0) or 0)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('dashboard', 'engine context window unavailable; max_context reported as 0', error=e)
 
         # Goals: session-level + project-level
         try:
@@ -1010,16 +1025,16 @@ class DashboardMixin:
                     'criteria': g.get('acceptance_criteria', []),
                     'scope': 'project',
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('dashboard', 'goal summary computation failed; session goals omitted', error=e)
 
         # User model (rendered)
         try:
             from charon.memory.user_model_structured import load_structured, render_for_prompt
             model = load_structured(common.STATE_DIR)
             info['user_model'] = render_for_prompt(model)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('dashboard', 'user model rendering failed; user model pane empty', error=e)
 
         # Active transfer metadata, if current engine was resumed via transfer
         try:
@@ -1041,8 +1056,8 @@ class DashboardMixin:
                     'message_mode': compiled.get('strategy', {}).get('message_mode', ''),
                     'omitted': compiled.get('omitted', {}),
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('dashboard', 'transfer metadata read failed; transfer info omitted', error=e)
 
         # Token usage from consolidation traces
         try:
@@ -1050,8 +1065,8 @@ class DashboardMixin:
             traces = list_traces(common.STATE_DIR, limit=10)
             # Rough estimate: each consolidation uses ~1K tokens
             info['tokens']['consolidation_tokens'] = len(traces) * 1000
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('dashboard', 'consolidation trace count unavailable; consolidation tokens zeroed', error=e)
 
         return info
 
@@ -1071,5 +1086,6 @@ class DashboardMixin:
             if len(running) > 1:
                 parts.append(f'{len(running)} batches')
             return ' '.join(parts)
-        except Exception:
+        except Exception as e:
+            _diag('dashboard', 'batch listing failed; batch progress hidden', error=e)
             return ''

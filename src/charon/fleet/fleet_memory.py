@@ -10,6 +10,12 @@ from pathlib import Path
 from charon.fleet.fleet_registry import load_fleet
 from charon.fleet.fleet_sync import get_cached_fleet_status, get_remote_agent_history
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 ROOT = Path(__file__).resolve().parents[3]
 STATE_DIR = ROOT / '.charon_state'
 
@@ -52,8 +58,8 @@ def _summarize_output(output: str, agent_name: str, server_id: str) -> str | Non
         summary = quick_completion(prompt, max_tokens=150)
         if summary and len(summary.strip()) > 10:
             return summary.strip()
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('fleet_memory', 'LLM summarization failed; falling back to raw line extraction', error=e, server_id=server_id)
 
     # Fallback: extract last meaningful lines
     lines = [ln.strip() for ln in clean.splitlines() if ln.strip()]
@@ -70,7 +76,8 @@ def _update_working_memory(server_id: str, agent_name: str, summary: str) -> Non
 
     try:
         memory = json.loads(memory_path.read_text()) if memory_path.exists() else {}
-    except Exception:
+    except Exception as e:
+        _diag('fleet_memory', 'corrupt working_memory.json; starting fresh (prior notes lost)', error=e, server_id=server_id)
         memory = {}
 
     memory['agent_id'] = f'remote:{server_id}:{agent_name}'
@@ -101,8 +108,8 @@ def _store_in_memory_engine(server_id: str, agent_name: str, summary: str) -> No
             container_tag=f'remote:{server_id}:{agent_name}',
             source_agent=f'remote:{server_id}:{agent_name}',
         )
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('fleet_memory', 'memory-engine add failed; fleet activity summary not indexed', error=e, server_id=server_id)
 
 
 def _log_to_task_ledger(server_id: str, agent_name: str, summary: str) -> None:
@@ -115,8 +122,8 @@ def _log_to_task_ledger(server_id: str, agent_name: str, summary: str) -> None:
             'server': server_id,
             'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         })
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('fleet_memory', 'task-ledger append failed; remote activity not logged to ledger', error=e, server_id=server_id)
 
 
 def _summarize_all() -> None:
@@ -140,7 +147,8 @@ def _summarize_all() -> None:
             # Get recent output
             try:
                 output = get_remote_agent_history(server_id, agent_name, timeout=3.0)
-            except Exception:
+            except Exception as e:
+                _diag('fleet_memory', 'remote history fetch raised; agent skipped this summarize cycle', error=e, server_id=server_id)
                 continue
 
             if not output:
@@ -170,8 +178,8 @@ def _memory_loop() -> None:
     while not _stop_event.is_set():
         try:
             _summarize_all()
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('fleet_memory', 'summarize pass failed; no fleet activity recorded this cycle', error=e)
         _stop_event.wait(SUMMARIZE_INTERVAL)
 
 

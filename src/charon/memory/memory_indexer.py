@@ -20,6 +20,12 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _index_in_background(state_dir: Path, turns: list[dict], agent_id: str, conv_id: str):
     """Index conversation turns into the memory engine. Runs in a thread."""
@@ -49,8 +55,8 @@ def _index_in_background(state_dir: Path, turns: list[dict], agent_id: str, conv
         engine.close()
     except ImportError:
         pass  # sqlite-vec or sentence-transformers not installed
-    except Exception:
-        pass  # don't crash the main loop on indexing errors
+    except Exception as e:
+        _diag('memory_indexer', 'background conversation indexing failed; session not indexed', error=e)  # don't crash the main loop on indexing errors
 
 
 def index_conversation(
@@ -118,7 +124,8 @@ def _extract_in_background(state_dir: Path, turns: list[dict], agent_id: str, co
 
             try:
                 return asyncio.run(_run())
-            except Exception:
+            except Exception as e:
+                _diag('memory_indexer', 'extraction LLM stream failed; summarization returns empty', error=e)
                 return ''
 
         session_date = datetime.now(timezone.utc).strftime('%Y-%m-%d')
@@ -147,8 +154,8 @@ def _extract_in_background(state_dir: Path, turns: list[dict], agent_id: str, co
 
     except ImportError:
         pass
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('memory_indexer', 'background fact extraction failed; no facts stored for session', error=e)
 
 
 def extract_and_index_facts(
@@ -209,5 +216,6 @@ def index_conversation_sync(
         return count
     except ImportError:
         return 0
-    except Exception:
+    except Exception as e:
+        _diag('memory_indexer', 'synchronous conversation indexing failed; reporting 0 indexed', error=e)
         return 0

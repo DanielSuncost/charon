@@ -18,6 +18,12 @@ from pathlib import Path
 
 from charon.tools import ToolResult, ToolContext
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 SHADE_TOOL_DEF = {
     'name': 'SpawnShade',
     'description': (
@@ -99,8 +105,8 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
                 is_error=True,
                 details=provider_status,
             )
-    except Exception:
-        pass
+    except Exception as exc:
+        _diag('shade_tool', 'worker-provider preflight check failed; shade spawn proceeds without provider validation', error=exc)
 
     # 1. Create shade agent
     try:
@@ -238,8 +244,8 @@ def _run_shade(
                     'provider_meta': provider_meta if isinstance(provider_meta, dict) else {},
                 },
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag('shade_tool', 'shade_model_resolved phase event not recorded; contract timeline missing model info', error=exc, contract_id=contract_id)
 
         contract['resolved_provider'] = str(provider)
         contract['resolved_model'] = str(model)
@@ -252,8 +258,8 @@ def _run_shade(
                     contracts[idx] = contract
                     save_contracts(state_dir, contracts)
                     break
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag('shade_tool', 'contract enrichment save failed; resolved provider/model not persisted on contract', error=exc, contract_id=contract_id)
 
         libris_meta = dict(contract.get('metadata') or {}) if isinstance(contract.get('metadata'), dict) else {}
         libris_op = str(libris_meta.get('operation_id') or '').strip()
@@ -270,8 +276,8 @@ def _run_shade(
                     agent_id=shade_id, role='shade', phase=phase_name, status=status,
                     topic_slug=libris_topic, summary=summary,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('shade_tool', 'libris phase event emit failed; operation timeline missing shade phase update', error=e, contract_id=contract_id)
 
         def _emit_libris_comm(kind: str, summary: str = '') -> None:
             if not is_libris or not libris_op:
@@ -287,8 +293,8 @@ def _run_shade(
                     message_kind=kind,
                     summary=summary,
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('shade_tool', 'libris comm event emit failed; operation timeline missing shade message', error=e, contract_id=contract_id)
 
         _emit_libris_phase('starting', 'running', 'Shade contract started.')
 
@@ -363,7 +369,8 @@ def _run_shade(
                             'assessment': assessment,
                         },
                     )
-                except Exception:
+                except Exception as exc:
+                    _diag('shade_tool', 'worker-triage inbox event failed; parent agent never asked to review failed contract', error=exc, contract_id=contract_id)
                     reviewer_task_id = ''
                 triage = save_triage_record(state_dir, contract, assessment, reviewer_task_id=reviewer_task_id)
                 try:
@@ -380,8 +387,8 @@ def _run_shade(
                             'reviewer_task_id': reviewer_task_id,
                         },
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _diag('shade_tool', 'worker_triage_summary phase event not recorded; contract timeline missing triage outcome', error=exc, contract_id=contract_id)
 
         if contract and contract.get('status') == 'completed':
             _emit_libris_phase('done', 'idle', 'Shade contract completed.')
@@ -391,8 +398,8 @@ def _run_shade(
         try:
             from charon.agents.agent_lifecycle import set_status
             set_status(shade_id, 'stopped')
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag('shade_tool', 'shade agent status not set to stopped; agent may appear running forever', error=exc, contract_id=contract_id)
 
     except Exception as e:
         # Log error
@@ -400,5 +407,5 @@ def _run_shade(
             err_path = state_dir / 'agents' / shade_id / 'error.log'
             err_path.parent.mkdir(parents=True, exist_ok=True)
             err_path.write_text(f'{time.strftime("%Y-%m-%d %H:%M:%S")} Shade error: {e}\n')
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag('shade_tool', 'shade error.log write failed; shade crash has no persisted record', error=exc, contract_id=contract_id)
