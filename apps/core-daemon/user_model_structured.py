@@ -287,16 +287,6 @@ def lookup_idea_context(state_dir: Path, idea_id: str) -> dict | None:
 
 # ── Rendering ───────────────────────────────────────────────────────
 
-def _render_dict_inline(d: dict) -> str:
-    """Render a dict as 'key: value, key: value'."""
-    if not d:
-        return ''
-    parts = []
-    for _k, v in d.items():
-        parts.append(f'{v}' if len(d) == 1 else f'{v}')
-    return ', '.join(parts)
-
-
 def _render_dict_section(label: str, d: dict, include_keys: bool = False) -> str:
     """Render a dict category as a one-liner."""
     if not d:
