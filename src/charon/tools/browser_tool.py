@@ -17,6 +17,12 @@ from pathlib import Path
 from charon.tools import ToolContext, ToolResult
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 # ── Dedicated browser thread ─────────────────────────────────────────────────
 
 _loop: asyncio.AbstractEventLoop | None = None
@@ -73,7 +79,8 @@ async def _ensure_page():
     try:
         from charon.providers.browser_settings import should_show_browser
         headless = not should_show_browser(_session_id_ctx, _state_dir_ctx)
-    except Exception:
+    except Exception as e:
+        _diag('browser_tool', 'headless-flag resolution failed; falling back to config default', error=e)
         headless = config.browser_headless()
 
     _pw = await async_playwright().start()
@@ -208,7 +215,8 @@ async def _collect_elements(page) -> list[dict]:
         elements = await page.evaluate(_COLLECT_ELEMENTS_JS)
         _element_index = {i: e for i, e in enumerate(elements)}
         return elements
-    except Exception:
+    except Exception as exc:
+        _diag('browser_tool', 'interactive-element collection failed; page state lists no elements', error=exc)
         _element_index = {}
         return []
 
@@ -251,7 +259,8 @@ async def _page_state(page) -> str:
     try:
         text = await page.evaluate('() => document.body ? document.body.innerText : ""')
         text = text.strip()[:6000]
-    except Exception:
+    except Exception as e:
+        _diag('browser_tool', 'page-text extraction failed; page state has empty text', error=e)
         text = ''
 
     elements = await _collect_elements(page)

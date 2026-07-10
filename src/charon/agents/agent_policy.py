@@ -4,6 +4,12 @@ from __future__ import annotations
 import json
 import re
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 # ---------------------------------------------------------------------------
 # Intent parsing — structured extraction via local LLM
 # ---------------------------------------------------------------------------
@@ -55,7 +61,8 @@ def parse_user_intent(text: str, *, llm_adapter=None) -> dict:
     prompt = _PARSE_PROMPT.format(message=str(text).strip()[:1000])
     try:
         ok, raw = llm_adapter.query_local_model(prompt, timeout=30)
-    except Exception:
+    except Exception as e:
+        _diag('agent_policy', 'intent-parse LLM call failed; using passthrough fallback intent', error=e)
         return fallback
 
     if not ok or not raw:
@@ -68,7 +75,8 @@ def parse_user_intent(text: str, *, llm_adapter=None) -> dict:
 
     try:
         parsed = json.loads(m.group())
-    except Exception:
+    except Exception as e:
+        _diag('agent_policy', 'intent-parse LLM output not valid JSON; using passthrough fallback intent', error=e)
         return fallback
 
     def _strlist(val) -> list[str]:

@@ -9,6 +9,12 @@ from pathlib import Path
 from backend import common
 from backend.textutils import _iso_to_epoch
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _hermes_conversation_runtime_dir(room_id: str, participant_name: str) -> Path:
     rid = re.sub(r'[^a-zA-Z0-9._-]+', '-', str(room_id or '').strip()).strip('-_.') or 'room'
@@ -66,7 +72,8 @@ def _full_messages_from_store(agent_id: str) -> list | None:
                  timestamp=_iso_to_epoch(sm.created_at))
             for sm in stored
         ]
-    except Exception:
+    except Exception as e:
+        _diag('settings_io', 'lossless message store read failed; save paths fall back to in-memory engine messages', error=e, name=agent_id)
         return None
 
 

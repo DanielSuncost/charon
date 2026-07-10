@@ -8,6 +8,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _rooms_dir(state_dir: Path) -> Path:
     return state_dir / 'rooms'
@@ -77,7 +83,8 @@ def load_room(state_dir: Path, room_id: str) -> dict[str, Any] | None:
     try:
         data = json.loads(p.read_text())
         return _normalize_room(data) if isinstance(data, dict) else None
-    except Exception:
+    except Exception as e:
+        _diag('inter_agent_rooms', 'room.json unreadable; room treated as missing', error=e, room_id=room_id)
         return None
 
 
@@ -297,7 +304,8 @@ def list_events(state_dir: Path, room_id: str, limit: int = 200) -> list[dict[st
         return []
     try:
         lines = p.read_text().splitlines()[-limit:]
-    except Exception:
+    except Exception as e:
+        _diag('inter_agent_rooms', 'events.jsonl unreadable; room event log returned empty', error=e, room_id=room_id)
         return []
     out: list[dict[str, Any]] = []
     for line in lines:
@@ -320,5 +328,6 @@ def delete_room(state_dir: Path, room_id: str) -> bool:
     try:
         shutil.move(str(room_dir), str(target))
         return True
-    except Exception:
+    except Exception as e:
+        _diag('inter_agent_rooms', 'room move to deleted_rooms failed; delete reported as False', error=e, room_id=room_id)
         return False

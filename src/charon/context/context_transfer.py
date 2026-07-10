@@ -20,6 +20,12 @@ from typing import Any
 from charon.conversation.conversation_store import message_to_dict
 from charon.providers import Message
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 TRANSFER_PROFILES: dict[str, dict[str, Any]] = {
     'default': {
@@ -215,8 +221,8 @@ def _run_git(project_root: Path, *args: str) -> str:
         )
         if proc.returncode == 0:
             return (proc.stdout or '').strip()
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('context_transfer', 'git command failed; workspace snapshot field empty', error=e)
     return ''
 
 
@@ -286,7 +292,8 @@ def _load_working_memory(state_dir: Path, agent_id: str | None) -> dict[str, Any
     try:
         data = json.loads(path.read_text())
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except Exception as e:
+        _diag('context_transfer', 'working_memory.json unreadable; omitting working memory', error=e)
         return {}
 
 
@@ -302,10 +309,10 @@ def _load_project_knowledge(state_dir: Path, project_root: Path) -> str:
                     text = canonical.read_text(encoding='utf-8').strip()
                     if text:
                         return text[:4000]
-                except Exception:
-                    pass
-    except Exception:
-        pass
+                except Exception as e:
+                    _diag('context_transfer', 'canonical KNOWLEDGE.md unreadable', error=e)
+    except Exception as e:
+        _diag('context_transfer', 'project registry lookup failed; scanning knowledge candidates', error=e)
 
     candidates = [
         state_dir / 'projects',
@@ -318,14 +325,14 @@ def _load_project_knowledge(state_dir: Path, project_root: Path) -> str:
                     text = md.read_text(encoding='utf-8').strip()
                     if text:
                         return text[:4000]
-                except Exception:
-                    pass
+                except Exception as e:
+                    _diag('context_transfer', 'knowledge candidate unreadable; skipping', error=e)
     fallback = project_root / '.charon' / 'PROJECT_KNOWLEDGE.md'
     if fallback.exists():
         try:
             return fallback.read_text(encoding='utf-8').strip()[:4000]
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('context_transfer', 'PROJECT_KNOWLEDGE.md unreadable; omitting project knowledge', error=e)
     return ''
 
 
@@ -609,15 +616,15 @@ def estimate_transfer_budget(profile: dict[str, Any], engine: Any | None = None)
             model_ctx = int(getattr(getattr(engine, 'model', None), 'context_window', 0) or 0)
             if model_ctx:
                 max_context = model_ctx
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('context_transfer', 'engine context_window read failed; using profile default', error=e)
     budget = int(max_context * float(profile.get('safe_prompt_fraction', 0.28) or 0.28))
 
     if engine is not None:
         try:
             budget -= estimate_text_tokens(getattr(engine, 'system_prompt', '') or '')
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('context_transfer', 'system prompt token estimate failed; budget not reduced', error=e)
 
     tool_schema_reserve = 3500
     output_reserve = max(4096, max_context // 10)
@@ -990,7 +997,8 @@ def apply_transfer_to_engine(engine: Any, bundle: dict[str, Any]) -> None:
     for item in compiled.get('restore_messages', []) or []:
         try:
             restored.append(dict_to_message(item))
-        except Exception:
+        except Exception as e:
+            _diag('context_transfer', 'transfer message failed to deserialize; dropped from restore', error=e)
             continue
     if restored:
         engine.messages = restored
@@ -1011,7 +1019,8 @@ def load_pending_transfer(state_dir: Path | str) -> dict[str, Any] | None:
     try:
         data = json.loads(path.read_text(encoding='utf-8'))
         return data if isinstance(data, dict) else None
-    except Exception:
+    except Exception as e:
+        _diag('context_transfer', 'pending_transfer.json unreadable; ignoring pending transfer', error=e)
         return None
 
 

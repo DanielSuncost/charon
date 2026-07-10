@@ -18,6 +18,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -131,12 +137,14 @@ def shade_implementer(state_dir: Path, config, working_dir: Path) -> "str | None
         from charon.conversation.conversation_engine import ConversationEngine
         from charon.providers.model_registry import get_shade_provider_and_model
         from charon.judge.judge_engine import build_iteration_prompt
-    except Exception:
+    except Exception as e:
+        _diag('judge_loop_driver', 'implementer preconditions unavailable (engine/registry import failed); shade implementer is a no-op', error=e)
         return None
 
     try:
         provider, model, ready = get_shade_provider_and_model(state_dir)
-    except Exception:
+    except Exception as e:
+        _diag('judge_loop_driver', 'shade provider/model resolution failed; shade implementer skipped this tick', error=e)
         return None
     if not provider or not ready:
         return None
@@ -169,7 +177,8 @@ def shade_implementer(state_dir: Path, config, working_dir: Path) -> "str | None
 
     try:
         asyncio.run(_run())
-    except Exception:
+    except Exception as e:
+        _diag('judge_loop_driver', 'implementer LLM run failed; iteration counts as a failed step with no change summary', error=e)
         return None
 
     summary = ''.join(text_parts).strip()
@@ -211,7 +220,8 @@ def tick_judge_loops(state_dir: Path, *, implementer: "Implementer | None" = Non
             # rollback and consistent frozen-path detection. The implementer's
             # write scope is enforced separately at the tool layer.
             checkpoint_mgr = CheckpointManager(state_dir, working_dir)
-        except Exception:
+        except Exception as exc:
+            _diag('judge_loop_driver', 'checkpoint manager init failed; loop iterates without rollback checkpoints', error=exc)
             checkpoint_mgr = None
 
         try:

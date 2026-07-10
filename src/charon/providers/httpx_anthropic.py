@@ -61,8 +61,8 @@ class HttpxAnthropicProvider:
                         if self._refresh_token:
                             store['providers']['anthropic']['tokens']['refresh_token'] = self._refresh_token
                         path.write_text(json.dumps(store, indent=2))
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('httpx_anthropic', 'failed to write refreshed tokens to auth store', error=e)
 
         # 2. Sync to .claude/.credentials.json (keeps Claude Code working)
         try:
@@ -78,8 +78,8 @@ class HttpxAnthropicProvider:
                         # Convert to milliseconds epoch
                         oauth['expiresAt'] = int((self._token_expires + 300) * 1000)
                     cred_path.write_text(json.dumps(cred))
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('httpx_anthropic', 'failed to sync refreshed tokens to .claude credentials', error=e)
 
     async def _refresh_if_needed(self):
         """Refresh OAuth token if expired. Must be called before every API request.
@@ -132,8 +132,8 @@ class HttpxAnthropicProvider:
                 if saved_refresh:
                     self._refresh_token = saved_refresh
                 self._token_expires = time.time() + 28800 - 300
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('httpx_anthropic', 'failed to re-read tokens from auth store', error=e)
 
     async def _do_refresh(self):
         """Actually call Anthropic's token endpoint to refresh."""

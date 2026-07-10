@@ -5,6 +5,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -21,7 +27,8 @@ def _read_json(path: Path, default=None):
     try:
         data = json.loads(path.read_text())
         return data if isinstance(data, dict) else (default or {})
-    except Exception:
+    except Exception as e:
+        _diag('worker_provider', 'JSON read failed; using default', error=e, file=str(path))
         return default or {}
 
 
@@ -74,7 +81,8 @@ def get_worker_provider_status(state_dir: Path) -> dict[str, Any]:
     try:
         from charon.providers.model_registry import load_registry
         reg = load_registry(state_dir)
-    except Exception:
+    except Exception as e:
+        _diag('worker_provider', 'model registry load failed; treating as empty', error=e)
         reg = {}
 
     mode = str(reg.get('shade_model_mode') or 'auto').strip().lower()
@@ -188,7 +196,8 @@ def maybe_apply_answered_worker_provider_choice(state_dir: Path) -> dict[str, An
         return None
     try:
         data = json.loads(clar_path.read_text())
-    except Exception:
+    except Exception as e:
+        _diag('worker_provider', 'clarifications.json unreadable; skipping answered-choice application', error=e)
         return None
     items = data.get('items') or []
     changed = False
@@ -238,14 +247,16 @@ def ensure_worker_provider_or_request_clarification(state_dir: Path, *, ctx=None
                         if row.get('status') == 'pending' and str(row.get('question') or '') == question:
                             existing = row
                             break
-                except Exception:
+                except Exception as e:
+                    _diag('worker_provider', 'pending clarifications parse failed; asking again', error=e)
                     existing = None
             if existing:
                 clarification = existing
             else:
                 result = execute_clarify({'action': 'ask', 'question': question, 'choices': choices[:4]}, ctx)
                 clarification = result.details or {}
-        except Exception:
+        except Exception as e:
+            _diag('worker_provider', 'clarify tool execution failed; no clarification recorded', error=e)
             clarification = None
     status['clarification'] = clarification or {}
     status['question'] = question

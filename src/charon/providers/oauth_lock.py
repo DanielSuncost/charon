@@ -18,6 +18,12 @@ import asyncio
 from pathlib import Path
 from typing import Awaitable, Callable
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 async def locked_refresh(
     lock_path: str,
@@ -44,8 +50,9 @@ async def locked_refresh(
     try:
         Path(lock_path).parent.mkdir(parents=True, exist_ok=True)
         lock_fd = open(lock_path, 'w')
-    except Exception:
+    except Exception as e:
         # Can't create a lock — fall back to an unlocked refresh.
+        _diag('oauth_lock', 'lockfile creation failed; refreshing without cross-process lock', error=e)
         return await do_refresh()
 
     try:

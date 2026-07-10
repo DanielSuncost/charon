@@ -23,6 +23,12 @@ from pathlib import Path
 
 from charon.tools import ALL_TOOL_DEFS
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 # ── Injection scanning (Hermes-style) ──────────────────────────────────
 
 _THREAT_PATTERNS = [
@@ -191,8 +197,8 @@ def _build_user_model(state_dir: Path) -> str:
         # Only include if there's actual content (not just the empty placeholder)
         if '(No profile yet' not in rendered:
             return rendered
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('system_prompt_builder', 'user model layer failed; omitted from prompt', error=e)
     return ''
 
 
@@ -210,8 +216,8 @@ def _build_project_knowledge(state_dir: Path, project: str) -> str:
         pid = str(proj.get('id') or '').strip()
         if pid:
             candidates.append((state_dir / 'projects' / pid / 'KNOWLEDGE.md', 'KNOWLEDGE.md'))
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('system_prompt_builder', 'project registry lookup failed; using project-local knowledge only', error=e)
 
     for name in ['PROJECT_KNOWLEDGE.md', 'project_knowledge.md']:
         candidates.append((project_path / '.charon' / name, name))
@@ -230,8 +236,8 @@ def _build_project_knowledge(state_dir: Path, project: str) -> str:
                     content = _truncate_content(content, 3000)
                     sep = '═' * 46
                     return f'{sep}\nPROJECT KNOWLEDGE\n{sep}\n{content}'
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('system_prompt_builder', 'knowledge file unreadable; skipping candidate', error=e, file=label)
 
     return ''
 
@@ -247,8 +253,8 @@ def _build_working_memory(state_dir: Path, agent_id: str) -> str:
         from charon.infra.store_adapter import get_db, agent_memory_get
         db = get_db(state_dir)
         memory = agent_memory_get(db, agent_id)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('system_prompt_builder', 'SQLite working memory read failed; trying JSON fallback', error=e)
 
     # Fallback to JSON
     if not memory:
@@ -256,8 +262,8 @@ def _build_working_memory(state_dir: Path, agent_id: str) -> str:
             mem_path = state_dir / 'agents' / agent_id / 'working_memory.json'
             if mem_path.exists():
                 memory = json.loads(mem_path.read_text())
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('system_prompt_builder', 'working_memory.json read failed; omitting working memory', error=e)
 
     if not memory:
         return ''
@@ -324,7 +330,8 @@ def _build_recall_context(state_dir: Path, agent_id: str = '') -> str:
         return '\n'.join(lines)
     except ImportError:
         return ''
-    except Exception:
+    except Exception as e:
+        _diag('system_prompt_builder', 'memory recall layer failed; omitted from prompt', error=e)
         return ''
 
 
@@ -339,8 +346,8 @@ def _build_goal_context(state_dir: Path, agent_id: str, project: str) -> str:
         from charon.infra.store_adapter import get_db, goal_context_packet_get
         db = get_db(state_dir)
         packet = goal_context_packet_get(db, agent_id)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('system_prompt_builder', 'SQLite goal packet read failed; trying JSON fallback', error=e)
 
     # Fallback to JSON
     if not packet:
@@ -348,8 +355,8 @@ def _build_goal_context(state_dir: Path, agent_id: str, project: str) -> str:
             pkt_path = state_dir / 'context_packets' / f'{agent_id}.json'
             if pkt_path.exists():
                 packet = json.loads(pkt_path.read_text())
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('system_prompt_builder', 'goal packet JSON read failed; omitting goals', error=e)
 
     if not packet:
         return ''
@@ -400,8 +407,8 @@ def _build_coordination(state_dir: Path, agent_id: str) -> str:
                 lines.append(f'- {a.get("name", a.get("id", "?"))}{spec_str}{goal_str}')
             if agent_id:
                 lines.append(f'[You are {agent_id}]')
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('system_prompt_builder', 'agent list read failed; omitting active-agents section', error=e)
 
     # Pending boundary proposals
     try:
@@ -418,8 +425,8 @@ def _build_coordination(state_dir: Path, agent_id: str) -> str:
                 lines.append(f'- Boundary proposal from {proposer}: {reason}')
                 if scope:
                     lines.append(f'  Scope: {", ".join(scope[:5])}')
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('system_prompt_builder', 'pending boundary proposals read failed; omitted', error=e)
 
     return '\n'.join(lines) if lines else ''
 
@@ -520,8 +527,8 @@ def _build_context_files(project: str) -> str:
                         content = _scan_content(content, name)
                         content = _truncate_content(content)
                         sections.append(f'## {name}\n\n{content}')
-                except Exception:
-                    pass
+                except Exception as e:
+                    _diag('system_prompt_builder', 'context file unreadable; skipping', error=e, file=name)
 
         if current == root:
             break

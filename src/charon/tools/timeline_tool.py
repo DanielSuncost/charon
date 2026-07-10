@@ -18,6 +18,12 @@ from pathlib import Path
 
 from charon.tools import ToolContext, ToolResult
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 TIMELINE_TOOL_DEF = {
     'name': 'Timeline',
@@ -57,7 +63,8 @@ def _engine(state_dir: Path):
     try:
         from charon.memory.memory_engine import MemoryEngine
         return MemoryEngine(state_dir)
-    except Exception:
+    except Exception as e:
+        _diag('timeline_tool', 'memory engine unavailable; Timeline tool reports episodic memory missing', error=e)
         return None
 
 

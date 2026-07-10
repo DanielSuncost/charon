@@ -4,14 +4,20 @@ import re
 from pathlib import Path
 from typing import Any
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _read_text(path_str: str) -> str:
     try:
         p = Path(str(path_str or ''))
         if p.exists():
             return p.read_text(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('libris_convergence', 'critique text unreadable; convergence sees empty critique', error=e, path=path_str)
     return ''
 
 

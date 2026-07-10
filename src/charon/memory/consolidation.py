@@ -15,6 +15,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from charon.infra import config as env_config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -40,8 +46,8 @@ def load_config(state_dir: Path) -> dict:
             user_cfg = json.loads(cfg_path.read_text())
             if isinstance(user_cfg, dict):
                 config.update(user_cfg)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('consolidation', 'consolidation_config.json unreadable; using default config', error=e)
     # Also check env vars
     model_override = env_config.consolidation_model()
     if model_override:
@@ -101,8 +107,8 @@ def save_trace(state_dir: Path, trace: dict) -> None:
             ),
         )
         db.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('consolidation', 'failed to persist consolidation trace; scan not visible in dashboard', error=e)
 
 
 def list_traces(state_dir: Path, limit: int = 20) -> list[dict]:
@@ -122,7 +128,8 @@ def list_traces(state_dir: Path, limit: int = 20) -> list[dict]:
                 r['changes'] = []
         rows.reverse()
         return rows
-    except Exception:
+    except Exception as e:
+        _diag('consolidation', 'failed to read consolidation traces; dashboard shows none', error=e)
         return []
 
 
@@ -161,7 +168,8 @@ def _count_user_messages_since(state_dir: Path, since_ts: str) -> int:
             (since_ts,),
         )
         return row['cnt'] if row else 0
-    except Exception:
+    except Exception as e:
+        _diag('consolidation', 'user-message count query failed; consolidation trigger sees 0 messages', error=e)
         return 0
 
 
@@ -180,7 +188,8 @@ def should_run(state_dir: Path, config: dict) -> bool:
     if isinstance(meta, str):
         try:
             meta = json.loads(meta)
-        except Exception:
+        except Exception as e:
+            _diag('consolidation', 'user-model _meta unparseable; last-consolidation timestamp reset', error=e)
             meta = {}
     last_ts = meta.get('last_consolidated_at', '2000-01-01T00:00:00Z')
 
@@ -237,8 +246,8 @@ def _collect_recent_signals(state_dir: Path, since_ts: str, max_events: int = 12
                 if snippet:
                     signals.append(f'[agent] {snippet}')
 
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('consolidation', 'signal collection query failed; consolidation sees no signals', error=e)
 
     return ('\n'.join(signals) if signals else '', user_refs)
 
@@ -483,7 +492,8 @@ def run_consolidation(state_dir: Path, config: dict | None = None) -> dict:
         if isinstance(meta, str):
             try:
                 meta = json.loads(meta)
-            except Exception:
+            except Exception as exc:
+                _diag('consolidation', 'user-model _meta unparseable; last-consolidation timestamp reset', error=exc)
                 meta = {}
         last_ts = meta.get('last_consolidated_at', '2000-01-01T00:00:00Z')
 

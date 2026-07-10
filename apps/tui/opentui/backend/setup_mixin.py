@@ -9,6 +9,12 @@ from backend import common
 from charon.providers.provider_bridge import load_session_provider_config, save_session_provider_config
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 class SetupMixin:
     """The /setup command, onboarding repair, and auth-token discovery."""
@@ -521,8 +527,8 @@ class SetupMixin:
             tokens = provider_auth.get('tokens', {})
             if isinstance(tokens, dict) and str(tokens.get('access_token') or '').strip():
                 return dict(tokens)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('setup_mixin', 'auth store unreadable; stored OAuth tokens ignored', error=e, provider=provider_id)
         return {}
 
     def _is_jwt_expired(self, token: str, *, skew_seconds: int = 60) -> bool:
@@ -574,14 +580,14 @@ class SetupMixin:
                         with open(cred_path, 'w') as f:
                             json.dump(data, f)
                         os.chmod(cred_path, 0o600)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        _diag('setup_mixin', 'failed to write refreshed token back to Claude credentials file; token will be refreshed again next time', error=e)
                     return refreshed['access_token']
                 return None  # refresh failed
 
             return token
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('setup_mixin', 'Claude credentials file unreadable; existing token reuse skipped', error=e)
         return None
 
     def _refresh_anthropic_token(self, refresh_token: str) -> dict | None:
@@ -600,8 +606,8 @@ class SetupMixin:
             )
             if resp.status_code == 200:
                 return resp.json()
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('setup_mixin', 'anthropic OAuth token refresh request failed; expired token cannot be reused', error=e)
         return None
 
     def _save_onboarding(self, state: dict):
@@ -649,6 +655,7 @@ class SetupMixin:
                 else:
                     results.append(f'Agent already exists ({len(existing)} agents)')
             except Exception as e:
+                _diag('setup_mixin', 'default agent creation failed during setup completion', error=e)
                 results.append(f'Agent creation failed: {e}')
         else:
             results.append('No-provider mode — skipped agent creation')
@@ -663,6 +670,7 @@ class SetupMixin:
             else:
                 results.append('No other agent processes detected')
         except Exception as e:
+            _diag('setup_mixin', 'agent process detection failed during setup completion', error=e)
             results.append(f'Process detection failed: {e}')
 
         # 3. Sync to SQLite store
@@ -670,8 +678,8 @@ class SetupMixin:
             from charon.infra.store_adapter import get_db, onboarding_set as db_onboarding_set
             db = get_db(common.STATE_DIR)
             db_onboarding_set(db, onboarding)
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag('setup_mixin', 'onboarding sync to SQLite store failed; DB state may lag onboarding.json', error=exc)
 
         # 4. Emit setup complete event
         common.emit({

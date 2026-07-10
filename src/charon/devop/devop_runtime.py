@@ -8,6 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -32,7 +38,8 @@ def _read_json(path: Path, default: Any):
         return default
     try:
         return json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
+    except Exception as e:
+        _diag('devop_runtime', 'JSON read failed; using default', error=e, file=str(path))
         return default
 
 
@@ -62,7 +69,8 @@ def _iter_jsonl(path: Path) -> list[dict[str, Any]]:
                 continue
             if isinstance(row, dict):
                 rows.append(row)
-    except Exception:
+    except Exception as e:
+        _diag('devop_runtime', 'JSONL read failed; returning no rows', error=e, file=str(path))
         return []
     return rows
 

@@ -20,6 +20,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 @dataclass
 class ToolResult:
@@ -152,8 +158,8 @@ def _load_managed_processes(ctx: ToolContext) -> dict[str, Any]:
         data = json.loads(path.read_text())
         if isinstance(data, dict) and isinstance(data.get('processes'), dict):
             return data
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('tools', 'managed_processes.json unreadable/corrupt; managed-process registry loads as empty', error=e)
     return {'processes': {}}
 
 
@@ -172,7 +178,8 @@ def _is_pid_running(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    except Exception:
+    except Exception as e:
+        _diag('tools', 'pid liveness probe failed unexpectedly; process reported as not running', error=e, pid=pid)
         return False
 
 
@@ -191,7 +198,8 @@ def _signal_managed_pid(pid: int, sig: int = signal.SIGTERM) -> bool:
             else:
                 subprocess.run(['taskkill', '/T', '/PID', str(pid)], capture_output=True, text=True, timeout=5)
         return True
-    except Exception:
+    except Exception as e:
+        _diag('tools', 'signal send to managed process failed; stop/kill request had no effect', error=e, pid=pid)
         return False
 
 
@@ -211,8 +219,8 @@ def _refresh_managed_processes(ctx: ToolContext) -> dict[str, Any]:
                     entry['exit_code'] = int(m.group(1))
                     exit_code = entry['exit_code']
                     changed = True
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('tools', 'managed-process log tail read failed; exit code detection skipped for this process', error=e)
         if exit_code is not None:
             running = False
         if entry.get('status') == 'running' and not running:
@@ -624,8 +632,8 @@ def execute_bash(params: dict, ctx: ToolContext) -> ToolResult:
                 with chunks_lock:
                     store.append(chunk)
                 _emit_chunk('Bash', chunk)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('tools', 'bash output reader thread failed; command output may be lost or truncated', error=e, stream=label)
 
     try:
         popen = subprocess.Popen(
@@ -861,8 +869,8 @@ def execute_run_process(params: dict, ctx: ToolContext) -> ToolResult:
     def _watch_process() -> None:
         try:
             proc.wait()
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('tools', 'managed-process wait failed in watch thread; exit may go unnoticed', error=e, process_id=proc_id)
         try:
             data2 = _refresh_managed_processes(ctx)
             entry2 = (data2.get('processes') or {}).get(proc_id)
@@ -871,8 +879,8 @@ def execute_run_process(params: dict, ctx: ToolContext) -> ToolResult:
                 entry2['status'] = 'exited' if entry2.get('exit_code', 1) == 0 else 'failed'
                 entry2['exited_at'] = time.time()
                 _save_managed_processes(ctx, data2)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('tools', 'managed-process status update failed in watch thread; process may stay marked running', error=e, process_id=proc_id)
 
     threading.Thread(target=_watch_process, daemon=True).start()
 
@@ -1181,8 +1189,8 @@ def _check_scope(name: str, params: dict, ctx: ToolContext) -> str | None:
         target = ctx.project_root / target
     try:
         target = target.resolve()
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('tools', 'scope-check path resolution failed; scope/frozen enforcement uses unresolved path', error=e)
     target_str = str(target)
 
     def _within(entry: str) -> bool:

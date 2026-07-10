@@ -10,6 +10,12 @@ from pathlib import Path
 
 from charon.tools import ToolContext, ToolResult
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 # ── FTS5 index management ──────────────────────────────────────────
 
@@ -28,8 +34,8 @@ def _ensure_fts_table(state_dir: Path) -> None:
             )
         """)
         db.commit()
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('search_tool', 'FTS5 table creation failed; conversation search index unavailable', error=e)
 
 
 def rebuild_index(state_dir: Path) -> int:
@@ -88,7 +94,8 @@ def rebuild_index(state_dir: Path) -> int:
 
         db.commit()
         return count
-    except Exception:
+    except Exception as e:
+        _diag('search_tool', 'FTS index rebuild failed; reporting 0 messages indexed', error=e)
         return 0
 
 
@@ -113,8 +120,8 @@ def search_conversations(
         row = db.fetchone("SELECT COUNT(*) as cnt FROM conversation_fts")
         if row and row['cnt'] == 0:
             rebuild_index(state_dir)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('search_tool', 'FTS empty-index check failed; search may run against a missing/stale index', error=e)
 
     try:
         from charon.infra.store_adapter import get_db
@@ -155,7 +162,8 @@ def search_conversations(
         rows = db.fetchall(sql, tuple(params))
         return rows
 
-    except Exception:
+    except Exception as e:
+        _diag('search_tool', 'conversation FTS search failed; returning no results', error=e)
         return []
 
 

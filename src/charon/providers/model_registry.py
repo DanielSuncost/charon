@@ -16,6 +16,12 @@ import threading
 from pathlib import Path
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 DEFAULT_REGISTRY = {
     'shade_model_mode': 'auto',  # 'auto' (pick per task), 'same' (use main model), 'fixed'
@@ -68,8 +74,8 @@ def load_registry(state_dir: Path) -> dict:
                     reg['tiers'].update(user['tiers'])
                 if 'phase_tier_map' in user and isinstance(user['phase_tier_map'], dict):
                     reg['phase_tier_map'].update(user['phase_tier_map'])
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('model_registry', 'model_registry.json load failed; using defaults', error=e)
 
     # Env overrides
     env_mode = config.shade_model_mode()

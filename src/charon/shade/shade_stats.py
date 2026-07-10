@@ -9,6 +9,12 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -28,7 +34,8 @@ def _load_stats(state_dir: Path) -> dict:
             if isinstance(raw, str):
                 raw = json.loads(raw)
         return raw if isinstance(raw, dict) else {}
-    except Exception:
+    except Exception as e:
+        _diag('shade_stats', 'shade stats load failed; treating as empty', error=e)
         return {}
 
 
@@ -38,8 +45,8 @@ def _save_stats(state_dir: Path, stats: dict) -> None:
         from charon.infra.store_adapter import get_db, user_model_set
         db = get_db(state_dir)
         user_model_set(db, 'shade_stats', stats)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('shade_stats', 'shade stats save failed; usage not recorded', error=e)
 
 
 def record_shade_usage(

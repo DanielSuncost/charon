@@ -154,7 +154,8 @@ class HttpxCodexProvider:
             payload = json.loads(base64.urlsafe_b64decode(payload_b64))
             exp = int(payload.get('exp') or 0)
             return bool(exp and exp <= int(time.time()) + skew_seconds)
-        except Exception:
+        except Exception as e:
+            _diag('httpx_codex', 'JWT exp parse failed; assuming token not expiring, refresh skipped', error=e)
             return False
 
     def _save_token_data(self, token_data: dict[str, Any]) -> None:
@@ -181,8 +182,8 @@ class HttpxCodexProvider:
                 os.chmod(path, 0o600)
             except Exception:
                 pass
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('httpx_codex', 'failed to persist refreshed tokens to auth store', error=e)
 
     async def _refresh_access_token(self) -> bool:
         if not self._refresh_token:
@@ -230,8 +231,8 @@ class HttpxCodexProvider:
                 self._account_id = None
             if saved_refresh:
                 self._refresh_token = saved_refresh
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('httpx_codex', 'failed to re-read tokens from auth store', error=e)
 
     async def _ensure_fresh_token(self) -> bool:
         if not self._token_expires_soon():

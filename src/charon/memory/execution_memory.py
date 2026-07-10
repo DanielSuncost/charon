@@ -17,6 +17,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _execution_dir(state_dir: Path) -> Path:
     d = Path(state_dir) / 'execution'
@@ -49,7 +55,8 @@ def _event_id() -> str:
 def _safe_json(data: Any) -> str:
     try:
         return json.dumps(data, ensure_ascii=False, sort_keys=True)
-    except Exception:
+    except Exception as e:
+        _diag('execution_memory', 'params JSON serialization failed; falling back to repr', error=e)
         return repr(data)
 
 
@@ -231,8 +238,8 @@ def record_tool_event(
                 source_conv=session_id,
                 check_updates=False,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('execution_memory', 'semantic indexing of tool event failed; event only in JSONL log', error=e, tool=tool_name)
 
     return event
 
@@ -454,12 +461,12 @@ def create_task_episode(
                         actor=agent_id, container_tag=project_tag, ts=event_date,
                         importance=d["importance"], auto=True,
                     )
-            except Exception:
-                pass
-        except Exception:
-            pass
-    except Exception:
-        pass
+            except Exception as e:
+                _diag('execution_memory', 'auto decision extraction failed for task episode', error=e)
+        except Exception as e:
+            _diag('execution_memory', 'episode promotion failed; task episode not time-queryable', error=e)
+    except Exception as e:
+        _diag('execution_memory', 'semantic indexing of task episode failed; episode only in JSONL log', error=e)
     return record
 
 
@@ -497,5 +504,6 @@ def search_execution_memories(
                 'category': item.memory.category,
             })
         return out
-    except Exception:
+    except Exception as e:
+        _diag('execution_memory', 'execution memory search failed; returning no results', error=e)
         return []

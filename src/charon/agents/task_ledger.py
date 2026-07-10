@@ -14,6 +14,12 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _parse_ts(ts: str | None) -> float:
     """Parse an ISO timestamp to epoch seconds. Returns 0 on failure."""
@@ -22,7 +28,8 @@ def _parse_ts(ts: str | None) -> float:
     try:
         dt = datetime.fromisoformat(ts)
         return dt.timestamp()
-    except Exception:
+    except Exception as e:
+        _diag('task_ledger', 'unparseable ledger timestamp; entry sorts as epoch 0', error=e)
         return 0.0
 
 
@@ -33,7 +40,8 @@ def _fmt_ts(ts: str | None) -> str:
     try:
         dt = datetime.fromisoformat(ts)
         return dt.strftime('%b %d %H:%M')
-    except Exception:
+    except Exception as e:
+        _diag('task_ledger', 'unparseable ledger timestamp; showing raw prefix instead of formatted date', error=e)
         return ts[:16] if ts else ''
 
 
@@ -82,8 +90,8 @@ def get_agent_ledger(
                 'task_type': t.get('task_type', ''),
                 'source': 'task_queue',
             }
-    except Exception:
-        pass
+    except Exception as exc:
+        _diag('task_ledger', 'SQLite task-queue read failed; ledger misses task_queue entries', error=exc, agent_id=agent_id)
 
     # Source 2: Working memory notes (fills gaps when tasks aren't in SQLite yet)
     try:
@@ -109,8 +117,8 @@ def get_agent_ledger(
                     'task_type': 'memory_note',
                     'source': 'working_memory',
                 }
-    except Exception:
-        pass
+    except Exception as exc:
+        _diag('task_ledger', 'working-memory read failed; ledger misses memory-note entries', error=exc, agent_id=agent_id)
 
     # Also try JSON fallback for working memory
     if not entries:
@@ -135,8 +143,8 @@ def get_agent_ledger(
                             'task_type': 'memory_note',
                             'source': 'working_memory',
                         }
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag('task_ledger', 'working_memory.json fallback read failed; ledger stays empty', error=exc, agent_id=agent_id)
 
     # Sort by timestamp (newest first) and limit
     result = sorted(entries.values(), key=lambda e: _parse_ts(e.get('ts')), reverse=True)

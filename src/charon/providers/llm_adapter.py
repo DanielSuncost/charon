@@ -7,6 +7,12 @@ import urllib.request
 from pathlib import Path
 from charon.infra import config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 ROOT = Path(__file__).resolve().parents[3]
 STATE_DIR = ROOT / '.charon_state'
 DEFAULT_MODEL = 'qwen3.5-27b-uncensored-hauhaucs-aggressive'
@@ -20,7 +26,8 @@ def _load_onboarding() -> dict:
     try:
         data = json.loads(path.read_text())
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except Exception as e:
+        _diag('llm_adapter', 'onboarding.json unreadable; treating as empty', error=e)
         return {}
 
 
@@ -52,7 +59,8 @@ def _detect_model_from_user_state() -> str | None:
         return None
     try:
         data = json.loads(model_file.read_text())
-    except Exception:
+    except Exception as e:
+        _diag('llm_adapter', 'user_model.json unreadable; ignoring model preference', error=e)
         return None
     prefs = data.get('preferences', {}) or {}
     for key in ('local_model', 'default_model', 'model'):
@@ -83,8 +91,8 @@ def detect_model() -> str:
             lmstudio_models = ((providers.get('lmstudio', {}) or {}).get('models', {}) or {}) if isinstance(providers, dict) else {}
             if lmstudio_models:
                 return next(iter(lmstudio_models.keys()))
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('llm_adapter', 'opencode.json unreadable; using default model', error=e)
     return DEFAULT_MODEL
 
 def _strip_thinking(text: str) -> str:

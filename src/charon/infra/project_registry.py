@@ -6,6 +6,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 REGISTRY_VERSION = 1
 
@@ -38,7 +44,8 @@ def _read_json(path: Path, default: Any):
         return default
     try:
         return json.loads(path.read_text(encoding='utf-8'))
-    except Exception:
+    except Exception as e:
+        _diag('project_registry', 'unreadable project registry JSON; returning default (stored doc ignored)', error=e, path=str(path))
         return default
 
 

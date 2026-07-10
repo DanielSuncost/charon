@@ -21,6 +21,12 @@ from datetime import datetime, timezone
 
 from charon.providers import Message, ToolCall
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 # ── Schema ──────────────────────────────────────────────────────────
 
@@ -112,7 +118,8 @@ def _deserialize_tool_calls(raw: str | None) -> list[ToolCall]:
                      arguments=tc.get('arguments', {}))
             for tc in items
         ]
-    except Exception:
+    except Exception as e:
+        _diag('context_store', 'stored tool_calls failed to deserialize; returning none', error=e)
         return []
 
 

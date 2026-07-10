@@ -10,6 +10,12 @@ import os
 import time
 from pathlib import Path
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _live_dir(state_dir: Path) -> Path:
     d = state_dir / 'live_sessions'
@@ -36,8 +42,8 @@ def heartbeat(state_dir: Path, session_id: str) -> None:
             data = json.loads(path.read_text())
             data['last_heartbeat'] = time.time()
             path.write_text(json.dumps(data))
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('session_registry', 'heartbeat update failed; session may look stale to peers', error=e, session_id=session_id)
 
 
 def unregister_session(state_dir: Path, session_id: str) -> None:
@@ -45,8 +51,8 @@ def unregister_session(state_dir: Path, session_id: str) -> None:
     path = _live_dir(state_dir) / f'{session_id}.json'
     try:
         path.unlink(missing_ok=True)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('session_registry', 'session unregister failed; stale registration lingers', error=e, session_id=session_id)
 
 
 def list_live_sessions(state_dir: Path, max_age: float = 30.0) -> list[dict]:
@@ -92,7 +98,8 @@ def send_steer(state_dir: Path, target_session_id: str, message: str) -> bool:
                 'from_pid': os.getpid(),
             }) + '\n')
         return True
-    except Exception:
+    except Exception as e:
+        _diag('session_registry', 'steer message write failed; steer silently dropped', error=e, target_session_id=target_session_id)
         return False
 
 
@@ -105,5 +112,6 @@ def read_steers(state_dir: Path, session_id: str) -> list[dict]:
         lines = steer_file.read_text().splitlines()
         steer_file.unlink(missing_ok=True)
         return [json.loads(ln) for ln in lines if ln.strip()]
-    except Exception:
+    except Exception as e:
+        _diag('session_registry', 'steer file read/parse failed; pending steers dropped', error=e, session_id=session_id)
         return []

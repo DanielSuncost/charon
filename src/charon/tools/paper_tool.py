@@ -18,6 +18,12 @@ from urllib.parse import quote_plus
 
 from charon.tools import ToolContext, ToolResult
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 PAPER_TOOL_DEF = {
     'name': 'Paper',
@@ -98,12 +104,14 @@ def _search_arxiv(query: str, limit: int = 5) -> list[dict[str, Any]]:
             resp = client.get(url, headers={'User-Agent': 'Charon-Libris/0.1'})
             if resp.status_code != 200:
                 return []
-    except Exception:
+    except Exception as e:
+        _diag('paper_tool', 'arXiv API request failed; returning no arXiv results', error=e)
         return []
 
     try:
         root = ET.fromstring(resp.text)
-    except Exception:
+    except Exception as e:
+        _diag('paper_tool', 'arXiv XML response unparseable; returning no arXiv results', error=e)
         return []
 
     ns = {'a': 'http://www.w3.org/2005/Atom'}
@@ -149,7 +157,8 @@ def _search_semantic_scholar(query: str, limit: int = 5) -> list[dict[str, Any]]
             if resp.status_code != 200:
                 return []
             data = resp.json()
-    except Exception:
+    except Exception as e:
+        _diag('paper_tool', 'Semantic Scholar search failed; returning no results from that backend', error=e)
         return []
 
     out = []
@@ -186,7 +195,8 @@ def _search_openalex(query: str, limit: int = 5) -> list[dict[str, Any]]:
             if resp.status_code != 200:
                 return []
             data = resp.json()
-    except Exception:
+    except Exception as e:
+        _diag('paper_tool', 'OpenAlex search failed; returning no results from that backend', error=e)
         return []
 
     out = []

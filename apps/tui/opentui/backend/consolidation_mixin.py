@@ -3,6 +3,12 @@ from __future__ import annotations
 
 from backend import common
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 class ConsolidationMixin:
     """Memory-consolidation and agent-ledger request handlers."""
@@ -53,8 +59,8 @@ class ConsolidationMixin:
                     if a.get('role') == 'charon' and a.get('status') != 'stopped':
                         agent_id = a.get('id', '')
                         break
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('consolidation_mixin', 'default charon agent lookup failed; ledger request proceeds without agent id', error=e)
         try:
             from charon.agents.task_ledger import get_agent_ledger_summary
             result = get_agent_ledger_summary(common.STATE_DIR, agent_id)

@@ -30,6 +30,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 # ── Data types ──────────────────────────────────────────────────────
 
@@ -157,7 +163,8 @@ def _load_loops(state_dir: Path) -> list[dict]:
     try:
         data = json.loads(p.read_text())
         return data if isinstance(data, list) else []
-    except Exception:
+    except Exception as e:
+        _diag('judge_engine', 'judge_loops.json unreadable; no saved loops loaded', error=e)
         return []
 
 
@@ -779,8 +786,9 @@ def check_convergence(config: JudgeLoopConfig) -> Convergence | None:
                     best_score=config.best_score,
                     iterations_used=config.current_iteration,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('judge_engine', 'started_at unparseable; wall-time limit not enforced',
+                  error=e, started_at=config.started_at)
 
     # Target met
     if config.target_score is not None and config.best_score is not None:

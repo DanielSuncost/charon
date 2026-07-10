@@ -485,7 +485,9 @@ class MemoryEngine:
                 else:
                     rows = db.execute(
                         "SELECT DISTINCT memory_id FROM memory_keys WHERE key = ?", (tok,)).fetchall()
-            except Exception:
+            except Exception as e:
+                _diag('memory_engine', 'exact-key lookup failed; identifier routing skipped for this recall',
+                      error=e, key=tok)
                 return []
             df = len(rows)
             if df == 0 or df > MAX_EXACT_DF:
@@ -873,7 +875,9 @@ class MemoryEngine:
                 if mem:
                     results.append((row[0], row[1]))
             return results
-        except Exception:
+        except Exception as e:
+            _diag('memory_engine', 'FTS keyword search failed; recall degrades to vector-only',
+                  error=e)
             return []
 
     # ── Helpers ─────────────────────────────────────────────────────

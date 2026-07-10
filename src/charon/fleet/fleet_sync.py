@@ -9,6 +9,12 @@ import time
 
 from charon.fleet.fleet_registry import load_fleet
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 _fleet_cache: dict[str, dict] = {}
 _cache_lock = threading.Lock()
 _sync_thread: threading.Thread | None = None
@@ -110,8 +116,8 @@ def _poll_server(server: dict) -> dict:
                     'rows': sess.get('rows', 24),
                 }
 
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('fleet_sync', 'server poll raised; returning partial/empty session status', error=e)
 
     return result
 
@@ -135,8 +141,8 @@ def _auto_start_agents(server: dict, running_sessions: dict) -> None:
                  target, 'charons-boat', 'wrap', '--name', agent_name, '--', agent_type],
                 capture_output=True, timeout=SSH_TIMEOUT + 5,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('fleet_sync', 'auto-start of remote agent raised; agent stays down', error=e, agent_name=agent_name)
 
 
 def _poll_all() -> None:
@@ -155,7 +161,8 @@ def _poll_all() -> None:
                 'online': True,
                 'last_poll': time.time(),
             }
-        except Exception:
+        except Exception as e:
+            _diag('fleet_sync', 'poll/auto-start raised; server marked offline this cycle', error=e, server_id=server_id)
             new_cache[server_id] = {
                 'sessions': {},
                 'online': False,
@@ -171,8 +178,8 @@ def _sync_loop() -> None:
     while not _stop_event.is_set():
         try:
             _poll_all()
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('fleet_sync', 'fleet poll pass failed; status cache not updated this cycle', error=e)
         _stop_event.wait(POLL_INTERVAL)
 
 
@@ -225,7 +232,8 @@ def send_to_remote_agent(server_id: str, agent_name: str, message: str) -> bool:
             proc.stdin.close()
         proc.wait(timeout=5)
         return True
-    except Exception:
+    except Exception as e:
+        _diag('fleet_sync', 'send to remote agent failed; message silently dropped', error=e, server_id=server_id)
         return False
 
 
@@ -295,7 +303,7 @@ def get_remote_agent_history(server_id: str, agent_name: str, timeout: float = 5
                 proc.kill()
             except Exception:
                 pass
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('fleet_sync', 'remote history read raised; returning what was captured so far', error=e, server_id=server_id)
 
     return ''.join(output_chunks)

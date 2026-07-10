@@ -21,6 +21,12 @@ try:
 except ImportError:
     _HAS_STORE = False
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _use_store() -> bool:
     return _HAS_STORE and not config.no_sqlite()
@@ -52,7 +58,8 @@ def _read_json(path: Path, default):
     try:
         data = json.loads(path.read_text())
         return data
-    except Exception:
+    except Exception as e:
+        _diag('shade_orchestrator', 'JSON read failed; using default', error=e, file=str(path))
         return default
 
 
@@ -71,8 +78,8 @@ def load_contracts(state_dir: Path) -> list[dict]:
     if _use_store():
         try:
             return _db_contract_list(_get_db(state_dir))
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('shade_orchestrator', 'DB contract list failed; falling back to JSON', error=e)
     data = _read_json(_contracts_path(state_dir), [])
     return data if isinstance(data, list) else []
 
@@ -105,8 +112,8 @@ def append_phase_event(
             _db_shade_event_append(_get_db(state_dir), contract_id=contract_id,
                                    phase_id=phase_id, event_type=event_type,
                                    payload=payload)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('shade_orchestrator', 'DB shade event append failed; JSONL copy already written', error=e, contract=contract_id)
 
 
 def default_phase_plan(goal: str) -> list[dict]:
@@ -199,8 +206,8 @@ def create_contract(
             db = _get_db(state_dir)
             if not _db_contract_get(db, cid):
                 _db_contract_insert(db, dict(rec))
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('shade_orchestrator', 'DB contract insert failed; contract saved to JSON only', error=e, contract=cid)
     append_phase_event(state_dir, contract_id=cid, phase_id=rec.get('current_phase_id') or '-', event_type='contract_created', payload={'phase_count': len(phases)})
     return rec
 
@@ -211,8 +218,8 @@ def get_contract(state_dir: Path, contract_id: str) -> dict | None:
             rec = _db_contract_get(_get_db(state_dir), contract_id)
             if rec:
                 return rec
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('shade_orchestrator', 'DB contract get failed; falling back to JSON', error=e, contract=contract_id)
     for rec in load_contracts(state_dir):
         if rec.get('id') == contract_id:
             return rec
@@ -229,8 +236,8 @@ def _update_contract(state_dir: Path, contract: dict) -> dict:
             if _use_store():
                 try:
                     _db_contract_update(_get_db(state_dir), dict(contract))
-                except Exception:
-                    pass
+                except Exception as e:
+                    _diag('shade_orchestrator', 'DB contract update failed; JSON copy updated', error=e)
             return contract
     contracts.append(contract)
     save_contracts(state_dir, contracts)
@@ -239,8 +246,8 @@ def _update_contract(state_dir: Path, contract: dict) -> dict:
             db = _get_db(state_dir)
             if not _db_contract_get(db, contract.get('id', '')):
                 _db_contract_insert(db, dict(contract))
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('shade_orchestrator', 'DB contract insert failed; contract saved to JSON only', error=e)
     return contract
 
 

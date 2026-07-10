@@ -5,6 +5,12 @@ import json
 
 from backend import common
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 class HarvestMixin:
     """The /harvest_souls review/adopt workflow."""
@@ -66,8 +72,8 @@ class HarvestMixin:
         if adopted_file.exists():
             try:
                 adopted_count = len(json.loads(adopted_file.read_text()))
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('harvest_mixin', 'adopted.json unreadable; adopted count shown as 0', error=e)
 
         common.emit({'type': 'status', 'message': '', 'request_id': request_id})
         common.emit({'type': 'status', 'message': f'{len(findings)} abilities available | {adopted_count} already adopted', 'request_id': request_id})
@@ -86,7 +92,8 @@ class HarvestMixin:
             clusters = load_gap_review(common.STATE_DIR)
             clusters.sort(key=lambda c: (PRIORITY_ORDER.get(c.get('priority', 'low'), 3), -int(c.get('value', 0) or 0)))
             return clusters
-        except Exception:
+        except Exception as e:
+            _diag('harvest_mixin', 'capability gap review load failed; treated as no review found', error=e)
             return []
 
     def _harvest_souls_review(self, request_id: str | None):
@@ -129,8 +136,8 @@ class HarvestMixin:
         if adopted_file.exists():
             try:
                 adopted_count = len(json.loads(adopted_file.read_text()))
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('harvest_mixin', 'adopted_capabilities.json unreadable; adopted count shown as 0', error=e)
 
         common.emit({'type': 'status', 'message': '', 'request_id': request_id})
         common.emit({'type': 'status', 'message': f'{len(actionable)} actionable candidates | {adopted_count} capability clusters adopted', 'request_id': request_id})
@@ -213,8 +220,8 @@ class HarvestMixin:
         if adopted_file.exists():
             try:
                 adopted = json.loads(adopted_file.read_text())
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('harvest_mixin', 'adopted_capabilities.json unreadable; existing adoptions will be overwritten by this harvest', error=e)
         existing = {c.get('id') or c.get('capability') for c in adopted}
         new_adoptions = []
         for i in sorted(indices):
@@ -339,8 +346,8 @@ class HarvestMixin:
         if adopted_file.exists():
             try:
                 adopted = json.loads(adopted_file.read_text())
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('harvest_mixin', 'adopted.json unreadable; existing adoptions will be overwritten by this adopt', error=e)
         existing_names = {a['name'] for a in adopted}
 
         new_adoptions = []

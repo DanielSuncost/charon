@@ -15,6 +15,12 @@ from charon.automation.automation_runtime import (
 )
 from charon.tools import ToolContext
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 _scheduler_lock = threading.Lock()
 _scheduler_threads: dict[str, threading.Thread] = {}
@@ -260,8 +266,8 @@ def start_scheduler(state_dir: Path, *, poll_seconds: float = 5.0) -> bool:
     key = str(Path(state_dir).resolve())
     try:
         reconcile_stale_automation_runs(Path(state_dir))
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('automation_scheduler', 'stale automation run reconcile failed on startup', error=e)
     with _scheduler_lock:
         existing = _scheduler_threads.get(key)
         if existing and existing.is_alive():

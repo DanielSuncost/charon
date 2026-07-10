@@ -11,6 +11,12 @@ from pathlib import Path
 from backend import common
 from backend.textutils import _extract_meaningful_text, _last_visible_line, _normalize_visible_text
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _boat_registry_path(session_name: str) -> Path:
     name = str(session_name or '').strip()
@@ -43,15 +49,15 @@ def _terminate_boat_session(session_name: str) -> bool:
             time.sleep(0.2)
         except ProcessLookupError:
             killed = True
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('boat', 'SIGTERM to boat process failed; session may not terminate', error=e, pid=pid)
         try:
             os.kill(pid, 0)
             try:
                 os.kill(pid, 9)
                 killed = True
-            except Exception:
-                pass
+            except Exception as e:
+                _diag('boat', 'SIGKILL to boat process failed; session may not terminate', error=e, pid=pid)
         except Exception:
             pass
 
@@ -61,8 +67,8 @@ def _terminate_boat_session(session_name: str) -> bool:
             continue
         try:
             Path(candidate).unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('boat', 'failed to remove boat session file; stale socket/registry file left behind', error=e, file=candidate)
     return killed or reg_path.exists() or bool(socket_path)
 
 
@@ -80,7 +86,8 @@ def _boat_send_input(session_name: str, text: str) -> bool:
             }
             sock.sendall((json.dumps(payload) + '\n').encode('utf-8'))
         return True
-    except Exception:
+    except Exception as e:
+        _diag('boat', 'sending input to boat socket failed; send reported as failure', error=e, name=session_name)
         return False
 
 
@@ -232,7 +239,8 @@ def _wait_for_boat_ready(session_name: str, timeout: float = 30.0) -> bool:
                     line = reader.readline()
                 except socket.timeout:
                     continue
-                except Exception:
+                except Exception as e:
+                    _diag('boat', 'boat output stream read failed during readiness wait; ready-wait degrades to timeout', error=e, name=session_name)
                     break
                 if not line:
                     continue
@@ -254,5 +262,6 @@ def _wait_for_boat_ready(session_name: str, timeout: float = 30.0) -> bool:
                 if ('type a message' in norm) or ('❯' in observed[-4000:]) or ('hermes' in norm and len(norm) > 20):
                     return True
             return False
-    except Exception:
+    except Exception as e:
+        _diag('boat', 'boat socket connect failed during readiness wait; session treated as not ready', error=e, name=session_name)
         return False

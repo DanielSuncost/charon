@@ -15,6 +15,12 @@ from typing import Any
 
 from charon.tools import ToolContext, ToolResult
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 SOURCE_DISCOVERY_TOOL_DEF = {
     'name': 'SourceDiscovery',
@@ -76,7 +82,8 @@ def _github_repo_search(query: str, limit: int = 5) -> list[dict[str, Any]]:
             if resp.status_code != 200:
                 return []
             data = resp.json()
-    except Exception:
+    except Exception as e:
+        _diag('source_discovery_tool', 'GitHub repo search failed; returning no repo results', error=e)
         return []
 
     out = []
@@ -97,7 +104,8 @@ def _targeted_web_search(query: str, site_filters: list[str], limit: int = 5, so
         from charon.tools.web_tool import _search_ddg, _search_brave, _search_searxng
         from charon.infra import config
         import os
-    except Exception:
+    except Exception as e:
+        _diag('source_discovery_tool', 'web-search backend import failed; targeted web search returns no results', error=e)
         return []
 
     scoped_query = query

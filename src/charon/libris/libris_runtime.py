@@ -8,6 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -36,7 +42,8 @@ def _read_json(path: Path, default: Any):
     try:
         data = json.loads(path.read_text(encoding='utf-8'))
         return data
-    except Exception:
+    except Exception as e:
+        _diag('libris_runtime', 'state JSON unreadable or corrupt; using default', error=e)
         return default
 
 
@@ -66,7 +73,8 @@ def _iter_jsonl(path: Path) -> list[dict[str, Any]]:
                     rows.append(row)
             except Exception:
                 continue
-    except Exception:
+    except Exception as e:
+        _diag('libris_runtime', 'JSONL log unreadable; yielding no rows', error=e)
         return []
     return rows
 
@@ -206,7 +214,8 @@ def derive_project_id(project_root: Path) -> str:
     try:
         proj = _ensure_project_registry(state_dir, project_root, provisional=True)
         return str(proj.get('id') or '') or _slug(project_root.name or 'project', 'project', 48)
-    except Exception:
+    except Exception as e:
+        _diag('libris_runtime', 'project registry lookup failed; using hash-derived project id', error=e)
         base = _slug(project_root.name or 'project', 'project', 48)
         return f'{base}-{_short_hash(str(project_root.resolve()))}'
 
@@ -1615,8 +1624,8 @@ def _safe_read_text(path_str: str) -> str:
         p = Path(str(path_str or ''))
         if p.exists():
             return p.read_text(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('libris_runtime', 'report text unreadable; treating as empty', error=e, path=path_str)
     return ''
 
 
@@ -1943,11 +1952,13 @@ def get_libris_swarm_state(state_dir: Path, project_root: Path, operation_id: st
     delivery_bundle_path = delivery_dir / 'delivery-bundle.json'
     try:
         final_selection = final_selection_path.read_text(encoding='utf-8') if final_selection_path.exists() else ''
-    except Exception:
+    except Exception as e:
+        _diag('libris_runtime', 'final-selection.md exists but unreadable; omitted from swarm state', error=e)
         final_selection = ''
     try:
         executive_summary = executive_summary_path.read_text(encoding='utf-8') if executive_summary_path.exists() else ''
-    except Exception:
+    except Exception as e:
+        _diag('libris_runtime', 'executive-summary.md exists but unreadable; omitted from swarm state', error=e)
         executive_summary = ''
     delivery_bundle = _read_json(delivery_bundle_path, {}) if delivery_bundle_path.exists() else {}
     edges = []

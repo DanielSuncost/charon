@@ -86,6 +86,12 @@ from charon.infra.store import (
     run_log_tail,
 )
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Singleton DB registry — one DB per state_dir path
@@ -115,8 +121,8 @@ def get_db(state_dir: Path | str) -> DB:
             _migrated.add(key)
             try:
                 migrate_from_json(db, Path(key))
-            except Exception:
-                pass  # Migration is best-effort
+            except Exception as e:
+                _diag('store_adapter', 'JSON→DB migration failed on first open; legacy JSON state not imported', error=e)  # Migration is best-effort
         return db
 
 

@@ -15,6 +15,12 @@ from typing import Any
 
 from charon.tools import ToolContext, ToolResult
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 CRON_TOOL_DEF = {
     'name': 'Cron',
@@ -141,8 +147,8 @@ def _load_jobs(state_dir: Path) -> dict[str, Any]:
         data = json.loads(path.read_text(encoding='utf-8'))
         if isinstance(data, dict) and isinstance(data.get('jobs'), dict):
             return data
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('cron_tool', 'cron_jobs.json unreadable/corrupt; resetting to empty job store', error=e)
     return {'jobs': {}}
 
 

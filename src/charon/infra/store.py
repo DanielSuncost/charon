@@ -23,6 +23,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Database lifecycle
@@ -278,7 +284,8 @@ def _json_loads(text: str | None, default: Any = None) -> Any:
         return default
     try:
         return json.loads(text)
-    except Exception:
+    except Exception as e:
+        _diag('store', 'corrupt JSON column in DB row; value silently replaced by default', error=e)
         return default
 
 
@@ -1056,8 +1063,8 @@ def migrate_from_json(db: DB, state_dir: Path) -> dict:
                 if not agent_get(db, a.get('id', '')):
                     agent_insert(db, a)
             summary['agents'] = len(agents)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('store', 'agents.json migration to SQLite failed; legacy agents not imported', error=e)
 
     # -- queue.json
     queue_file = state_dir / 'queue.json'
@@ -1068,8 +1075,8 @@ def migrate_from_json(db: DB, state_dir: Path) -> dict:
                 if not task_get(db, t.get('id', '')):
                     task_insert(db, t)
             summary['tasks'] = len(tasks)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('store', 'queue.json migration to SQLite failed; legacy tasks not imported', error=e)
 
     # -- interventions.jsonl (events / intervention graph)
     interventions_file = state_dir / 'interventions.jsonl'
@@ -1097,8 +1104,8 @@ def migrate_from_json(db: DB, state_dir: Path) -> dict:
                 if not contract_get(db, c.get('id', '')):
                     contract_insert(db, c)
             summary['contracts'] = len(contracts)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('store', 'shade_contracts.json migration to SQLite failed; legacy contracts not imported', error=e)
 
     # -- shade_phase_events.jsonl
     spe_file = state_dir / 'shade_phase_events.jsonl'
@@ -1131,8 +1138,8 @@ def migrate_from_json(db: DB, state_dir: Path) -> dict:
                 if not boundary_get(db, b.get('id', '')):
                     boundary_insert(db, b)
             summary['boundaries'] = len(boundaries)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('store', 'boundaries.json migration to SQLite failed; legacy boundaries not imported', error=e)
 
     # -- onboarding.json
     onboarding_file = state_dir / 'onboarding.json'
@@ -1142,8 +1149,8 @@ def migrate_from_json(db: DB, state_dir: Path) -> dict:
             if isinstance(doc, dict):
                 onboarding_set(db, doc)
                 summary['onboarding'] = 1
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('store', 'onboarding.json migration to SQLite failed; legacy onboarding state not imported', error=e)
 
     # -- user_model.json
     um_file = state_dir / 'user_model.json'
@@ -1155,7 +1162,7 @@ def migrate_from_json(db: DB, state_dir: Path) -> dict:
                     if k != 'updated_at':
                         user_model_set(db, k, v)
                 summary['user_model_keys'] = len(model)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('store', 'user_model.json migration to SQLite failed; legacy user model not imported', error=e)
 
     return summary

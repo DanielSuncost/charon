@@ -23,6 +23,12 @@ sys.path.insert(0, str(ROOT / 'src'))
 
 STATE_DIR = ROOT / '.charon_state'
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 _emit_lock = threading.Lock()
 
@@ -39,5 +45,6 @@ def _load_json(path: Path, default):
         return default
     try:
         return json.loads(path.read_text())
-    except Exception:
+    except Exception as e:
+        _diag('common', 'state JSON file unreadable; using default value', error=e, file=path.name)
         return default

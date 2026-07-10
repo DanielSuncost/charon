@@ -17,6 +17,12 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -37,7 +43,8 @@ def _load_batches(state_dir: Path) -> list[dict]:
     try:
         data = json.loads(p.read_text())
         return data if isinstance(data, list) else []
-    except Exception:
+    except Exception as e:
+        _diag('batch_orchestrator', 'shade_batches.json unreadable; treating as no batches', error=e)
         return []
 
 
@@ -277,8 +284,8 @@ def run_batch_worker(
                 if task.get('status') == 'pending':
                     mark_batch_task_failed(state_dir, batch_id, task['id'], f"Worker provider unavailable: {provider_status.get('reason') or 'no_provider'}")
             return
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('batch_orchestrator', 'worker provider precheck failed; proceeding with batch', error=e, batch=batch_id)
 
     def _run_single_task(batch_task: dict):
         """Execute one batch task in its own thread."""
@@ -392,8 +399,8 @@ def run_batch_worker(
                     input_tokens=total_input_tokens,
                     output_tokens=total_output_tokens,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                _diag('batch_orchestrator', 'failed to record shade token usage', error=exc)
 
             response = ''.join(text_parts).strip()
             summary = summarize_fast(
@@ -442,7 +449,8 @@ def run_batch_worker(
             else:
                 # Local provider as main
                 stagger_seconds = 0.5
-    except Exception:
+    except Exception as e:
+        _diag('batch_orchestrator', 'concurrency heuristics failed; using default stagger', error=e, batch=batch_id)
         stagger_seconds = 2
 
     tasks_to_run = get_next_batch_tasks(state_dir, batch_id, count=max_conc)

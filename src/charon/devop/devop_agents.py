@@ -6,6 +6,12 @@ import threading
 from pathlib import Path
 from typing import Any
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _role_prompt(role: str, operation_id: str, workstream_slug: str = '', user_goal: str = '') -> str:
     base = [
@@ -250,8 +256,8 @@ def start_autonomous_software_operation(
         doc = json.loads(op_path.read_text())
         doc['coordinator_agent_id'] = coordinator.get('id', '')
         op_path.write_text(json.dumps(doc, indent=2))
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('devop_agents', 'failed to record coordinator id in operation.json', error=e)
     append_operation_event(
         state_dir,
         op['operation_id'],
@@ -352,8 +358,8 @@ def _run_operation_controller(
             from charon.devop.devop_runtime import append_operation_event, set_operation_status
             append_operation_event(state_dir, operation_id, 'operation_controller_failed', summary=str(e), payload={'error': str(e)})
             set_operation_status(state_dir, operation_id, 'failed', str(e))
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag('devop_agents', 'failed to record operation-controller failure; operation failed silently', error=exc, operation=operation_id)
 
 
 def _run_devop_role(
@@ -410,8 +416,8 @@ def _run_devop_role(
                 summary=str(e),
                 payload={'error': str(e)},
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            _diag('devop_agents', 'failed to record devop role failure; role failed silently', error=exc, operation=operation_id)
 
 
 __all__ = [

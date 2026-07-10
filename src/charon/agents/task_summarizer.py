@@ -16,6 +16,12 @@ from __future__ import annotations
 from typing import Any
 import re
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def summarize_instruction_fast(instruction: str) -> str:
     """Fast short task label from the user instruction.
@@ -85,7 +91,8 @@ async def summarize_instruction_rich(*, instruction: str, provider: Any, model: 
         ):
             if hasattr(delta, 'type') and delta.type == 'text':
                 text_parts.append(delta.text)
-    except Exception:
+    except Exception as e:
+        _diag('task_summarizer', 'LLM instruction-label call failed; using fast heuristic label', error=e)
         return summarize_instruction_fast(instruction)
 
     result = ''.join(text_parts).strip().strip('"\'')
@@ -283,7 +290,8 @@ async def summarize_rich(
         ):
             if hasattr(delta, 'type') and delta.type == 'text':
                 text_parts.append(delta.text)
-    except Exception:
+    except Exception as exc:
+        _diag('task_summarizer', 'LLM rich-summary call failed; using fast template summary', error=exc)
         return summarize_fast(
             instruction=instruction, tool_calls=tool_calls,
             response_text=response_text, errors=errors, total_turns=total_turns,

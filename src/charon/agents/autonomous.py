@@ -20,6 +20,12 @@ from pathlib import Path
 from typing import Any
 from charon.infra import config as env_config
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -51,8 +57,8 @@ def load_autonomous_config(state_dir: Path) -> dict:
             user_cfg = json.loads(cfg_path.read_text())
             if isinstance(user_cfg, dict):
                 config.update(user_cfg)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('autonomous', 'autonomous_config.json unreadable; using default autonomous config', error=e)
     # Env overrides
     env_override = env_config.autonomous_override()
     if env_override is not None:
@@ -153,8 +159,8 @@ def propose_goal(
             db = _get_db(state_dir)
             _db_project_upsert(db, project_id, proj)
             _db_session_upsert(db, session_id, project_id, ses)
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('autonomous', 'proposed-goal mirror to SQLite failed; store diverges from JSON', error=e, project_id=project_id)
 
     return goal
 
@@ -435,7 +441,8 @@ async def infer_goals_from_conversation(
         ):
             if hasattr(delta, 'type') and delta.type == 'text':
                 text_parts.append(delta.text)
-    except Exception:
+    except Exception as e:
+        _diag('autonomous', 'goal-inference LLM call failed; no goals inferred this cycle', error=e, agent_id=agent_id)
         return []
 
     response = ''.join(text_parts).strip()
@@ -450,8 +457,8 @@ async def infer_goals_from_conversation(
         data = json.loads(response)
         if isinstance(data, dict) and 'goals' in data:
             return data['goals']
-    except Exception:
-        pass
+    except Exception as e:
+        _diag('autonomous', 'goal-inference LLM output not valid JSON; no goals inferred this cycle', error=e, agent_id=agent_id)
 
     return []
 
@@ -484,8 +491,8 @@ def _update_goal_status(state_dir: Path, *, project: str, goal_id: str,
             from charon.agents.goal_runtime import _use_store, _get_db, _db_project_upsert
             if _use_store():
                 _db_project_upsert(_get_db(state_dir), project_id, proj)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('autonomous', 'goal-status mirror to SQLite failed; store diverges from JSON', error=e, goal_id=goal_id)
 
     return found
 
@@ -514,7 +521,7 @@ def _update_goal_field(state_dir: Path, *, project: str, goal_id: str,
             from charon.agents.goal_runtime import _use_store, _get_db, _db_project_upsert
             if _use_store():
                 _db_project_upsert(_get_db(state_dir), project_id, proj)
-        except Exception:
-            pass
+        except Exception as e:
+            _diag('autonomous', 'goal-field mirror to SQLite failed; store diverges from JSON', error=e, goal_id=goal_id)
 
     return found

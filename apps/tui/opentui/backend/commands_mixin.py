@@ -14,6 +14,12 @@ from backend.nlparse import _parse_interval_phrase
 from backend.settings_io import _full_messages_from_store, _load_project_registry, _load_ui_settings, _project_slug, _save_project_registry, _save_ui_settings
 from backend.textutils import _sanitize_saved_messages
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
 
 class CommandsMixin:
     """Slash-command catalog, suggestions, and the /command router."""
@@ -717,8 +723,8 @@ class CommandsMixin:
                         try:
                             from charon.fleet.fleet_sync import start_fleet_sync
                             start_fleet_sync()
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            _diag('commands_mixin', 'fleet sync auto-start failed after remote onboard', error=exc)
                         common.emit({'type': 'status', 'message': (
                             f'Added server "{server["id"]}" ({server["host"]}) with '
                             f'{len(server.get("agents", []))} agent(s) to fleet.\n'
@@ -1326,8 +1332,8 @@ class CommandsMixin:
                                 if row and row['content']:
                                     first_line = row['content'].strip().split('\n')[0]
                                     info['preview'] = first_line[:60] + ('…' if len(first_line) > 60 else '')
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            _diag('commands_mixin', 'sqlite conversation preload failed; resume picker falls back to jsonl previews', error=exc)
 
                         items = []
                         for c in sorted(convos, key=lambda x: x.get('last_timestamp', 0), reverse=True):
@@ -1417,8 +1423,8 @@ class CommandsMixin:
                     settings = _load_ui_settings()
                     settings['visible_thoughts'] = self.visible_thoughts
                     _save_ui_settings(settings)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _diag('commands_mixin', 'ui settings save failed; visible-thoughts toggle not persisted', error=exc)
                 common.emit({
                     'type': 'toggle_visible_thoughts',
                     'enabled': self.visible_thoughts,
@@ -1501,8 +1507,8 @@ class CommandsMixin:
                         reg = load_registry(common.STATE_DIR)
                         shade_model = reg.get('shade_model') or '(same as main)'
                         lines.append(f'Shade model: {shade_model}')
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _diag('commands_mixin', 'model registry unreadable; shade model omitted from /models output', error=exc)
 
                     if lines:
                         common.emit({'type': 'status', 'message': '\n'.join(lines), 'request_id': request_id})
@@ -1539,7 +1545,8 @@ class CommandsMixin:
                         lines.append(f'Shade provider: {shade_provider}')
                         lines.append(f'Shade URL: {shade_url}')
                         lines.append('Shade model is also used for lightweight orchestration/NL parsing fallback.')
-                    except Exception:
+                    except Exception as exc:
+                        _diag('commands_mixin', 'model registry unreadable; /settings shows shade model as not configured', error=exc)
                         lines.append('Shade model: (not configured)')
                     lines.append('')
 
@@ -1551,7 +1558,8 @@ class CommandsMixin:
                         tb = auto.get('time_budget_minutes')
                         lines.append(f'Time budget: {tb} min' if tb else 'Time budget: unlimited')
                         lines.append(f'Git checkpoints: {"on" if auto.get("git_checkpoint") else "off"}')
-                    except Exception:
+                    except Exception as exc:
+                        _diag('commands_mixin', 'autonomous config unreadable; /settings assumes autonomous mode OFF', error=exc)
                         lines.append('Autonomous mode: OFF')
                     lines.append('')
 
@@ -1562,7 +1570,8 @@ class CommandsMixin:
                         lines.append(f'Consolidation: {"on" if con.get("enabled") else "off"}')
                         lines.append(f'Consolidation model: {con.get("model_tier", "fast")}')
                         lines.append(f'Consolidation interval: {con.get("scan_interval_heartbeats", 50)} heartbeats')
-                    except Exception:
+                    except Exception as exc:
+                        _diag('commands_mixin', 'consolidation config unreadable; /settings shows defaults', error=exc)
                         lines.append('Consolidation: on (default)')
                     lines.append('')
 
@@ -1575,7 +1584,8 @@ class CommandsMixin:
                         lines.append(f'Approval: {"DISABLED" if skip else "enabled"}')
                         if approved:
                             lines.append(f'Session approved: {", ".join(approved[:5])}')
-                    except Exception:
+                    except Exception as exc:
+                        _diag('commands_mixin', 'approval status unreadable; /settings assumes approval enabled', error=exc)
                         lines.append('Approval: enabled')
                     lines.append('')
 
@@ -1586,8 +1596,8 @@ class CommandsMixin:
                         lines.append(f'Agents: {len(agents)}')
                         for a in agents[:5]:
                             lines.append(f'  {a.get("name", a.get("id", "?"))} ({a.get("id")}) — {a.get("status", "?")}')
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _diag('commands_mixin', 'agent listing failed; /settings omits agents section', error=exc)
                     lines.append('')
 
                     # Tools
@@ -1599,8 +1609,8 @@ class CommandsMixin:
                         dynamic = list_dynamic_tools()
                         if dynamic:
                             lines.append(f'Dynamic tools ({len(dynamic)}): {", ".join(t["name"] for t in dynamic)}')
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        _diag('commands_mixin', 'dynamic tool listing failed; /settings omits dynamic tools', error=exc)
 
                     common.emit({'type': 'status', 'message': '\n'.join(lines), 'request_id': request_id})
                 except Exception as e:
@@ -1786,8 +1796,8 @@ class CommandsMixin:
                         lines.append('\nLoad errors:')
                         for e in errors:
                             lines.append(f'  {e["path"]}: {e["error"]}')
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _diag('commands_mixin', 'dynamic tool listing failed; /tools shows built-ins only', error=exc)
                 common.emit({'type': 'status', 'message': '\n'.join(lines), 'request_id': request_id})
                 return
             if command == '/tools reload':
@@ -2107,8 +2117,8 @@ class CommandsMixin:
                             try:
                                 adopted = json.loads(adopted_file.read_text())
                                 common.emit({'type': 'status', 'message': f'Adopted: {len(adopted)} abilities', 'request_id': request_id})
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                _diag('commands_mixin', 'adopted.json unreadable; harvest status omits adopted count', error=exc)
                     return
 
                 # /harvest_souls list — show numbered findings from last scan
