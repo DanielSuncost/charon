@@ -224,7 +224,7 @@ def _ingest_result(voyage: dict, result_msg: dict, state_dir: Path) -> None:
         from charon.fleet.fleet_memory import _update_working_memory
         summary = result.get("stdout", "")[:2000]
         if summary:
-            _update_working_memory(state_dir, server_id, agent_name, summary)
+            _update_working_memory(server_id, agent_name, summary)
     except Exception as e:
         _diag('harbor', 'working-memory update after voyage failed; remote agent activity not recorded', error=e, server_id=server_id)
 

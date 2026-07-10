@@ -2100,7 +2100,7 @@ class CommandsMixin:
 
             # /harvest_souls — scan sibling agent repos and interactively adopt abilities
             if command == '/harvest_souls' or command.startswith('/harvest_souls '):
-                rest = command[16:].strip() if command.startswith('/harvest_souls ') else ''
+                rest = command[len('/harvest_souls '):].strip() if command.startswith('/harvest_souls ') else ''
 
                 if rest == 'status':
                     from charon.memory.assimilation import load_last_scan

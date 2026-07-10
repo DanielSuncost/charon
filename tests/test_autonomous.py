@@ -206,3 +206,42 @@ def test_get_proposed_goals(tmp_path):
 
     proposed = get_proposed_goals(state_dir, project='/tmp/p')
     assert len(proposed) == 2
+
+
+# ── Loop integration ────────────────────────────────────────────────
+
+def test_run_loop_processes_self_assigned_task_when_queue_empty(tmp_path, monkeypatch):
+    # Regression: with an empty pending queue and a successful autonomous
+    # self-assignment, run_loop fell through to `task = pending[0]` and
+    # raised IndexError on the exact cycle autonomy succeeded.
+    import json
+    from charon import charon_loop
+    from charon.fleet import fleet_memory, fleet_sync
+
+    state_dir = tmp_path / 'state'
+    state_dir.mkdir()
+    (state_dir / 'queue.json').write_text('[]')  # empty queue (no bootstrap)
+    (state_dir / 'agents.json').write_text(json.dumps([
+        {'id': 'AG-001', 'role': 'charon', 'status': 'running', 'project': '/tmp/proj'},
+    ]))
+    save_autonomous_config(state_dir, {'enabled': True})
+    goal = propose_goal(state_dir, agent_id='AG-001', project='/tmp/proj', title='Autonomous goal')
+    confirm_goal(state_dir, project='/tmp/proj', goal_id=goal['goal_id'])
+
+    processed = []
+
+    def fake_process_task(task, state_dir, queue, trace_file=None):
+        processed.append(task)
+        return True, {'status': 'done'}
+
+    monkeypatch.setattr(charon_loop, 'process_task', fake_process_task)
+    monkeypatch.setattr(fleet_sync, 'start_fleet_sync', lambda: None)
+    monkeypatch.setattr(fleet_memory, 'start_fleet_memory', lambda: None)
+
+    charon_loop.run_loop(state_dir, stop_file=state_dir / 'STOP',
+                         max_consecutive_failures=3, sleep_sec=0.01, max_cycles=1)
+
+    assert len(processed) == 1
+    queue = json.loads((state_dir / 'queue.json').read_text())
+    assert queue
+    assert queue[0]['status'] == 'completed'
