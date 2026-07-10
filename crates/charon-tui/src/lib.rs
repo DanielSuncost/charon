@@ -13,3 +13,4 @@ pub mod parser;
 pub mod protocol;
 pub mod session;
 pub mod terminal;
+pub mod util;

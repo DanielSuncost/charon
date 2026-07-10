@@ -78,12 +78,12 @@ struct MascotConfig {
 
 fn mascot_sprite() -> &'static MascotSprite {
     static SPRITE: OnceLock<MascotSprite> = OnceLock::new();
-    SPRITE.get_or_init(|| serde_json::from_str(include_str!("../../../assets/lantern_wraith_terminal_sprite_v2.json")).expect("valid mascot sprite"))
+    SPRITE.get_or_init(|| serde_json::from_str(include_str!("../../../../assets/lantern_wraith_terminal_sprite_v2.json")).expect("valid mascot sprite"))
 }
 
 fn mascot_config() -> &'static MascotConfig {
     static CONFIG: OnceLock<MascotConfig> = OnceLock::new();
-    CONFIG.get_or_init(|| serde_json::from_str(include_str!("../../../assets/mascot_config.json")).expect("valid mascot config"))
+    CONFIG.get_or_init(|| serde_json::from_str(include_str!("../../../../assets/mascot_config.json")).expect("valid mascot config"))
 }
 
 pub(crate) fn animation_clock_start() -> Instant {
@@ -293,7 +293,7 @@ fn nonselectable_line(fg: style::Color, bg: Option<style::Color>, text: impl Int
 }
 
 fn brand_lines(width: usize, variant: ChatLayoutVariant) -> Vec<ChatRenderLine> {
-    let mid_title = include_str!("../../../assets/title_ascii_mid.txt");
+    let mid_title = include_str!("../../../../assets/title_ascii_mid.txt");
     let cfg = mascot_config();
     let title_fg = cfg.tiny_title.as_ref().map(|t| t.fg).unwrap_or([176, 146, 62]);
     let title_color = style::Color::Rgb { r: title_fg[0], g: title_fg[1], b: title_fg[2] };
