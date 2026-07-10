@@ -6,7 +6,6 @@ if __package__ in (None, ''):  # launched by file path: make `charon.*` importab
 
 import argparse
 import json
-import os
 import time
 import uuid
 from datetime import datetime, timezone
@@ -21,6 +20,7 @@ from charon.agents import boundary_runtime as BOUNDARY_RUNTIME
 from charon.shade import shade_orchestrator as SHADE_ORCH
 from charon.agents import agent_policy as AGENT_POLICY
 from charon.agents import goal_runtime as GOAL_RUNTIME
+from charon.infra import config
 
 # SQLite store adapter (optional)
 try:
@@ -40,15 +40,15 @@ except ImportError:
 
 
 def _use_store() -> bool:
-    return _HAS_STORE and os.environ.get('CHARON_NO_SQLITE', '0') != '1'
+    return _HAS_STORE and not config.no_sqlite()
 
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-STDOUT_EVENTS = os.environ.get('CHARON_STDOUT_EVENTS', '1') == '1'
-DEBUG_TRACE_ENABLED = os.environ.get('CHARON_DEBUG_TRACE', '0') == '1'
+STDOUT_EVENTS = config.stdout_events()
+DEBUG_TRACE_ENABLED = config.debug_trace()
 
 
 def log_event(log_file: Path, event: str, **data):
@@ -511,7 +511,7 @@ def _tick_shade_contract(task: dict, state_dir: Path, queue: list[dict], *, pare
     contract_id = orchestration.get('contract_id')
 
     if not contract_id:
-        require_tmux = os.environ.get('CHARON_SHADE_REQUIRE_TMUX', '0') == '1'
+        require_tmux = config.shade_require_tmux()
         shade = AGENT_LIFECYCLE.create_agent(
             name='',
             mode='temp',
@@ -899,13 +899,13 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
     except Exception:
         pass
 
-    stale_in_progress_sec = int(os.environ.get('CHARON_STALE_IN_PROGRESS_SEC', '60'))
+    stale_in_progress_sec = config.stale_in_progress_sec()
 
     consec_fail = 0
     cycles = 0
     loop_start_time = time.time()
     last_heartbeat_cycle = 0
-    heartbeat_interval = int(os.environ.get('CHARON_HEARTBEAT_INTERVAL', '30'))  # cycles between heartbeats
+    heartbeat_interval = config.heartbeat_interval()  # cycles between heartbeats
     log_event(log_file, 'loop_start', state_dir=str(state_dir), stop_file=str(stop_file), debug_trace=bool(debug_trace))
     trace_event(trace_file, 'loop_start_trace', state_dir=str(state_dir), stop_file=str(stop_file))
 
@@ -1149,11 +1149,12 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
 
 def parse_args():
     p = argparse.ArgumentParser(description='Charon F00 persistent loop runner')
-    p.add_argument('--state-dir', default=os.environ.get('CHARON_STATE_DIR', './.charon_state'))
-    p.add_argument('--stop-file', default=os.environ.get('CHARON_STOP_FILE', './CHARON_STOP'))
-    p.add_argument('--max-consecutive-failures', type=int, default=int(os.environ.get('CHARON_MAX_CONSEC_FAIL', '5')))
-    p.add_argument('--sleep-sec', type=float, default=float(os.environ.get('CHARON_LOOP_SLEEP', '2.0')))
-    p.add_argument('--max-cycles', type=int, default=int(os.environ.get('CHARON_MAX_CYCLES', '0')),
+    env_state_dir = config.state_dir()
+    p.add_argument('--state-dir', default=str(env_state_dir) if env_state_dir else './.charon_state')
+    p.add_argument('--stop-file', default=config.stop_file())
+    p.add_argument('--max-consecutive-failures', type=int, default=config.max_consec_fail())
+    p.add_argument('--sleep-sec', type=float, default=config.loop_sleep())
+    p.add_argument('--max-cycles', type=int, default=config.max_cycles(),
                    help='0 means run indefinitely')
     p.add_argument('--debug-trace', action='store_true', default=DEBUG_TRACE_ENABLED,
                    help='Write high-volume JSONL trace to <state-dir>/debug.log')

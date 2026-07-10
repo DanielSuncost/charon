@@ -13,12 +13,12 @@ When disabled: standard reactive mode, agent only works on queued tasks.
 from __future__ import annotations
 
 import json
-import os
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from charon.infra import config as env_config
 
 
 def _now() -> str:
@@ -54,10 +54,9 @@ def load_autonomous_config(state_dir: Path) -> dict:
     except Exception:
         pass
     # Env overrides
-    if os.environ.get('CHARON_AUTONOMOUS', '').lower() in ('1', 'true', 'on'):
-        config['enabled'] = True
-    if os.environ.get('CHARON_AUTONOMOUS', '').lower() in ('0', 'false', 'off'):
-        config['enabled'] = False
+    env_override = env_config.autonomous_override()
+    if env_override is not None:
+        config['enabled'] = env_override
     return config
 
 

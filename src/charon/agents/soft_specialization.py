@@ -15,25 +15,25 @@ The label is written to agent.specialization and shows up in:
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
+from charon.infra import config
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
 # How many recent task summaries to consider
-_WINDOW_SIZE = int(os.environ.get('CHARON_SPEC_WINDOW', '10'))
+_WINDOW_SIZE = config.spec_window()
 
 # Minimum tasks before generating a label (avoid noise from 1-2 tasks)
-_MIN_TASKS = int(os.environ.get('CHARON_SPEC_MIN_TASKS', '3'))
+_MIN_TASKS = config.spec_min_tasks()
 
 # How often to re-derive (seconds). Checked in the loop.
-REFRESH_INTERVAL_SEC = int(os.environ.get('CHARON_SPEC_INTERVAL', '300'))
+REFRESH_INTERVAL_SEC = config.spec_interval()
 
 # Staleness: if no new tasks in this many seconds, keep current label
 _STALE_THRESHOLD_SEC = 3600

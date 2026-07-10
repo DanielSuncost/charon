@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Protocol
+from charon.infra import config
 
 
 @dataclass
@@ -123,8 +124,8 @@ def get_provider(provider_name: str) -> Provider:
             )
 
     if name in ('local', 'lmstudio', 'ollama'):
-        base_url = os.environ.get('CHARON_LOCAL_BASE_URL', 'http://127.0.0.1:1234/v1')
-        api_key = os.environ.get('CHARON_LOCAL_API_KEY', 'not-needed')
+        base_url = config.local_base_url() or config.DEFAULT_LOCAL_BASE_URL
+        api_key = config.local_api_key()
         # Always use httpx provider for local — no SDK needed
         from charon.providers.httpx_openai import HttpxOpenAIProvider
         return HttpxOpenAIProvider(base_url=base_url, api_key=api_key)

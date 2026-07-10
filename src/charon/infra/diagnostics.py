@@ -13,9 +13,9 @@ corrupt the UI. It also never raises: diagnostics must not break their caller.
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
+from charon.infra import config
 
 _FILENAME = 'diagnostics.jsonl'
 
@@ -23,9 +23,9 @@ _FILENAME = 'diagnostics.jsonl'
 def _resolve_state_dir(state_dir=None) -> Path | None:
     if state_dir:
         return Path(state_dir).expanduser()
-    raw = os.environ.get('CHARON_STATE_DIR')
-    if raw:
-        return Path(raw).expanduser()
+    env_dir = config.state_dir()
+    if env_dir:
+        return env_dir.expanduser()
     default = Path.home() / '.charon_state'
     return default if default.exists() else None
 

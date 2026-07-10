@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 import time
 
 from backend import common
 from charon.providers.provider_bridge import load_session_provider_config, save_session_provider_config
+from charon.infra import config
 
 
 class SetupMixin:
@@ -186,7 +186,7 @@ class SetupMixin:
                     elif detected:
                         chosen_model = detected[0]
                     else:
-                        chosen_model = os.environ.get('CHARON_LOCAL_MODEL', '').strip() or 'qwen3-30b-a3b'
+                        chosen_model = config.local_model() or 'qwen3-30b-a3b'
 
                     target_state['model'] = chosen_model
                     target_state['provider_model'] = chosen_model

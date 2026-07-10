@@ -27,13 +27,13 @@ Protocol:
 from __future__ import annotations
 
 import json
-import os
 import signal
 import sys
 import threading
 
 from backend import common
 from charon.conversation.conversation_engine import ConversationEngine
+from charon.infra import config
 
 # Backward-compat re-exports: these names were historically importable
 # from chat_backend (tests and tooling rely on some of them).
@@ -105,9 +105,9 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, RoomsMixin, LibrisMi
     def run(self):
         # Check if already set up — auto-initialize if so
         onboarding = self._repair_incomplete_onboarding_startup()
-        requested_provider = os.environ.get('CHARON_PROVIDER', '').strip()
-        requested_resume = os.environ.get('CHARON_RESUME', '').strip()
-        requested_agent = os.environ.get('CHARON_AGENT', '').strip()
+        requested_provider = config.requested_provider()
+        requested_resume = config.requested_resume()
+        requested_agent = config.requested_agent()
 
         # Resume a specific agent's conversation
         if requested_resume:

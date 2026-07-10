@@ -6,9 +6,9 @@ Uses httpx for async streaming — the only dependency beyond stdlib.
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from typing import Any, AsyncIterator
+from charon.infra import config
 
 
 def _partial_tag_suffix_len(text: str, tag: str) -> int:
@@ -89,11 +89,10 @@ class HttpxOpenAIProvider:
         api_key: str | None = None,
         timeout: float = 300.0,
     ):
-        self._base_url = (base_url or os.environ.get(
-            'CHARON_LOCAL_BASE_URL',
-            'http://127.0.0.1:1234/v1',
-        )).rstrip('/')
-        self._api_key = api_key or os.environ.get('CHARON_LOCAL_API_KEY', 'not-needed')
+        self._base_url = (
+            base_url or config.local_base_url() or config.DEFAULT_LOCAL_BASE_URL
+        ).rstrip('/')
+        self._api_key = api_key or config.local_api_key()
         self._timeout = timeout
         # Optional httpx handler for tests; when set, requests are served by
         # an in-process MockTransport instead of a real network connection.

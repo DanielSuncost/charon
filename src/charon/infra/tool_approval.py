@@ -18,9 +18,9 @@ Dangerous patterns cover:
 """
 from __future__ import annotations
 
-import os
 import re
 import threading
+from charon.infra import config
 
 
 # ── Dangerous patterns ──────────────────────────────────────────────
@@ -130,7 +130,7 @@ _pending_approvals: dict[str, dict] = {}
 
 def is_approval_skipped() -> bool:
     """Check if approval is globally disabled."""
-    return os.environ.get('CHARON_SKIP_APPROVAL', '0') in ('1', 'true', 'yes')
+    return config.skip_approval()
 
 
 def needs_approval(

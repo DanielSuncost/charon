@@ -66,3 +66,51 @@ setting. Entry modules that are launched by file path (`charon_loop.py`,
 `infra/` — module filenames are unchanged from the flat layout; they are
 only grouped into the clusters above. `charon_loop.py` and `charon_gym.py`
 stay at the package root.
+
+## Configuration
+
+All `CHARON_*` environment variables are defined as typed accessors in
+`charon/infra/config.py` (one function per variable, read at call time —
+never cached at import). Product code must go through those accessors
+instead of `os.environ`.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `CHARON_STATE_DIR` | unset | State directory override. Fallbacks differ by consumer: `charon_loop` uses `./.charon_state`, diagnostics and provider_bridge use `~/.charon_state`. |
+| `CHARON_STOP_FILE` | `./CHARON_STOP` | Sentinel file whose existence stops the loop. |
+| `CHARON_NO_SQLITE` | `0` | `1` disables the SQLite store; JSON-file persistence is used instead. |
+| `CHARON_STDOUT_EVENTS` | `1` | `1` mirrors loop events to stdout as JSONL; tests set `0`. |
+| `CHARON_DEBUG_TRACE` | `0` | `1` enables the high-volume JSONL trace in `<state-dir>/debug.log`. |
+| `CHARON_LOOP_SLEEP` | `2.0` | Seconds slept between loop cycles. |
+| `CHARON_MAX_CYCLES` | `0` | Stop after N cycles; `0` = run forever. |
+| `CHARON_MAX_CONSEC_FAIL` | `5` | Consecutive cycle failures before the loop aborts. |
+| `CHARON_STALE_IN_PROGRESS_SEC` | `60` | Seconds before a heartbeat-less in-progress task is requeued. |
+| `CHARON_HEARTBEAT_INTERVAL` | `30` | Loop cycles between heartbeat events. |
+| `CHARON_REQUIRE_TMUX` | `1` | `1`: newly created agents require a tmux session. |
+| `CHARON_SHADE_REQUIRE_TMUX` | `0` | `1`: shade contract agents require tmux (opt-in). |
+| `CHARON_AGENT_PLANNER` | unset | `heuristic` or `llm` forces the agent planner mode. |
+| `CHARON_AGENT_SHELL_TIMEOUT` | `45` | Timeout (s) for shell actions run by agent runtimes. |
+| `CHARON_SPEC_WINDOW` | `10` | Recent task summaries considered for soft specialization. |
+| `CHARON_SPEC_MIN_TASKS` | `3` | Minimum tasks before a specialization label is generated. |
+| `CHARON_SPEC_INTERVAL` | `300` | Seconds between specialization refreshes. |
+| `CHARON_AUTONOMOUS` | unset | `1/true/on` forces autonomous mode on; `0/false/off` forces it off; otherwise the config file decides. |
+| `CHARON_SKIP_APPROVAL` | `0` | `1/true/yes` disables all tool approval checks. |
+| `CHARON_BROWSER_HEADLESS` | `1` | Legacy, inverted: `0` shows the browser; anything else hides it. In `browser_settings` resolution the empty string means "no opinion". |
+| `CHARON_X_PROFILE_DIR` | unset | Chromium profile dir override for the X tool (default `<state-dir>/browser/x`). |
+| `CHARON_SEARXNG_URL` | unset | Base URL of a self-hosted SearXNG instance for web search. |
+| `CHARON_EMBED_MODEL` | `BAAI/bge-base-en-v1.5` | sentence-transformers model for memory embeddings. |
+| `CHARON_EMBED_BACKEND` | `worker` | `worker` uses the embedding subprocess; `local` loads the model in-process (tests). |
+| `CHARON_EMBED_DEVICE` | unset | Torch device for embeddings (`cpu`, `cuda`, `mps`); unset = auto. |
+| `CHARON_EMBED_IDLE_SECS` | `120` (floor 15) | Idle seconds before the embedding worker exits. |
+| `CHARON_CONSOLIDATION_MODEL` | unset | Model tier override for memory consolidation. |
+| `CHARON_CONSOLIDATION_INTERVAL` | unset | Heartbeats between consolidation scans. |
+| `CHARON_CONSOLIDATION_ENABLED` | unset | Only the literal `false` disables consolidation (no force-enable value). |
+| `CHARON_LOCAL_BASE_URL` | unset | OpenAI-compatible base URL for the `local` provider (falls back to `CHARON_LMSTUDIO_BASE_URL`, then `http://127.0.0.1:1234/v1`). |
+| `CHARON_LMSTUDIO_BASE_URL` | unset | Legacy alias for the local base URL, honored as a fallback. |
+| `CHARON_LOCAL_API_KEY` | `not-needed` | API key sent to the local provider endpoint. |
+| `CHARON_LOCAL_MODEL` | unset | Model id override for the local provider (`lmstudio/` prefix stripped). |
+| `CHARON_SHADE_MODEL_MODE` | unset | Overrides the model-selection mode for shade agents. |
+| `CHARON_SHADE_MODEL` | unset | Pins shades to a fixed model (implies mode `fixed`). |
+| `CHARON_PROVIDER` | unset | Provider requested at TUI launch (e.g. `local`, `claude-code`). |
+| `CHARON_RESUME` | unset | Agent id (or `latest`) whose conversation the TUI resumes at launch. |
+| `CHARON_AGENT` | unset | Agent id/name the TUI session binds to at launch. |

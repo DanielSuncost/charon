@@ -2,13 +2,13 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import subprocess
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
+from charon.infra import config
 
 if TYPE_CHECKING:
     from charon.conversation.conversation_engine import ConversationEngine
@@ -31,7 +31,7 @@ except ImportError:
 
 
 def _use_store() -> bool:
-    return _HAS_STORE and os.environ.get('CHARON_NO_SQLITE', '0') != '1'
+    return _HAS_STORE and not config.no_sqlite()
 
 
 def utc_now_iso() -> str:
@@ -204,7 +204,7 @@ def _plan_prompt(agent: dict, task: dict, memory: dict) -> str:
 
 
 def _resolve_planner_mode(state_dir: Path) -> str:
-    env = os.environ.get('CHARON_AGENT_PLANNER', '').strip().lower()
+    env = config.agent_planner()
     if env in ('heuristic', 'llm'):
         return env
 
@@ -323,7 +323,7 @@ def execute_action(action: dict, task: dict, agent: dict) -> tuple[bool, dict]:
         return True, {'summary': summary or f"Completed: {(task.get('instruction') or '')[:120]}"}
 
     if action_name == 'shell':
-        timeout_sec = int(os.environ.get('CHARON_AGENT_SHELL_TIMEOUT', '45'))
+        timeout_sec = config.agent_shell_timeout()
         ok, payload = _execute_shell(str(action.get('command') or ''), cwd=cwd, timeout_sec=timeout_sec)
         if ok:
             cmd = str(action.get('command') or '')

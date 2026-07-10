@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from charon.infra import config
 
 # SQLite store adapter (optional)
 try:
@@ -23,7 +23,7 @@ except ImportError:
 
 
 def _use_store() -> bool:
-    return _HAS_STORE and os.environ.get('CHARON_NO_SQLITE', '0') != '1'
+    return _HAS_STORE and not config.no_sqlite()
 
 
 def _now_iso() -> str:
