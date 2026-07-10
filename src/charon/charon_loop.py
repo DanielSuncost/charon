@@ -1029,6 +1029,8 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
                 cycles += 1
                 continue
 
+            pending = [auto_task]
+
         task = pending[0]
         trace_event(trace_file, 'task_selected', cycle=cycles, task_id=task.get('id'), task_type=task.get('task_type'))
         _record_overlap_coordination(task, queue, state_dir, log_file)

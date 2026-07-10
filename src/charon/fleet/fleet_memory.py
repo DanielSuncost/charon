@@ -100,7 +100,7 @@ def _store_in_memory_engine(server_id: str, agent_name: str, summary: str) -> No
     """Store activity summary in the semantic memory engine."""
     try:
         from charon.memory.memory_engine import MemoryEngine
-        engine = MemoryEngine(STATE_DIR / 'memory.db')
+        engine = MemoryEngine(STATE_DIR)
         engine.add(
             summary,
             category='fleet_activity',
