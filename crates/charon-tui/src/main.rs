@@ -559,6 +559,16 @@ fn main() -> io::Result<()> {
                                         app.chat.auth_activate_selected();
                                         local_view_dirty = true;
                                     }
+                                    KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                                        // Any other typing dismisses the auth overlay and
+                                        // routes the key to the input. A stale overlay (e.g.
+                                        // left open after auth already succeeded) must never
+                                        // trap the user into a "can't type" state.
+                                        app.chat.auth_dismiss();
+                                        app.chat.input.push(ch);
+                                        app.chat.maybe_open_command_menu();
+                                        local_view_dirty = true;
+                                    }
                                     _ => {}
                                 }
                             } else {
