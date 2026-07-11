@@ -896,6 +896,15 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
     state_dir.mkdir(parents=True, exist_ok=True)
     ensure_bootstrap_queue(queue_file)
 
+    # Register durable operation kinds so persisted durable operations (e.g. a
+    # Libris run in flight when the daemon restarted) can be resumed by the
+    # heartbeat's tick_operations. Best-effort — must never block startup.
+    try:
+        from charon.libris.libris_durable import register as _register_libris_durable
+        _register_libris_durable()
+    except Exception as e:
+        _diag('charon_loop', 'durable-kind registration failed; durable operations will not resume until re-registered', error=e)
+
     # Start fleet sync and memory threads (optional — graceful if fleet not configured)
     try:
         from charon.fleet.fleet_sync import start_fleet_sync
