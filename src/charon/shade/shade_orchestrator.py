@@ -107,6 +107,20 @@ def append_phase_event(
             'payload': payload or {},
         },
     )
+    # Unified trace span for terminal phase events (additive, best-effort), so a
+    # contract's phase progression shows on the cross-system timeline/tree.
+    if event_type in ('phase_completed', 'phase_failed', 'contract_completed'):
+        try:
+            from charon.infra import orchestration_trace as _ot
+            _ot.record_span(
+                state_dir, name=f'shade {phase_id or event_type}', system='shade',
+                kind='phase', trace_id=f'tr_{contract_id}' if contract_id else None,
+                task_id=phase_id or None, operation_id=contract_id or None,
+                status='error' if event_type == 'phase_failed' else 'ok',
+                attributes={'event_type': event_type, **(payload or {})},
+            )
+        except Exception:
+            pass
     if _use_store():
         try:
             _db_shade_event_append(_get_db(state_dir), contract_id=contract_id,

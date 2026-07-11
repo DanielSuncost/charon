@@ -107,6 +107,24 @@ def advance_loop(state_dir: Path, config, *, implementer: Implementer,
     )
     save_loop(state_dir, config)
 
+    # Unified trace span per iteration (additive, best-effort) — surfaces the
+    # otherwise-unstreamed judge loop on the cross-system timeline.
+    try:
+        from charon.infra import orchestration_trace as _ot
+        _loop_id = getattr(config, 'loop_id', None) or getattr(config, 'id', None)
+        _ot.record_span(
+            state_dir, name=f'judge iter {iteration.iteration}', system='judge',
+            kind='step', trace_id=f'tr_{_loop_id}' if _loop_id else None,
+            operation_id=_loop_id, task_id=f'iter-{iteration.iteration}',
+            duration_ms=float(getattr(iteration, 'duration_seconds', 0.0) or 0.0) * 1000.0,
+            status='error' if iteration.status in ('crashed', 'constraint_failed',
+                                                   'frozen_violation') else 'ok',
+            attributes={'score': iteration.score, 'kept': iteration.kept,
+                        'iter_status': iteration.status},
+        )
+    except Exception:
+        pass
+
     event = {
         'action': 'iterated',
         'iteration': iteration.iteration,

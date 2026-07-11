@@ -109,3 +109,45 @@ def test_tracing_never_raises_on_bad_state_dir():
     with ot.span(Path('/nonexistent/dir/xyz'), name='x', system='libris', kind='step') as sp:
         sp.add_usage(model='fast', input_tokens=10, output_tokens=10)
     assert sp.status == 'ok'
+
+
+def test_producer_execution_memory_tool_event_emits_span(tmp_path, monkeypatch):
+    monkeypatch.setenv('CHARON_NO_SQLITE', '1')
+    from charon.memory import execution_memory as em
+    em.record_tool_event(
+        tmp_path, session_id='sess-9', agent_id='AG-9', provider='codex',
+        tool_name='Bash', params={'command': 'ls'}, result_content='ok',
+        is_error=False, project_root=str(tmp_path), duration_ms=42)
+    spans = ot.read_spans(tmp_path, trace_id='tr_sess-9')
+    assert len(spans) == 1
+    s = spans[0]
+    assert s['system'] == 'agent' and s['kind'] == 'tool_call'
+    assert s['agent_id'] == 'AG-9' and s['duration_ms'] == 42.0
+    assert s['attributes']['tool'] == 'Bash'
+
+
+def test_producer_shade_phase_event_emits_span(tmp_path, monkeypatch):
+    monkeypatch.setenv('CHARON_NO_SQLITE', '1')
+    from charon.shade import shade_orchestrator as so
+    so.append_phase_event(tmp_path, contract_id='ctr-1', phase_id='P02',
+                          event_type='phase_completed', payload={'x': 1})
+    # a non-terminal event should NOT emit a span
+    so.append_phase_event(tmp_path, contract_id='ctr-1', phase_id='P03',
+                          event_type='phase_queued')
+    spans = ot.read_spans(tmp_path, trace_id='tr_ctr-1')
+    assert len(spans) == 1
+    assert spans[0]['system'] == 'shade' and spans[0]['kind'] == 'phase'
+    assert spans[0]['task_id'] == 'P02' and spans[0]['status'] == 'ok'
+
+
+def test_producers_share_cross_system_timeline(tmp_path, monkeypatch):
+    monkeypatch.setenv('CHARON_NO_SQLITE', '1')
+    from charon.memory import execution_memory as em
+    from charon.shade import shade_orchestrator as so
+    em.record_tool_event(tmp_path, session_id='s', agent_id='A', provider='p',
+                         tool_name='Read', params={}, result_content='', is_error=False,
+                         project_root=str(tmp_path))
+    so.append_phase_event(tmp_path, contract_id='c', phase_id='P1',
+                         event_type='phase_completed')
+    systems = {row['system'] for row in ot.timeline(tmp_path)}
+    assert {'agent', 'shade'} <= systems

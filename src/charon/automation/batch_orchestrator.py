@@ -190,16 +190,45 @@ def _record_model_used(state_dir: Path, batch_id: str, task_id: str, model) -> N
     _update_batch(state_dir, batch)
 
 
+def _emit_batch_span(state_dir: Path, batch_id: str, task: dict, *, status: str) -> None:
+    """Unified trace span for a finished batch task (additive, best-effort)."""
+    try:
+        from charon.infra import orchestration_trace as _ot
+        dur_ms = None
+        s, c = task.get('started_at'), task.get('completed_at')
+        if isinstance(s, str) and isinstance(c, str):
+            try:
+                from datetime import datetime as _dt
+                dur_ms = max(0.0, (_dt.fromisoformat(c) - _dt.fromisoformat(s)).total_seconds() * 1000.0)
+            except Exception:
+                dur_ms = None
+        _ot.record_span(
+            state_dir, name=f"batch: {str(task.get('title') or task.get('id'))[:60]}",
+            system='batch', kind='agent_run',
+            trace_id=f'tr_{batch_id}' if batch_id else None,
+            operation_id=batch_id or None, task_id=task.get('id'),
+            agent_id=task.get('shade_agent_id') or None,
+            model=task.get('model_used') or None, duration_ms=dur_ms, status=status,
+            attributes={'complexity': task.get('complexity')},
+        )
+    except Exception:
+        pass
+
+
 def mark_batch_task_completed(state_dir: Path, batch_id: str, task_id: str, summary: str) -> dict | None:
     batch = get_batch(state_dir, batch_id)
     if not batch:
         return None
+    _done_task = None
     for t in batch['tasks']:
         if t.get('id') == task_id:
             t['status'] = 'completed'
             t['result_summary'] = summary
             t['completed_at'] = _now()
+            _done_task = t
             break
+    if _done_task:
+        _emit_batch_span(state_dir, batch_id, _done_task, status='ok')
 
     batch['completed_count'] = sum(1 for t in batch['tasks'] if t.get('status') == 'completed')
     batch['failed_count'] = sum(1 for t in batch['tasks'] if t.get('status') == 'failed')
@@ -216,12 +245,16 @@ def mark_batch_task_failed(state_dir: Path, batch_id: str, task_id: str, error: 
     batch = get_batch(state_dir, batch_id)
     if not batch:
         return None
+    _failed_task = None
     for t in batch['tasks']:
         if t.get('id') == task_id:
             t['status'] = 'failed'
             t['error'] = error
             t['completed_at'] = _now()
+            _failed_task = t
             break
+    if _failed_task:
+        _emit_batch_span(state_dir, batch_id, _failed_task, status='error')
 
     batch['completed_count'] = sum(1 for t in batch['tasks'] if t.get('status') == 'completed')
     batch['failed_count'] = sum(1 for t in batch['tasks'] if t.get('status') == 'failed')
