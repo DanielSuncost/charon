@@ -22,6 +22,7 @@ controller is untouched.
 """
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,30 @@ def _ctx_paths(ctx) -> tuple[Path, Path, str, str]:
     st = ctx.state
     return (Path(st["state_dir"]), Path(st["project_root"]),
             st["operation_id"], st.get("prompt", ""))
+
+
+def _topic_has_sources(sd: Path, pr: Path, op_id: str, slug: str) -> bool:
+    """True if the researcher saved any sources for this topic — used to decide
+    crash recovery: no sources -> re-spawn researcher (crashed before gathering);
+    sources present but no draft -> spawn a writer to synthesize the draft."""
+    lr = _lr()
+    try:
+        path = lr.research_root(sd, pr) / "sources" / "sources.jsonl"
+        if not path.exists():
+            return False
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            if row.get("operation_id") == op_id and row.get("topic_slug") == slug:
+                return True
+    except Exception:
+        pass
+    return False
 
 
 # ── steps ────────────────────────────────────────────────────────────────
@@ -208,15 +233,35 @@ def _step_supervise(ctx) -> rt.Directive:
         research_round = int(topic.get("research_round") or 1)
         status = str(topic.get("status") or "")
 
-        # crash recovery: a researching/revising topic whose agent thread died
-        # (not running) with no draft -> re-spawn, bounded.
-        if status in ("researching", "revising") and not has_draft:
-            researcher_id = str(topic.get("researcher_agent_id") or "")
+        # No draft yet. While the active worker (researcher or writer) is still
+        # running, just wait. Once it finishes without a draft, recover: if it
+        # gathered sources but never wrote, synthesize with a WRITER (reliable);
+        # if it produced nothing (crashed before gathering), re-spawn a
+        # RESEARCHER. Both are bounded to avoid loops.
+        if not has_draft and status in ("researching", "revising", "writing"):
+            active_id = str(topic.get("writer_agent_id") or topic.get("researcher_agent_id") or "")
+            active_running = bool(active_id) and la._agent_status(active_id) == "running"
             spawned_at = float(topic.get("researcher_spawned_at") or 0.0)
+            if active_running or (time.time() - spawned_at) <= _STALE_SECONDS:
+                all_ready = False
+                continue
+            if _topic_has_sources(sd, pr, op_id, slug):
+                tries = int(topic.get("writer_tries") or 0)
+                if tries < 2:
+                    w = la.spawn_libris_role(sd, pr, role="writer", operation_id=op_id,
+                                             topic_slug=slug, user_goal=prompt, parent_agent_id=coord_id)
+                    lr.update_topic_runtime(sd, pr, op_id, slug, status="writing",
+                                            extras={"writer_agent_id": w.get("id", ""),
+                                                    "writer_tries": tries + 1,
+                                                    "researcher_spawned_at": time.time()})
+                    lr.append_operation_event(sd, pr, op_id, "writer_fallback_spawned",
+                                              {"topic_slug": slug, "writer_tries": tries + 1})
+                    all_ready = False
+                else:
+                    lr.update_topic_runtime(sd, pr, op_id, slug, status="no_report")
+                continue  # not blocking once given up
             respawns = int(topic.get("respawn_count") or 0)
-            if (researcher_id and la._agent_status(researcher_id) != "running"
-                    and (time.time() - spawned_at) > _STALE_SECONDS
-                    and respawns < _MAX_RESPAWN):
+            if respawns < _MAX_RESPAWN:
                 r = la.spawn_libris_role(sd, pr, role="researcher", operation_id=op_id,
                                          topic_slug=slug, user_goal=prompt, parent_agent_id=coord_id)
                 lr.update_topic_runtime(sd, pr, op_id, slug, status="researching",
@@ -225,7 +270,9 @@ def _step_supervise(ctx) -> rt.Directive:
                                                 "researcher_spawned_at": time.time()})
                 lr.append_operation_event(sd, pr, op_id, "researcher_respawned_after_stall",
                                           {"topic_slug": slug, "respawn_count": respawns + 1})
-            all_ready = False
+                all_ready = False
+            else:
+                lr.update_topic_runtime(sd, pr, op_id, slug, status="no_report")
             continue
 
         draft_updated = str(topic.get("draft_report_updated_at") or "")

@@ -139,6 +139,29 @@ def test_crash_recovery_respawns_stalled_researcher(tmp_path, monkeypatch, stub_
     assert int(topic.get("respawn_count") or 0) == 1
 
 
+def test_writer_fallback_when_researcher_finishes_without_draft(tmp_path, stub_agents):
+    res = _start(tmp_path, stub_agents)
+    op_id, dop = res["operation"]["operation_id"], res["durable_op_id"]
+    lr.save_candidate_topics(tmp_path, tmp_path, op_id,
+                             topics=[{"title": "T", "recommended_action": "deep_research"}])
+    rt.tick_operation(tmp_path, dop)                         # scout -> fanout
+    rt.tick_operation(tmp_path, dop)                         # fanout -> supervise
+    slug = lr.get_operation_state(tmp_path, tmp_path, op_id)["topics"][0]["slug"]
+    researcher_id = [s for s in stub_agents["spawned"] if s["role"] == "researcher"][0]["id"]
+
+    # researcher finished, saved a source, but never wrote a draft
+    lr.add_source(tmp_path, tmp_path, topic_slug=slug, title="A paper",
+                  url="https://arxiv.org/abs/1", operation_id=op_id)
+    stub_agents["status"][researcher_id] = "stopped"
+    lr.update_topic_runtime(tmp_path, tmp_path, op_id, slug,
+                            extras={"researcher_spawned_at": 0.0})
+
+    _reset_delay(tmp_path, dop)
+    rt.tick_operation(tmp_path, dop)                         # -> writer fallback
+    assert any(s["role"] == "writer" for s in stub_agents["spawned"])
+    assert lr.get_operation_state(tmp_path, tmp_path, op_id)["topics"][0]["status"] == "writing"
+
+
 def _reset_delay(tmp_path, dop):
     """Clear a stay()'s not_before so the next tick runs immediately (no wall wait)."""
     op = rt.get_operation(tmp_path, dop)
