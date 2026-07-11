@@ -972,6 +972,20 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
             except Exception as e:
                 _diag('charon_loop', 'judge-loop tick failed; optimization loops not advanced', error=e)  # Judge loops are best-effort
 
+            # Durable orchestration runtime: advance any running durable operations
+            # one step each. This is what makes them crash-resumable — a restarted
+            # daemon reloads persisted state and continues. No-op when nothing is
+            # registered/runnable, so it is safe to always call.
+            try:
+                from charon.orchestration.runtime import tick_operations
+                for ev in tick_operations(state_dir, max_ops=8):
+                    if ev.get('action') in ('skipped', 'deferred'):
+                        continue
+                    log_event(log_file, 'orchestration_tick', **ev)
+                    trace_event(trace_file, 'orchestration_tick', cycle=cycles, **ev)
+            except Exception as e:
+                _diag('charon_loop', 'orchestration tick failed; durable operations not advanced', error=e)
+
         if stop_file.exists():
             log_event(log_file, 'loop_stop_file_detected', stop_file=str(stop_file))
             trace_event(trace_file, 'loop_stop_file_detected', stop_file=str(stop_file))
