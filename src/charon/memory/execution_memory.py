@@ -222,6 +222,21 @@ def record_tool_event(
     with path.open('a', encoding='utf-8') as f:
         f.write(json.dumps(event, ensure_ascii=False) + '\n')
 
+    # Unified trace span for this tool call (additive, best-effort). Groups by
+    # session so a whole agent session's tool activity shares one trace.
+    try:
+        from charon.infra import orchestration_trace as _ot
+        _ot.record_span(
+            state_dir, name=f'tool: {tool_name}', system='agent', kind='tool_call',
+            trace_id=f'tr_{session_id}' if session_id else None,
+            agent_id=agent_id or None, task_id=session_id or None,
+            duration_ms=float(duration_ms) if duration_ms else None,
+            status='error' if is_error else 'ok',
+            attributes={'tool': tool_name, 'provider': provider, 'importance': importance},
+        )
+    except Exception as e:
+        _diag('execution_memory', 'trace span emit for tool event failed', error=e, tool=tool_name)
+
     # Best-effort semantic indexing.
     if importance >= 45:
         try:

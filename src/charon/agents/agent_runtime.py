@@ -545,10 +545,31 @@ def _run_task_with_engine(
             elif event.type == 'done':
                 total_turns = event.data.get('total_turns', 0)
 
+    # Unified trace span around the agent's engine run (additive, best-effort).
     try:
-        asyncio.run(_execute())
-    except Exception as e:
-        errors.append(str(e))
+        from charon.infra import orchestration_trace as _ot
+        _run_span_cm = _ot.span(
+            state_dir, name=f'agent task {task_id}', system='agent', kind='agent_run',
+            trace_id=f'tr_{task_id}' if task_id else None,
+            agent_id=agent_id or None, task_id=task_id or None,
+            attributes={'task_type': task.get('task_type')},
+        )
+    except Exception:
+        _run_span_cm = None
+    if _run_span_cm is not None:
+        with _run_span_cm as _run_span:
+            try:
+                asyncio.run(_execute())
+            except Exception as e:
+                errors.append(str(e))
+                _run_span.status = 'error'
+            _run_span.set(turns=total_turns, tool_calls=len(tool_calls_made),
+                          errors=len(errors))
+    else:
+        try:
+            asyncio.run(_execute())
+        except Exception as e:
+            errors.append(str(e))
 
     response_text = ''.join(text_parts).strip()
 
