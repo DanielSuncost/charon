@@ -109,10 +109,28 @@ class SetupMixin:
                     # Check Charon's own auth store for this provider
                     existing_tokens = self._find_charon_auth_tokens(provider_id)
                     existing_token = str(existing_tokens.get('access_token') or '').strip()
-                    if existing_token and self._is_jwt_expired(existing_token) and not str(existing_tokens.get('refresh_token') or '').strip():
-                        common.emit({'type': 'status', 'message': f'Existing {arg} token is expired and has no refresh token. Starting fresh OAuth.', 'request_id': request_id})
-                        existing_token = None
-                        existing_tokens = {}
+                    if existing_token and self._is_jwt_expired(existing_token):
+                        # Expired token: don't just check that a refresh token is
+                        # *present* (a dead or placeholder one passes that check and
+                        # leaves the user with a broken session that only --force
+                        # fixes). Actually attempt the refresh; only reuse the token
+                        # if it works, otherwise fall through to fresh OAuth.
+                        refresh = str(existing_tokens.get('refresh_token') or '').strip()
+                        refreshed = None
+                        if refresh:
+                            try:
+                                from charon.providers.provider_bridge import _refresh_token as _do_refresh
+                                refreshed = _do_refresh(arg, refresh)
+                            except Exception:
+                                refreshed = None
+                        if refreshed:
+                            existing_token = refreshed
+                            existing_tokens = {**existing_tokens, 'access_token': refreshed}
+                            common.emit({'type': 'status', 'message': f'Refreshed existing {arg} token.', 'request_id': request_id})
+                        else:
+                            common.emit({'type': 'status', 'message': f'Existing {arg} token is expired and could not be refreshed. Starting fresh OAuth.', 'request_id': request_id})
+                            existing_token = None
+                            existing_tokens = {}
                     # For claude-code, also check Claude Code's credentials file
                     if not existing_token and arg == 'claude-code':
                         existing_token = self._find_claude_credentials()
