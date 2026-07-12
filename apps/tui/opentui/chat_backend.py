@@ -51,6 +51,10 @@ from backend.nlparse import _parse_interval_phrase, _natural_language_to_cron  #
 from backend.providers_mixin import ProvidersMixin
 from backend.chat_mixin import ChatMixin
 from backend.commands_mixin import CommandsMixin
+from backend.commands_core import CoreCommandsMixin
+from backend.commands_agents import AgentCommandsMixin
+from backend.commands_rooms import RoomCommandsMixin
+from backend.commands_work import WorkCommandsMixin
 from backend.rooms_mixin import RoomsMixin
 from backend.libris_mixin import LibrisMixin
 from backend.dashboard import DashboardMixin
@@ -61,7 +65,7 @@ from backend.consolidation_mixin import ConsolidationMixin
 from backend.tmux_mixin import TmuxMixin
 
 
-class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, RoomsMixin, LibrisMixin, DashboardMixin, HarvestMixin, FleetSetupMixin, SetupMixin, ConsolidationMixin, TmuxMixin):
+class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, CoreCommandsMixin, AgentCommandsMixin, RoomCommandsMixin, WorkCommandsMixin, RoomsMixin, LibrisMixin, DashboardMixin, HarvestMixin, FleetSetupMixin, SetupMixin, ConsolidationMixin, TmuxMixin):
     def __init__(self):
         try:
             from charon.automation.automation_scheduler import start_scheduler
