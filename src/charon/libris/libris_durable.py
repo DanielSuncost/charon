@@ -23,6 +23,7 @@ controller is untouched.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -302,6 +303,27 @@ def _step_supervise(ctx) -> rt.Directive:
             plan = should_request_additional_revision(sd, pr, op_id, topic)
         except Exception as e:
             _diag("libris_durable", "revision decision failed", error=e, topic_slug=slug)
+
+        # Pairwise regression gate (opt-in): the deterministic keep-if-better guard
+        # is blind to quality differences the coarse judge score can't see (two
+        # rounds can tie the score while one is materially better). When enabled,
+        # blind-judge the newest checkpoint against the running best and demote it
+        # if it loses. Off by default because it makes 2 synchronous LLM calls,
+        # which would block the heartbeat tick; gated once per new checkpoint.
+        if os.environ.get("CHARON_LIBRIS_PAIRWISE_GATE"):
+            try:
+                cks = lr.list_checkpoints(sd, pr, op_id, slug)
+                latest_id = cks[-1].get("checkpoint_id") if cks else ""
+                if latest_id and topic.get("pairwise_gated_ckpt") != latest_id:
+                    from charon.libris import libris_pairwise as lp
+                    g = lp.gate_latest_checkpoint(sd, pr, op_id, slug, question=prompt)
+                    lr.update_topic_runtime(sd, pr, op_id, slug,
+                                            extras={"pairwise_gated_ckpt": latest_id})
+                    if g.get("rejected_latest"):
+                        lr.append_operation_event(sd, pr, op_id, "checkpoint_pairwise_rejected",
+                                                  {"topic_slug": slug, "checkpoint_id": latest_id})
+            except Exception as e:
+                _diag("libris_durable", "pairwise gate failed", error=e, topic_slug=slug)
 
         # Keep-if-better: if the latest checkpoint regressed below the best, discard
         # its draft and restore the best. This also makes the next revision start
