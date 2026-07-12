@@ -64,9 +64,7 @@ struct MascotTitleSource {
 }
 
 #[derive(Deserialize)]
-#[allow(dead_code)] // mascot asset metadata; not all fields read
 struct MascotTinyTitle {
-    path: String,
     fg: [u8; 3],
 }
 

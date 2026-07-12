@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::app::{App, SessionsSection, View};
 use crate::backend;
 use crate::config;
-use crate::daemon;
+use charon_tui::daemon;
 use crate::daemon_client;
 use crate::input::apply_native_input_bytes;
 use crate::parser::AnsiParser;
@@ -145,10 +145,8 @@ pub(crate) fn build_native_session_snapshot(app: &mut App, w: u16, h: u16, self_
 
 
 #[derive(Clone)]
-#[allow(dead_code)] // mirrors agent JSON; not all fields read
 pub(crate) struct SessionAgentMeta {
     pub(crate) id: String,
-    pub(crate) agent_id: String,
     pub(crate) name: String,
     pub(crate) project: String,
     pub(crate) specialization: String,
@@ -258,7 +256,7 @@ pub(crate) fn session_agent_meta(payload: Option<&Value>) -> Vec<SessionAgentMet
                 continue;
             }
             let server_id = sess.get("server_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            out.push(SessionAgentMeta { id, agent_id, name, project, specialization, last_summary, tmux, status, source, process_target, live_session_id, session_label, transport, socket, server_id });
+            out.push(SessionAgentMeta { id, name, project, specialization, last_summary, tmux, status, source, process_target, live_session_id, session_label, transport, socket, server_id });
         }
         if !out.is_empty() {
             return out;
@@ -282,7 +280,7 @@ pub(crate) fn session_agent_meta(payload: Option<&Value>) -> Vec<SessionAgentMet
             if id.is_empty() && tmux.is_empty() && name.is_empty() {
                 None
             } else {
-                Some(SessionAgentMeta { id: id.clone(), agent_id: id, name: name.clone(), project, specialization, last_summary, tmux, status, source: "agent".to_string(), process_target: String::new(), live_session_id: String::new(), session_label: name, transport: String::new(), socket: String::new(), server_id: String::new() })
+                Some(SessionAgentMeta { id, name: name.clone(), project, specialization, last_summary, tmux, status, source: "agent".to_string(), process_target: String::new(), live_session_id: String::new(), session_label: name, transport: String::new(), socket: String::new(), server_id: String::new() })
             }
         })
         .collect()

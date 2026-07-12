@@ -6,7 +6,6 @@
 //!
 //! Each binary uses a different subset of the message helpers, so unused-in-one-
 //! crate items are expected.
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 
@@ -179,6 +178,9 @@ pub struct SessionInfo {
 
 impl DaemonMsg {
     /// Serialize to a single protocol line (newline-terminated).
+    /// Daemon-side half of the protocol (lib target); the `charon` bin
+    /// compiles this module too but only links the client half.
+    #[allow(dead_code)]
     pub fn to_line(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string()) + "\n"
     }
@@ -186,6 +188,9 @@ impl DaemonMsg {
 
 impl ClientMsg {
     /// Parse one protocol line. Returns `None` for blank lines or malformed JSON.
+    /// Daemon-side half of the protocol (lib target); the `charon` bin
+    /// compiles this module too but only links the client half.
+    #[allow(dead_code)]
     pub fn parse(line: &str) -> Option<Self> {
         let trimmed = line.trim();
         if trimmed.is_empty() {

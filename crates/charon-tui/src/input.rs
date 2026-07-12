@@ -58,7 +58,7 @@ pub(crate) fn apply_native_commands(app: &mut App, commands: Vec<NativeCommand>)
                     apply_native_input_bytes(app, &bytes);
                 }
             }
-            NativeCommand::Resize { .. } => {}
+            NativeCommand::Resize => {}
         }
     }
 }

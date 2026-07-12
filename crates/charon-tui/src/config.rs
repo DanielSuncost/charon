@@ -1,15 +1,11 @@
 //! User configuration: `~/.charon/config.toml` (override dir with `$CHARON_DIR`).
 //!
-//! Holds the active [`Theme`], mouse/behavior flags, and a keybindings map. Colors
-//! are plain RGB triples so this module stays free of any TUI/crossterm dependency
-//! and is unit-testable; the front-end converts [`Rgb`] to its own color type.
+//! Holds the active [`Theme`] and behavior flags. Colors are plain RGB triples
+//! so this module stays free of any TUI/crossterm dependency and is
+//! unit-testable; the front-end converts [`Rgb`] to its own color type.
 //!
 //! Defaults reproduce the current hardcoded appearance, so an absent or partial
 //! config changes nothing.
-//!
-//! Each binary uses a different subset (the TUI reads the theme; the daemon will
-//! read the detection table later), so unused-in-one-crate items are expected.
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -98,11 +94,6 @@ impl Theme {
         Some(t)
     }
 
-    /// Names of the built-in themes.
-    pub fn builtin_names() -> &'static [&'static str] {
-        &["charon-dark", "midnight", "mono"]
-    }
-
     /// Overlay any set fields from a `[themes.*]` table onto this theme.
     fn overlay(mut self, raw: &RawTheme) -> Theme {
         let apply = |slot: &mut Rgb, val: &Option<String>| {
@@ -126,22 +117,16 @@ impl Theme {
 #[derive(Clone, Debug)]
 pub struct Config {
     pub theme: Theme,
-    pub mouse: bool,
-    pub default_view: String,
     /// If false (default), TUI-spawned sessions are ephemeral (end on close,
     /// Claude-Code style). Set true to make them persist across restarts.
     pub persist_sessions: bool,
-    pub keys: HashMap<String, String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
             theme: Theme::charon_dark(),
-            mouse: true,
-            default_view: "chat".to_string(),
             persist_sessions: false,
-            keys: HashMap::new(),
         }
     }
 }
@@ -172,10 +157,7 @@ impl Config {
         };
         Ok(Config {
             theme,
-            mouse: raw.ui.mouse.unwrap_or(true),
-            default_view: raw.ui.default_view.unwrap_or_else(|| "chat".to_string()),
             persist_sessions: raw.ui.persist_sessions.unwrap_or(false),
-            keys: raw.keys,
         })
     }
 }
@@ -195,15 +177,11 @@ struct RawConfig {
     ui: RawUi,
     #[serde(default)]
     themes: HashMap<String, RawTheme>,
-    #[serde(default)]
-    keys: HashMap<String, String>,
 }
 
 #[derive(Deserialize, Default)]
 struct RawUi {
     theme: Option<String>,
-    mouse: Option<bool>,
-    default_view: Option<String>,
     persist_sessions: Option<bool>,
 }
 
@@ -226,7 +204,6 @@ mod tests {
         let c = Config::default();
         assert_eq!(c.theme.name, "charon-dark");
         assert_eq!(c.theme.header, Rgb(167, 139, 250));
-        assert!(c.mouse);
     }
 
     #[test]

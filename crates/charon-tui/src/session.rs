@@ -15,12 +15,15 @@ pub fn next_uid() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-#[allow(dead_code)] // session metadata; not all fields read in the TUI
 pub struct SessionCell {
     pub terminal: TerminalState,
     pub parser: AnsiParser,
     pub backend: Box<dyn ByteStream>,
     pub title: String,
+    /// Caller-assigned (non-unique) id; read by the daemon when respawning
+    /// (lib target). This module is also compiled into the `charon` bin,
+    /// which never reads it back.
+    #[allow(dead_code)]
     pub id: u64,
     /// Stable, process-unique id for layout/tracking (see [`next_uid`]).
     pub uid: u64,
@@ -29,12 +32,11 @@ pub struct SessionCell {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // backend kinds; not all are instantiated in every build
 pub enum BackendType {
     LocalPty,
     TmuxPane { session_name: String },
     BoatPane { session_id: String },
-    RemoteBoat { server_id: String, session_id: String },
+    RemoteBoat { session_id: String },
     CharonPane { socket_path: String },
     DaemonPane { session_id: String },
 }
@@ -61,7 +63,9 @@ impl SessionCell {
     }
 
     /// A processless session cell (see [`NullStream`](crate::backend::NullStream)).
-    /// Used by the daemon for sessions restored from disk after a restart.
+    /// Used by the daemon (lib target) for sessions restored from disk after a
+    /// restart; unused when this module is compiled into the `charon` bin.
+    #[allow(dead_code)]
     pub fn dead(id: u64, title: &str, width: u16, height: u16) -> Self {
         SessionCell {
             terminal: TerminalState::new(width, height),
@@ -129,7 +133,7 @@ impl SessionCell {
             title: title.to_string(),
             id,
             uid: next_uid(),
-            backend_type: BackendType::RemoteBoat { server_id: server.id.clone(), session_id: session_id.to_string() },
+            backend_type: BackendType::RemoteBoat { session_id: session_id.to_string() },
             viewport_scroll: 0,
         })
     }
@@ -228,11 +232,4 @@ impl SessionCell {
         }
     }
 
-    #[allow(dead_code)] // accessor kept for the type's interface
-    pub fn tmux_session_name(&self) -> Option<&str> {
-        match &self.backend_type {
-            BackendType::TmuxPane { session_name } => Some(session_name.as_str()),
-            _ => None,
-        }
-    }
 }

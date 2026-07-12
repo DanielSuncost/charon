@@ -332,10 +332,6 @@ fn draw_context_menu(buf: &mut ScreenBuf, menu: &ContextMenu, w: u16, h: u16) {
     buf.set(mx + menu_w + 1, bot_y, Cell { ch: '┘', fg: border, bg: menu_bg, bold: false });
 }
 
-pub fn context_menu_item_count(menu: &ContextMenu) -> usize {
-    if menu.has_selection { 2 } else { 1 }
-}
-
 fn draw_popup(buf: &mut ScreenBuf, x: u16, y: u16, w: u16, h: u16, title: &str, lines: &[(Color, String)]) {
     let area = Rect { x: x + 1, y: y + 1, width: w.saturating_sub(2), height: h.saturating_sub(2) };
     render_border(buf, area, title, true);
@@ -574,30 +570,6 @@ pub fn draw(buf: &mut ScreenBuf, app: &App, w: u16, h: u16, cache: &F1MonoCache)
     if app.chat.auth_open() {
         draw_auth(buf, app, w, h);
     }
-}
-
-pub fn point_at_mouse(cache: &F1MonoCache, app: &App, w: u16, h: u16, x: u16, y: u16) -> Option<ChatTextPoint> {
-    let area = transcript_area(w, h);
-    if cache.visual.lines.is_empty() || area.width == 0 || area.height == 0 {
-        return None;
-    }
-    let clamped_x = x.clamp(area.x, area.x.saturating_add(area.width).saturating_sub(1));
-    let clamped_y = y.clamp(area.y, area.y.saturating_add(area.height).saturating_sub(1));
-    let (start, end) = visible_window(cache.visual.lines.len(), area, app.chat.scroll);
-    let visible = &cache.visual.lines[start..end];
-    if visible.is_empty() {
-        return None;
-    }
-    let rel_y = clamped_y.saturating_sub(area.y) as usize;
-    let row_idx = start + rel_y.min(visible.len().saturating_sub(1));
-    let line = cache.visual.lines.get(row_idx)?;
-    if !line.selectable {
-        return None;
-    }
-    let text_len = line.copy_text.chars().count();
-    let rel_x = clamped_x.saturating_sub(area.x) as usize;
-    let col = rel_x.saturating_sub(line.copy_offset).min(text_len);
-    Some(ChatTextPoint { row: row_idx, col })
 }
 
 pub fn copy_selection(app: &mut App, cache: &F1MonoCache) -> bool {
