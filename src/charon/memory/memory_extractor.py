@@ -134,13 +134,23 @@ def extract_facts_from_session(
         # Return empty if no provider — caller must supply one
         return []
 
+    import asyncio
+
     try:
-        import asyncio
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # We're in an async context — use create_task
+        asyncio.get_running_loop()
+    except RuntimeError:
+        in_async_context = False
+    else:
+        in_async_context = True
+
+    # The provider is called exactly once: no retry path, because a retry can
+    # double-call the provider while the first coroutine is still running.
+    try:
+        if in_async_context:
+            # Can't block this loop — run the coroutine on a fresh loop in a
+            # worker thread.
             import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 response = pool.submit(
                     asyncio.run,
                     provider_call(messages, model)
@@ -148,13 +158,8 @@ def extract_facts_from_session(
         else:
             response = asyncio.run(provider_call(messages, model))
     except Exception as e:
-        _diag('memory_extractor', 'provider call failed on event-loop path; retrying with asyncio.run', error=e)
-        try:
-            import asyncio
-            response = asyncio.run(provider_call(messages, model))
-        except Exception as exc:
-            _diag('memory_extractor', 'provider call failed after retry; session yields no facts', error=exc)
-            return []
+        _diag('memory_extractor', 'provider call failed; session yields no facts', error=e)
+        return []
 
     return parse_extraction_response(response)
 

@@ -5,6 +5,8 @@ import json
 
 from backend import common
 
+from charon.infra.fileio import read_json_or_quarantine, write_json_atomic
+
 try:
     from charon.infra.diagnostics import record as _diag
 except Exception:  # diagnostics is best-effort and must never block import
@@ -216,12 +218,10 @@ class HarvestMixin:
             common.emit({'type': 'error', 'error': f'Invalid selection. Use 1-{len(clusters)}, comma-separated, range, or all.', 'request_id': request_id})
             return
         adopted_file = common.STATE_DIR / 'assimilation' / 'adopted_capabilities.json'
-        adopted = []
-        if adopted_file.exists():
-            try:
-                adopted = json.loads(adopted_file.read_text())
-            except Exception as e:
-                _diag('harvest_mixin', 'adopted_capabilities.json unreadable; existing adoptions will be overwritten by this harvest', error=e)
+        # An unreadable file is quarantined (.corrupt-<n>), never overwritten.
+        adopted = read_json_or_quarantine(adopted_file, [], component='harvest_mixin')
+        if not isinstance(adopted, list):
+            adopted = []
         existing = {c.get('id') or c.get('capability') for c in adopted}
         new_adoptions = []
         for i in sorted(indices):
@@ -231,8 +231,7 @@ class HarvestMixin:
                 c = {**c, 'impl_status': c.get('impl_status', 'pending')}
                 new_adoptions.append(c)
                 adopted.append(c)
-        adopted_file.parent.mkdir(parents=True, exist_ok=True)
-        adopted_file.write_text(json.dumps(adopted, indent=2, ensure_ascii=False))
+        write_json_atomic(adopted_file, adopted, ensure_ascii=False)
         if new_adoptions:
             common.emit({'type': 'status', 'message': '', 'request_id': request_id})
             common.emit({'type': 'status', 'message': f'Queued {len(new_adoptions)} capability cluster(s) for assimilation:', 'request_id': request_id})
@@ -340,14 +339,12 @@ class HarvestMixin:
             common.emit({'type': 'error', 'error': f'Invalid selection. Use a number (1-{len(findings)}), comma-separated, range (1-5), or "all".', 'request_id': request_id})
             return
 
-        # Load existing adopted list
+        # Load existing adopted list.
+        # An unreadable file is quarantined (.corrupt-<n>), never overwritten.
         adopted_file = common.STATE_DIR / 'assimilation' / 'adopted.json'
-        adopted = []
-        if adopted_file.exists():
-            try:
-                adopted = json.loads(adopted_file.read_text())
-            except Exception as e:
-                _diag('harvest_mixin', 'adopted.json unreadable; existing adoptions will be overwritten by this adopt', error=e)
+        adopted = read_json_or_quarantine(adopted_file, [], component='harvest_mixin')
+        if not isinstance(adopted, list):
+            adopted = []
         existing_names = {a['name'] for a in adopted}
 
         new_adoptions = []
@@ -357,8 +354,7 @@ class HarvestMixin:
                 new_adoptions.append(a)
                 adopted.append(a)
 
-        adopted_file.parent.mkdir(parents=True, exist_ok=True)
-        adopted_file.write_text(json.dumps(adopted, indent=2, ensure_ascii=False))
+        write_json_atomic(adopted_file, adopted, ensure_ascii=False)
 
         if new_adoptions:
             common.emit({'type': 'status', 'message': '', 'request_id': request_id})

@@ -162,7 +162,7 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, RoomsMixin, LibrisMi
         try:
             from charon.automation.batch_orchestrator import list_batches
             for b in list_batches(common.STATE_DIR):
-                if b.get('status') in ('completed', 'partial'):
+                if b.get('status') in ('completed', 'partial', 'failed'):
                     self._notified_batches.add(b.get('id', ''))
         except Exception:
             pass

@@ -143,20 +143,31 @@ def _migrate_flat_entries(state_dir: Path, model: dict) -> dict:
 
 def save_structured(state_dir: Path, model: dict) -> None:
     """Save the structured user model to SQLite and USER.md."""
-    # Save to SQLite
+    # Save to SQLite. Delete + reinsert runs in a single transaction so a
+    # mid-sequence failure rolls back to the prior profile instead of wiping it.
     try:
-        from charon.infra.store_adapter import get_db, user_model_set
+        from charon.infra.store_adapter import get_db
+        from charon.infra.store import _json_dumps
         db = get_db(state_dir)
-        # Clear old entries
-        db.execute("DELETE FROM user_model")
-        db.commit()
-        for cat in CATEGORIES:
-            if model.get(cat):
-                user_model_set(db, cat, model[cat])
-        if model.get('_meta'):
-            user_model_set(db, '_meta', model['_meta'])
+        try:
+            db.execute("DELETE FROM user_model")
+            for cat in CATEGORIES:
+                if model.get(cat):
+                    db.execute(
+                        "INSERT OR REPLACE INTO user_model (key, value) VALUES (?, ?)",
+                        (cat, _json_dumps(model[cat])),
+                    )
+            if model.get('_meta'):
+                db.execute(
+                    "INSERT OR REPLACE INTO user_model (key, value) VALUES (?, ?)",
+                    ('_meta', _json_dumps(model['_meta'])),
+                )
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
     except Exception as e:
-        _diag('user_model_structured', 'user model SQLite save failed; profile changes not persisted', error=e)
+        _diag('user_model_structured', 'user model SQLite save failed; transaction rolled back, prior profile kept', error=e)
 
     # Export to USER.md
     try:

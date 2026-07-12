@@ -118,6 +118,7 @@ def execute_clarify(params: dict, ctx: ToolContext) -> ToolResult:
                     r['status'] = 'answered'
                     r['updated_at'] = _now_iso()
                     _save(state_dir, data)
+                    apply_error: Exception | None = None
                     try:
                         from charon.providers.worker_provider import apply_worker_provider_choice
                         q = str(r.get('question') or '').lower()
@@ -128,7 +129,18 @@ def execute_clarify(params: dict, ctx: ToolContext) -> ToolResult:
                             r['applied_result'] = applied
                             _save(state_dir, data)
                     except Exception as exc:
-                        _diag('clarify_tool', 'apply_worker_provider_choice failed after answer; user told success but provider choice not applied', error=exc, clarification_id=cid)
+                        apply_error = exc
+                        r['apply_error'] = str(exc)
+                        _save(state_dir, data)
+                        _diag('clarify_tool', 'apply_worker_provider_choice failed after answer; provider choice not applied', error=exc, clarification_id=cid)
+                    if apply_error is not None:
+                        return ToolResult(
+                            content=(
+                                f'Clarification answered: {cid}, but applying the provider choice FAILED: '
+                                f'{apply_error}. The worker provider was not switched.'
+                            ),
+                            details=r,
+                        )
                     return ToolResult(content=f'Clarification answered: {cid}', details=r)
             return ToolResult(content=f'Clarification not found: {cid}', is_error=True)
 

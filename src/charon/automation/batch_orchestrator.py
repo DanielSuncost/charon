@@ -267,6 +267,33 @@ def mark_batch_task_failed(state_dir: Path, batch_id: str, task_id: str, error: 
     return batch
 
 
+def mark_batch_failed(state_dir: Path, batch_id: str, error: str) -> dict | None:
+    """Move a whole batch to a terminal 'failed' state.
+
+    Used when the batch worker itself dies: without this, a crash leaves the
+    batch 'running' forever and status polls never terminate. All non-terminal
+    tasks are marked failed with the given error.
+    """
+    batch = get_batch(state_dir, batch_id)
+    if not batch:
+        return None
+    now = _now()
+    for t in batch.get('tasks', []):
+        if t.get('status') not in ('completed', 'failed'):
+            t['status'] = 'failed'
+            t['error'] = t.get('error') or error
+            t['completed_at'] = now
+
+    batch['completed_count'] = sum(1 for t in batch['tasks'] if t.get('status') == 'completed')
+    batch['failed_count'] = sum(1 for t in batch['tasks'] if t.get('status') == 'failed')
+    batch['status'] = 'failed'
+    batch['error'] = error
+    batch['completed_at'] = batch.get('completed_at') or now
+
+    _update_batch(state_dir, batch)
+    return batch
+
+
 def summarize_batch(batch: dict) -> str:
     """Human-readable batch summary."""
     total = batch.get('total', 0)

@@ -131,6 +131,37 @@ def test_save_and_load_roundtrip(tmp_path):
     assert 'snake_case' in md
 
 
+def test_save_structured_failure_rolls_back_to_prior_profile(tmp_path, monkeypatch):
+    """Regression: DELETE + reinsert used to run non-transactionally, so a
+    mid-save failure permanently wiped the profile."""
+    from charon.infra import store as store_mod
+
+    state_dir = tmp_path / 'state'
+    model = load_structured(state_dir)
+    model['corrections'] = ['Keep me']
+    model['style'] = {'verbosity': 'concise'}
+    save_structured(state_dir, model)
+    assert 'Keep me' in load_structured(state_dir)['corrections']
+
+    real_execute = store_mod.DB.execute
+
+    def failing_execute(self, sql, params=()):
+        if sql.lstrip().upper().startswith('INSERT') and 'user_model' in sql:
+            raise RuntimeError('disk exploded mid-save')
+        return real_execute(self, sql, params)
+
+    monkeypatch.setattr(store_mod.DB, 'execute', failing_execute)
+    broken = dict(model)
+    broken['corrections'] = ['New value that never lands']
+    save_structured(state_dir, broken)  # swallowed + recorded to diagnostics
+    monkeypatch.undo()
+
+    loaded = load_structured(state_dir)
+    assert 'Keep me' in loaded['corrections']
+    assert 'New value that never lands' not in loaded['corrections']
+    assert loaded['style'] == {'verbosity': 'concise'}
+
+
 # ── UserModel tool: structured actions ──────────────────────────────
 
 def test_tool_read(tmp_path):

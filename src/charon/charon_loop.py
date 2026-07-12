@@ -21,6 +21,7 @@ from charon.shade import shade_orchestrator as SHADE_ORCH
 from charon.agents import agent_policy as AGENT_POLICY
 from charon.agents import goal_runtime as GOAL_RUNTIME
 from charon.infra import config
+from charon.infra.fileio import read_json_or_quarantine, write_json_atomic
 
 try:
     from charon.infra.diagnostics import record as _diag
@@ -83,18 +84,13 @@ def trace_event(trace_file: Path | None, event: str, **data):
 
 
 def load_queue(queue_file: Path):
-    if not queue_file.exists():
-        return []
-    try:
-        return json.loads(queue_file.read_text())
-    except Exception as e:
-        _diag('charon_loop', 'queue.json unreadable; treating queue as empty this cycle', error=e)
-        return []
+    # Unreadable-but-existing queue.json is quarantined (renamed to
+    # queue.json.corrupt-<n>) so a later save_queue cannot destroy it.
+    return read_json_or_quarantine(queue_file, [], component='charon_loop')
 
 
 def save_queue(queue_file: Path, queue):
-    queue_file.parent.mkdir(parents=True, exist_ok=True)
-    queue_file.write_text(json.dumps(queue, indent=2))
+    write_json_atomic(queue_file, queue)
 
 
 def _sync_task_to_db(state_dir: Path, task: dict) -> None:

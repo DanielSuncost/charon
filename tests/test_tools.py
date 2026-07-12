@@ -231,3 +231,22 @@ class TestToolRegistry:
             assert schema.get('type') == 'object'
             assert 'properties' in schema
             assert 'required' in schema
+
+
+class TestFailedToolImports:
+    """Broken tool imports must be visible, not silently dropped."""
+
+    def test_import_error_skips_quietly(self):
+        from charon import tools as tools_mod
+        before = list(tools_mod.FAILED_TOOL_IMPORTS)
+        tools_mod._record_tool_import_failure('FakeOptional', ImportError('missing extra'))
+        assert tools_mod.FAILED_TOOL_IMPORTS == before  # optional dep: diag only
+
+    def test_real_bug_is_collected(self):
+        from charon import tools as tools_mod
+        entry = {'tool': 'FakeBroken', 'error': 'ValueError: broken at import'}
+        tools_mod._record_tool_import_failure('FakeBroken', ValueError('broken at import'))
+        try:
+            assert entry in tools_mod.FAILED_TOOL_IMPORTS
+        finally:
+            tools_mod.FAILED_TOOL_IMPORTS.remove(entry)

@@ -39,3 +39,29 @@ def test_clarify_answer_applies_worker_provider_choice(tmp_path):
     reg = json.loads((ctx.state_dir / 'model_registry.json').read_text())
     assert reg['shade_provider'] == 'lmstudio'
     assert reg['shade_model'] == 'qwen3-30b-a3b'
+
+
+def test_clarify_answer_reports_provider_apply_failure(tmp_path, monkeypatch):
+    """Regression: the tool used to report plain 'Clarification answered'
+    even when applying the provider choice failed."""
+    from charon.providers import worker_provider
+
+    ctx = _ctx(tmp_path)
+    ask = cl_mod.execute_clarify({
+        'action': 'ask',
+        'question': 'Which provider should I use for worker tasks?',
+        'choices': ['codex', 'lmstudio'],
+    }, ctx)
+    cid = ask.details['clarification_id']
+
+    def _boom(state_dir, choice):
+        raise RuntimeError('registry write failed')
+
+    monkeypatch.setattr(worker_provider, 'apply_worker_provider_choice', _boom)
+
+    ans = cl_mod.execute_clarify({'action': 'answer', 'clarification_id': cid, 'answer': 'codex'}, ctx)
+    assert not ans.is_error  # the answer itself was recorded
+    assert 'FAILED' in ans.content
+    assert 'registry write failed' in ans.content
+    assert ans.details['status'] == 'answered'
+    assert ans.details['apply_error'] == 'registry write failed'

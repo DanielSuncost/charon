@@ -134,3 +134,16 @@ def test_codex_locked_refresh_refreshes_when_disk_also_expired(tmp_path, monkeyp
     assert asyncio.run(provider._ensure_fresh_token()) is True
     assert calls['n'] == 1
     assert not provider._token_expires_soon()
+
+
+def test_codex_unparseable_jwt_fails_closed():
+    # Garbage that claims to be a JWT must count as 'expires soon' so a
+    # refresh is attempted, instead of skipping refresh and 401ing later.
+    provider = HttpxCodexProvider(api_key='aaa.bbbb.ccc')
+    assert provider._token_expires_soon()
+
+
+def test_codex_plain_non_jwt_key_not_treated_as_expiring():
+    # A non-JWT bearer key has no exp claim to check — no refresh churn.
+    provider = HttpxCodexProvider(api_key='plain-access-token')
+    assert not provider._token_expires_soon()
