@@ -16,7 +16,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 DEFAULT_WORKER_MODELS = {
-    'codex': 'gpt-5.4',
+    'codex': 'gpt-5.6',
     'lmstudio': 'qwen3-30b-a3b',
 }
 

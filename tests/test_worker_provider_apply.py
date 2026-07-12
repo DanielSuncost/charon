@@ -31,7 +31,7 @@ def test_apply_codex_worker_provider(tmp_path):
     reg = json.loads((state / 'model_registry.json').read_text())
     assert reg['shade_model_mode'] == 'fixed'
     assert reg['shade_provider'] == 'codex'
-    assert reg['shade_model'] == 'gpt-5.4'
+    assert reg['shade_model'] == 'gpt-5.6'
 
 
 def test_apply_lmstudio_worker_provider(tmp_path):

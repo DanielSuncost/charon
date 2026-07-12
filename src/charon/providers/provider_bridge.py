@@ -78,6 +78,7 @@ CONTEXT_WINDOWS = {
     # GPT-5 family
     'gpt-5': 200000,
     'gpt-5.4': 200000,
+    'gpt-5.6': 200000,
     # Local (conservative defaults)
     'qwen3-30b-a3b': 65536,
 }
