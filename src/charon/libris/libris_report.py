@@ -293,13 +293,19 @@ def _source_citation(src: dict, num: int, verified: dict | None) -> str:
 
 
 _CITE_TOKEN = re.compile(r'\[cite:\s*([a-zA-Z0-9_,\s-]+?)\s*\]')
+# Fallback sweep for any residual cite-shaped token the resolver didn't handle —
+# malformed/placeholder ones an agent may leave in prose, e.g. "[cite:...]" or
+# "[cite:<id>]" (its content survives html-escaping so the strict regex misses
+# it). These must never render as raw text.
+_CITE_RESIDUAL = re.compile(r'\[cite:[^\]\n]{0,120}\]?')
 
 
 def _apply_cite_tokens(html_str: str, src_num: dict) -> str:
     """Replace inline `[cite:src_id]` / `[cite:src_a,src_b]` tokens (written by the
     research/writer agents, who know source_ids but not render-time numbers) with
-    numbered superscript links into the citations panel. Unknown ids are dropped
-    so a stale token never renders as raw text."""
+    numbered superscript links into the citations panel. Unknown ids are dropped,
+    and any residual cite-shaped token (malformed/placeholder) is stripped, so a
+    token never renders as raw text."""
     def repl(m):
         links = []
         for sid in (s.strip() for s in m.group(1).split(',')):
@@ -309,7 +315,8 @@ def _apply_cite_tokens(html_str: str, src_num: dict) -> str:
         if not links:
             return ''
         return '<sup class="cite-ref">[' + ', '.join(links) + ']</sup>'
-    return _CITE_TOKEN.sub(repl, html_str)
+    html_str = _CITE_TOKEN.sub(repl, html_str)
+    return _CITE_RESIDUAL.sub('', html_str)  # drop anything cite-shaped left over
 
 
 def _claim_card(claim: dict, src_num: dict, contested: set[str]) -> str:
