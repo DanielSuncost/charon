@@ -18,17 +18,10 @@ use crate::util::project_root;
 // ── Fleet config ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)] // mirrors backend JSON; not all fields read in the TUI
 pub struct FleetAgent {
     pub name: String,
     #[serde(rename = "type", default)]
     pub agent_type: String,
-    #[serde(default)]
-    pub specialization: String,
-    #[serde(default)]
-    pub project: String,
-    #[serde(default)]
-    pub auto_start: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -187,6 +180,9 @@ impl ByteStream for PtyCapture {
 // original PTY is gone, but its scrollback survives, so the session is shown as
 // exited (replayable) until respawned.
 
+// Constructed only by the daemon (lib target, via `SessionCell::dead`); this
+// module is also compiled into the `charon` bin, where it looks unused.
+#[allow(dead_code)]
 pub struct NullStream;
 
 impl ByteStream for NullStream {
@@ -218,13 +214,11 @@ impl ByteStream for NullStream {
 // This gives us full ANSI output (colors, cursor sequences) unlike the old
 // approach that stripped ANSI. The VTE parser handles the rest.
 
-#[allow(dead_code)] // transport retained for future tmux routing
 pub struct TmuxPane {
     session_name: String,
     rx: mpsc::Receiver<ReaderMsg>,
     eof: bool,
     pane_tty: Option<String>,
-    poll_handle: Option<thread::JoinHandle<()>>,
 }
 
 impl TmuxPane {
@@ -273,8 +267,10 @@ impl TmuxPane {
         let (tx, rx) = mpsc::channel();
         let sname = session_name.to_string();
 
-        // Polling thread: capture-pane with ANSI escapes at high frequency
-        let poll_handle = thread::spawn(move || {
+        // Polling thread: capture-pane with ANSI escapes at high frequency.
+        // Runs detached; it exits on capture failure or when the pane's
+        // receiver is dropped (send fails).
+        thread::spawn(move || {
             // First, do an initial full capture
             let mut last_content = String::new();
 
@@ -321,7 +317,6 @@ impl TmuxPane {
             rx,
             eof: false,
             pane_tty,
-            poll_handle: Some(poll_handle),
         })
     }
 }
@@ -739,12 +734,10 @@ impl ByteStream for CharonPane {
 // ── Discovery — find tmux sessions to attach to ────────────────────────────
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // mirrors discovery JSON; not all fields read
 pub struct DiscoveredSession {
     pub session_name: String,
     pub display_name: String,
     pub agent_type: String,
-    pub transport: String,
     /// Set for remote-boat sessions: the fleet server ID.
     pub server_id: Option<String>,
 }
@@ -788,7 +781,6 @@ pub fn discover_sessions() -> Vec<DiscoveredSession> {
                         session_name: name.to_string(),
                         display_name: name.to_string(),
                         agent_type: "tmux".to_string(),
-                        transport: "tmux".to_string(),
                         server_id: None,
                     });
                 }
@@ -815,7 +807,6 @@ pub fn discover_sessions() -> Vec<DiscoveredSession> {
                     session_name,
                     display_name: format!("{} @ {}", agent.name, server.id),
                     agent_type: agent.agent_type.clone(),
-                    transport: "remote-boat".to_string(),
                     server_id: Some(server.id.clone()),
                 });
             }
@@ -861,7 +852,6 @@ fn parse_boat_registration(content: &str) -> Option<DiscoveredSession> {
         session_name: reg.session,
         display_name: name,
         agent_type: agent.to_string(),
-        transport: "boat".to_string(),
         server_id: None,
     })
 }

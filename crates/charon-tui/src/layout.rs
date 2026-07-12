@@ -4,7 +4,6 @@
 //! area horizontally (side by side) or vertically (stacked) at a ratio. This
 //! module is pure (no rendering/IO) so the geometry is unit-testable; the TUI
 //! converts [`Rect`] to its render rect and drives split/resize from keys+mouse.
-#![allow(dead_code)]
 
 /// A rectangle in terminal cells (mirrors `render::Rect`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -185,13 +184,6 @@ impl Node {
         tree
     }
 
-    /// Which pane's rect contains the point `(px, py)`, given the same `area`/`gap`.
-    pub fn leaf_at(&self, area: Rect, gap: u16, px: u16, py: u16) -> Option<u64> {
-        self.compute(area, gap)
-            .into_iter()
-            .find(|(_, r)| px >= r.x && px < r.x + r.width && py >= r.y && py < r.y + r.height)
-            .map(|(id, _)| id)
-    }
 }
 
 fn split_rect(area: Rect, dir: Dir, ratio: f32, gap: u16) -> (Rect, Rect) {
@@ -278,14 +270,6 @@ mod tests {
         assert_eq!(t, Node::Leaf(1));
         assert_eq!(t.compute(AREA, 0), vec![(1, AREA)]);
         assert_eq!(Node::Leaf(1).remove(1), None);
-    }
-
-    #[test]
-    fn leaf_at_point() {
-        let t = Node::Leaf(1).split(1, 2, Dir::Horizontal, 0.5);
-        assert_eq!(t.leaf_at(AREA, 0, 10, 10), Some(1));
-        assert_eq!(t.leaf_at(AREA, 0, 80, 10), Some(2));
-        assert_eq!(t.leaf_at(AREA, 0, 200, 10), None);
     }
 
     #[test]

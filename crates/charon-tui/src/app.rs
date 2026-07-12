@@ -5,22 +5,6 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Debug)]
-#[allow(dead_code)] // fleet state machine; not all variants reached yet
-pub enum FleetConnectionStatus {
-    Connecting,
-    Connected,
-    Offline,
-}
-
-#[derive(Clone, Debug)]
-#[allow(dead_code)] // mirrors fleet backend JSON; not all fields read in the TUI
-pub struct FleetServerState {
-    pub status: FleetConnectionStatus,
-    pub sessions: Vec<String>, // session IDs on this server
-    pub last_seen: Instant,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
     Chat,
@@ -176,14 +160,12 @@ impl InterAgentState {
     }
 }
 
-#[allow(dead_code)] // some app state is written by the backend bridge but not read here
 pub struct App {
     pub active_view: View,
     pub chat: ChatState,
     pub dashboard: DashboardState,
     pub sessions: SessionsState,
     pub inter_agent: InterAgentState,
-    pub remote_fleet: HashMap<String, FleetServerState>,
 }
 
 impl App {
@@ -194,7 +176,6 @@ impl App {
             dashboard: DashboardState::new(),
             sessions: SessionsState::new(panes),
             inter_agent: InterAgentState::new(),
-            remote_fleet: HashMap::new(),
         })
     }
 }

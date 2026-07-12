@@ -8,10 +8,10 @@
 //! Phase 1 scope: local shell/command sessions, the control protocol handshake,
 //! attach/detach with raw scrollback replay, input/resize, spawn/kill, list.
 //!
-//! Most of this module is the server, exercised by the `charond` binary and the
-//! lib; the `charon` TUI links it too but only calls a few helpers, so it's
-//! allowed to leave the rest "unused" from that crate's narrow view.
-#![allow(dead_code)]
+//! Most of this module is the server, exercised by the `charond` binary via the
+//! lib. The `charon` TUI also uses it through the library crate
+//! (`charon_tui::daemon`) rather than compiling its own copy, so the server
+//! internals are never falsely "dead" in the TUI build.
 
 use std::collections::HashMap;
 use std::fs::File;

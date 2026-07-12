@@ -54,11 +54,8 @@ impl Default for Cell {
 // ── Cursor ──────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[allow(dead_code)] // full DECSCUSR cursor set; not all shapes emitted yet
 pub enum CursorShape {
     Block,
-    Bar,
-    Underline,
 }
 
 #[derive(Clone, Debug)]
@@ -83,10 +80,8 @@ impl Default for Cursor {
 // ── Scrollback line ─────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // soft_wrapped reserved for reflow
 pub struct Line {
     pub cells: Vec<Cell>,
-    pub soft_wrapped: bool, // true if this line was wrapped (not a hard newline)
 }
 
 // ── Pen (current text style applied to new characters) ──────────────────────
@@ -188,6 +183,9 @@ impl TerminalState {
     }
 
     /// The text of row `y` (cells joined, trailing blanks trimmed).
+    /// Used by the daemon's state detection (lib target); unused when this
+    /// module is compiled into the `charon` bin.
+    #[allow(dead_code)]
     pub fn line_text(&self, y: u16) -> String {
         if y >= self.height {
             return String::new();
@@ -200,6 +198,9 @@ impl TerminalState {
     }
 
     /// The text of the line the cursor is on (typically the active prompt/input line).
+    /// Used by the daemon's state detection (lib target); unused when this
+    /// module is compiled into the `charon` bin.
+    #[allow(dead_code)]
     pub fn cursor_line(&self) -> String {
         self.line_text(self.cursor.y)
     }
@@ -313,7 +314,6 @@ impl TerminalState {
             let end = w;
             let line = Line {
                 cells: self.grid[start..end].to_vec(),
-                soft_wrapped: false,
             };
             self.scrollback.push_back(line);
             if self.scrollback.len() > self.max_scrollback {

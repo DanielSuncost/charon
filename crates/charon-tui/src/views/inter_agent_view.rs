@@ -424,11 +424,8 @@ pub(crate) struct GraphPoint {
 }
 
 #[derive(Clone, Copy)]
-#[allow(dead_code)] // layout anchors; left/right reserved for the split view
 pub(crate) struct GraphAnchors {
     center: GraphPoint,
-    left: GraphPoint,
-    right: GraphPoint,
     top: GraphPoint,
     bottom: GraphPoint,
 }
@@ -484,8 +481,6 @@ pub(crate) fn graph_anchors(rect: Rect) -> GraphAnchors {
     let cy = rect.y + rect.height / 2;
     GraphAnchors {
         center: GraphPoint { x: cx, y: cy },
-        left: GraphPoint { x: rect.x.saturating_sub(1), y: cy },
-        right: GraphPoint { x: rect.x + rect.width, y: cy },
         top: GraphPoint { x: cx, y: rect.y.saturating_sub(1) },
         bottom: GraphPoint { x: cx, y: rect.y + rect.height },
     }

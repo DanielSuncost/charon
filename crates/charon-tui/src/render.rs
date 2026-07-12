@@ -212,12 +212,6 @@ pub fn render_terminal<W: Write>(
                 CursorShape::Block => {
                     out.queue(cursor::SetCursorStyle::SteadyBlock)?;
                 }
-                CursorShape::Bar => {
-                    out.queue(cursor::SetCursorStyle::SteadyBar)?;
-                }
-                CursorShape::Underline => {
-                    out.queue(cursor::SetCursorStyle::SteadyUnderScore)?;
-                }
             }
             out.queue(cursor::Show)?;
         }

@@ -9,10 +9,11 @@ use std::thread;
 use base64::Engine;
 use serde_json::json;
 
-#[allow(dead_code)] // protocol enum; not all commands sent by the TUI
 pub enum NativeCommand {
     Input(Vec<u8>),
-    Resize { cols: u16, rows: u16 },
+    /// A client asked for a resize; the requested size itself is delivered
+    /// via [`NativeSessionServer::requested_size`].
+    Resize,
 }
 
 #[derive(Clone)]
@@ -107,7 +108,7 @@ impl NativeSessionServer {
                             if let Ok(mut size) = requested_size_inner.lock() {
                                 *size = Some((cols.max(1), rows.max(1)));
                             }
-                            let _ = tx_inner.send(NativeCommand::Resize { cols, rows });
+                            let _ = tx_inner.send(NativeCommand::Resize);
                         }
                     }
                 });
@@ -119,8 +120,6 @@ impl NativeSessionServer {
         Ok(server)
     }
 
-    #[allow(dead_code)] // accessor kept for the type's interface
-    pub fn session_id(&self) -> &str { &self.session_id }
     pub fn name(&self) -> &str { &self.name }
     pub fn socket_path(&self) -> &std::path::Path { &self.sock_path }
 

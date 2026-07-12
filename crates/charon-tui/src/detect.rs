@@ -3,12 +3,8 @@
 //! Classifies a session into a coarse state from its rendered output and timing.
 //! For Charon-run agents the runtime reports state directly; this layer covers
 //! local/observed sessions (shells and agents we can only watch) so every front-end
-//! can show a consistent `idle / working / blocked / done / exited` indicator.
-//!
-//! `Done`/`Exited` are part of the complete state vocabulary but aren't produced by
-//! the output heuristic (the daemon sets `exited` on EOF; `done` is for
-//! agent-reported status), so the module allows otherwise-dead variants.
-#![allow(dead_code)]
+//! can show a consistent `idle / working / blocked` indicator. (The daemon reports
+//! `exited` separately, as a raw state string set on EOF.)
 
 /// Coarse session state shared with clients via the `status` protocol message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,8 +12,6 @@ pub enum State {
     Idle,
     Working,
     Blocked,
-    Done,
-    Exited,
 }
 
 impl State {
@@ -26,8 +20,6 @@ impl State {
             State::Idle => "idle",
             State::Working => "working",
             State::Blocked => "blocked",
-            State::Done => "done",
-            State::Exited => "exited",
         }
     }
 }
