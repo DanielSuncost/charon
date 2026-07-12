@@ -60,7 +60,9 @@ def test_browser_workflow_automation_runs_steps(tmp_path, monkeypatch):
     started = run_due_automations_once(state_dir, now_ts=time.time() + 5)
     assert doc['automation_id'] in started
 
-    deadline = time.time() + 2
+    # Background daemon thread + two-phase finalize_run write: generous
+    # deadline (was 2s — same race class as the webhook test fixed below).
+    deadline = time.time() + 10
     latest = {}
     while time.time() < deadline:
         latest = get_automation_state(state_dir, doc['automation_id'])
@@ -68,6 +70,7 @@ def test_browser_workflow_automation_runs_steps(tmp_path, monkeypatch):
             break
         time.sleep(0.02)
 
+    assert latest.get('runs_tail'), 'automation run did not record in time'
     assert latest['runs_tail'][-1]['ok'] is True
     steps = latest['runs_tail'][-1]['details']['steps']
     assert len(steps) == 4
