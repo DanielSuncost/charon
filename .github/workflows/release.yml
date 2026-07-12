@@ -44,8 +44,10 @@ jobs:
           cp "$ROOT/charon" "$OUT/charon"
           cp "$ROOT/requirements.txt" "$OUT/requirements.txt"
           cp "$ROOT/pyproject.toml" "$OUT/pyproject.toml"
-          mkdir -p "$OUT/apps/tui/opentui"
-          cp "$ROOT/apps/tui/opentui/chat_backend.py" "$OUT/apps/tui/opentui/chat_backend.py"
+          mkdir -p "$OUT/apps/tui"
+          cp -R "$ROOT/apps/tui/opentui" "$OUT/apps/tui/opentui"
+          cp "$ROOT/apps/tui/process_inspector.py" "$OUT/apps/tui/process_inspector.py"
+          find "$OUT" -name '__pycache__' -type d -exec rm -rf {} +
           cp -R "$ROOT/src" "$OUT/src"
           cp -R "$ROOT/scripts" "$OUT/scripts"
           cp -R "$ROOT/tools" "$OUT/tools"
