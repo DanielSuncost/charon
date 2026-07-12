@@ -492,6 +492,7 @@ def render_html(data: dict, *, title: str = '', verified: dict | None = None,
     epi = epistemic_summary(data['claims'])
     usage = data['usage'] or {}
     cost = usage.get('estimated_cost_usd')
+    basis = str(usage.get('cost_basis') or '').strip().lower()
     toks = usage.get('total_tokens')
     gen = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
@@ -502,8 +503,15 @@ def render_html(data: dict, *, title: str = '', verified: dict | None = None,
     ]
     if toks:
         meta_bits.append(f'<span><b>{int(toks):,}</b> tokens</span>')
-    if cost:
+    # Only show a dollar figure when it reflects real metered billing. Under an
+    # OAuth/subscription (flat-rate) or local (free) provider the per-token $ is
+    # fictional, so label it rather than presenting a made-up cost.
+    if cost and basis == 'metered':
         meta_bits.append(f'<span><b>${float(cost):.2f}</b></span>')
+    elif basis == 'subscription':
+        meta_bits.append('<span>subscription plan · flat-rate</span>')
+    elif basis == 'local':
+        meta_bits.append('<span>local model · no API cost</span>')
     meta_bits.append(f'<span>rendered {gen}</span>')
 
     tiles = (

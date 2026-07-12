@@ -23,6 +23,54 @@ except Exception:  # diagnostics is best-effort and must never block import
         return None
 
 
+# ── billing basis ────────────────────────────────────────────────────────────
+# A per-token dollar estimate is only a real cost under metered API-key billing.
+# OAuth/subscription providers (codex, claude-code) are flat-rate — a per-token $
+# is fictional — and local providers are free. Consumers use the billing mode to
+# suppress or clearly label the estimated_cost_usd figure instead of presenting a
+# made-up dollar amount as if it were billed.
+SUBSCRIPTION_PROVIDERS = frozenset({'codex', 'claude-code'})
+LOCAL_PROVIDERS = frozenset({'lmstudio', 'local'})
+
+
+def provider_billing_mode(provider: str = '', auth: str = '') -> str:
+    """Classify a provider/auth pair as 'metered' (real per-token $), 'subscription'
+    (OAuth flat-rate — $ is notional) or 'local' (free). Unknown defaults to
+    'metered': safer to show a number than to silently hide a genuine cost."""
+    p = (provider or '').strip().lower()
+    a = (auth or '').strip().lower()
+    if p in LOCAL_PROVIDERS:
+        return 'local'
+    if a == 'oauth' or p in SUBSCRIPTION_PROVIDERS:
+        return 'subscription'
+    return 'metered'
+
+
+def cost_is_real(billing_mode: str) -> bool:
+    """True only when a dollar figure reflects actual metered billing."""
+    return (billing_mode or '').strip().lower() == 'metered'
+
+
+def resolve_billing_mode(state_dir: Path) -> str:
+    """Best-effort billing basis for the active provider. Prefers the fixed shade
+    provider (what background/Libris runs actually use), else the onboarding
+    provider + auth. Defaults to 'metered' when nothing is resolvable."""
+    try:
+        reg = load_registry(state_dir)
+        sp = str(reg.get('shade_provider') or '').strip().lower()
+        if sp:
+            mode = provider_billing_mode(sp, 'oauth' if sp in SUBSCRIPTION_PROVIDERS else '')
+            if mode != 'metered':
+                return mode
+    except Exception:
+        pass
+    try:
+        ob = json.loads((Path(state_dir) / 'onboarding.json').read_text(encoding='utf-8'))
+        return provider_billing_mode(str(ob.get('provider') or ''), str(ob.get('provider_auth') or ''))
+    except Exception:
+        return 'metered'
+
+
 DEFAULT_REGISTRY = {
     'shade_model_mode': 'auto',  # 'auto' (pick per task), 'same' (use main model), 'fixed'
     'shade_model': None,         # specific model id when mode='fixed'

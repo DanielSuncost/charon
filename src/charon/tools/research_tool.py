@@ -14,6 +14,21 @@ from pathlib import Path
 from charon.tools import ToolContext, ToolResult
 
 
+def _cost_line(usage: dict) -> str:
+    """A cost line honest about billing basis: a dollar figure only under real
+    metered billing; otherwise a label (subscription flat-rate / local free), so
+    a notional per-token estimate is never shown as a billed cost."""
+    u = usage or {}
+    basis = str(u.get('cost_basis') or '').strip().lower()
+    if basis == 'subscription':
+        return 'Cost basis: subscription plan (flat-rate — not billed per token)'
+    if basis == 'local':
+        return 'Cost basis: local model (no API cost)'
+    if basis == 'metered':
+        return f'Estimated cost: ${float(u.get("estimated_cost_usd") or 0):.4f}'
+    return f'Estimated cost (unverified basis): ${float(u.get("estimated_cost_usd") or 0):.4f}'
+
+
 RESEARCH_TOOL_DEF = {
     'name': 'Research',
     'description': (
@@ -409,7 +424,7 @@ def execute_research(params: dict, ctx: ToolContext) -> ToolResult:
                 content=(
                     f'Usage recorded for {op_id}.\n'
                     f'Total tokens: {(usage.get("usage") or {}).get("total_tokens", 0)}\n'
-                    f'Estimated cost: ${(usage.get("usage") or {}).get("estimated_cost_usd", 0):.4f}\n'
+                    f'{_cost_line(usage.get("usage") or {})}\n'
                     f'Continue running: {bs.get("continue_running")}'
                 ),
                 details=usage,
@@ -429,7 +444,7 @@ def execute_research(params: dict, ctx: ToolContext) -> ToolResult:
                     f'Reasons: {", ".join(status.get("reasons") or []) or "(none)"}\n'
                     f'Wall hours elapsed: {status.get("wall_hours_elapsed")}\n'
                     f'Total tokens: {(status.get("usage") or {}).get("total_tokens", 0)}\n'
-                    f'Estimated cost: ${(status.get("usage") or {}).get("estimated_cost_usd", 0):.4f}'
+                    f'{_cost_line(status.get("usage") or {})}'
                 ),
                 details=status,
             )
