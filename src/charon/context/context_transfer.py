@@ -194,6 +194,7 @@ MODEL_CONTEXT_OVERRIDES: dict[str, int] = {
     'codex-mini-latest': 200000,
     'gpt-5': 200000,
     'gpt-5.4': 200000,
+    'gpt-5.6': 200000,
     'claude-sonnet-4-20250514': 200000,
     'claude-opus-4-20250514': 200000,
     'qwen3-30b-a3b': 65536,
