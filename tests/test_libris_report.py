@@ -128,3 +128,12 @@ def test_render_handles_empty_operation(tmp_path):
     (op_dir / 'operation.json').write_text(json.dumps({'operation_id': 'rop_empty', 'prompt': 'x'}))
     html = lr.render_operation(op_dir)
     assert html.startswith('<!doctype html>')  # degrades gracefully, no crash
+
+
+def test_apply_cite_tokens_strips_residual_malformed():
+    # placeholder/malformed tokens an agent may leave in prose must never render raw
+    out = lr._apply_cite_tokens('Real [cite:src_a]. Placeholder [cite:...]. Template [cite:<id>].',
+                                {'src_a': 1})
+    assert 'href="#src-1"' in out            # the real one resolves
+    assert '[cite:' not in out               # every cite-shaped token gone
+    assert '...' not in out.replace('<sup', '')  # placeholder content stripped
