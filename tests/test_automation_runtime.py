@@ -30,7 +30,11 @@ def test_automation_lifecycle_and_scheduler_run(tmp_path, monkeypatch):
     started = run_due_automations_once(state_dir, now_ts=time.time() + 5)
     assert doc['automation_id'] in started
 
-    deadline = time.time() + 2
+    # The run executes on a background daemon thread and finalize_run writes in
+    # two phases (runs.jsonl append, then the doc update that sets health).
+    # A tight deadline is flaky under full-suite contention (was 2s — same
+    # class of race fixed in test_automation_phase1's webhook test).
+    deadline = time.time() + 10
     latest = {}
     while time.time() < deadline:
         latest = get_automation_state(state_dir, doc['automation_id'])
@@ -38,6 +42,7 @@ def test_automation_lifecycle_and_scheduler_run(tmp_path, monkeypatch):
             break
         time.sleep(0.02)
 
+    assert latest.get('runs_tail'), 'automation run did not record in time'
     assert latest['health'] == 'healthy'
     assert latest['runs_tail'][-1]['ok'] is True
     assert latest['next_run_ts'] > 0
@@ -87,7 +92,9 @@ def test_browser_check_automation(tmp_path, monkeypatch):
     started = run_due_automations_once(state_dir, now_ts=time.time() + 5)
     assert doc['automation_id'] in started
 
-    deadline = time.time() + 2
+    # Background daemon thread + two-phase finalize_run write: wait for both
+    # fields with a generous deadline (was 2s — flaky under contention).
+    deadline = time.time() + 10
     latest = {}
     while time.time() < deadline:
         latest = get_automation_state(state_dir, doc['automation_id'])
@@ -95,6 +102,7 @@ def test_browser_check_automation(tmp_path, monkeypatch):
             break
         time.sleep(0.02)
 
+    assert latest.get('runs_tail'), 'automation run did not record in time'
     assert latest['runs_tail'][-1]['ok'] is True
     assert latest['health'] == 'healthy'
 
@@ -121,7 +129,12 @@ def test_continuous_automation_runs_multiple_iterations(tmp_path, monkeypatch):
     started = run_due_automations_once(state_dir, now_ts=time.time())
     assert doc['automation_id'] in started
 
-    deadline = time.time() + 2.5
+    # The continuous daemon records run 1 immediately, then must sleep at
+    # least 1s (poll_seconds is clamped to >= 1.0) before run 2, so a tight
+    # deadline leaves almost no slack: any wall-clock stall > ~1.5s failed
+    # this test (was 2.5s — reproduced under induced scheduling stalls as
+    # "assert 1 >= 2"). Use a generous ceiling; it only matters on failure.
+    deadline = time.time() + 10
     latest = {}
     while time.time() < deadline:
         latest = get_automation_state(state_dir, doc['automation_id'])
@@ -129,9 +142,15 @@ def test_continuous_automation_runs_multiple_iterations(tmp_path, monkeypatch):
             break
         time.sleep(0.05)
 
-    assert len(latest.get('runs_tail') or []) >= 2
-    assert latest['status'] == 'active'
+    # Stop and join the daemon BEFORE asserting so a failure can't leak a
+    # looping background thread into later tests.
     stopped = request_stop_automation(state_dir, doc['automation_id'])
+    thread = automation_scheduler._continuous_threads.get(doc['automation_id'])
+    if thread is not None:
+        thread.join(timeout=5)
+
+    assert len(latest.get('runs_tail') or []) >= 2, 'continuous automation did not record 2 runs in time'
+    assert latest['status'] == 'active'
     assert stopped['stop_requested'] is True
 
 

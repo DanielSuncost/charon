@@ -51,7 +51,10 @@ def test_browser_workflow_selector_steps(tmp_path, monkeypatch):
     started = run_due_automations_once(state_dir, now_ts=time.time() + 5)
     assert doc['automation_id'] in started
 
-    deadline = time.time() + 2
+    # Background daemon thread records the run; a tight deadline is flaky
+    # under full-suite contention (was 2s — same race class as the webhook
+    # test fixed in test_automation_phase1).
+    deadline = time.time() + 10
     latest = {}
     while time.time() < deadline:
         latest = get_automation_state(state_dir, doc['automation_id'])
@@ -59,6 +62,7 @@ def test_browser_workflow_selector_steps(tmp_path, monkeypatch):
             break
         time.sleep(0.02)
 
+    assert latest.get('runs_tail'), 'automation run did not record in time'
     assert latest['runs_tail'][-1]['ok'] is True
     assert any(c.get('action') == 'input_selector' and c.get('selector') == '#email' for c in calls)
     assert any(c.get('action') == 'click_selector' and c.get('selector') == 'button[type="submit"]' for c in calls)
