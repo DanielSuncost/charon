@@ -15,12 +15,16 @@ def test_norm01_handles_both_scales():
 
 
 def _decide(monkeypatch, *, latest_score, citation_quality, issue_count=0,
-            checkpoint_count=1, revision_round=0, max_ckp=3):
+            checkpoint_count=1, revision_round=0, max_ckp=3,
+            improved_over_best=True, best_score=None):
+    ls = conv._norm01(latest_score)
     metrics = {
         'checkpoint_count': checkpoint_count,
-        'latest_score': conv._norm01(latest_score),
+        'latest_score': ls,
         'prev_score': 0.0,
-        'score_delta': conv._norm01(latest_score),
+        'score_delta': ls,
+        'best_score': conv._norm01(best_score) if best_score is not None else ls,
+        'improved_over_best': improved_over_best,
         'citation_quality': conv._norm01(citation_quality),
         'issue_count': issue_count,
     }
@@ -50,3 +54,42 @@ def test_low_overall_score_triggers_revision(monkeypatch):
     r = _decide(monkeypatch, latest_score=7.0, citation_quality=8.5)
     assert r['should_revise'] is True
     assert 'serious_deficits' in r['reasons']
+
+
+def test_no_improvement_stops_revision_despite_weak_citations(monkeypatch):
+    # A revision round ran (checkpoint 2) but did NOT beat the best; even though
+    # citations are still weak, stop — this is the hill-climb guard that prevents
+    # chasing a subscore into a regression / wasted rounds.
+    r = _decide(monkeypatch, latest_score=7.3, citation_quality=6.5,
+                checkpoint_count=2, improved_over_best=False, best_score=8.1)
+    assert r['should_revise'] is False
+    assert 'no_improvement' in r['reasons']
+
+
+def test_improving_round_keeps_revising(monkeypatch):
+    # Latest round set a new best and citations are still weak -> keep revising.
+    r = _decide(monkeypatch, latest_score=8.1, citation_quality=7.6,
+                checkpoint_count=2, improved_over_best=True, best_score=8.1)
+    assert r['should_revise'] is True
+
+
+def test_regressed_round_is_flagged(monkeypatch):
+    r = _decide(monkeypatch, latest_score=7.3, citation_quality=6.5,
+                checkpoint_count=3, improved_over_best=False, best_score=8.1)
+    assert 'regressed' in r['reasons'] and r['should_revise'] is False
+
+
+def test_metrics_compute_best_and_improvement(tmp_path, monkeypatch):
+    # get_topic_checkpoint_metrics should surface best_score / improved_over_best
+    # from the real checkpoint list.
+    ckpts = [{'score': 7.5, 'iteration': 1, 'checkpoint_id': 'ckp_001', 'metrics': {}, 'critique_path': ''},
+             {'score': 8.1, 'iteration': 2, 'checkpoint_id': 'ckp_002', 'metrics': {}, 'critique_path': ''},
+             {'score': 7.3, 'iteration': 3, 'checkpoint_id': 'ckp_003', 'metrics': {}, 'critique_path': ''}]
+    monkeypatch.setattr(conv, 'list_checkpoints', lambda *a, **k: ckpts, raising=False)
+    import charon.libris.libris_runtime as lrmod
+    monkeypatch.setattr(lrmod, 'list_checkpoints', lambda *a, **k: ckpts)
+    m = conv.get_topic_checkpoint_metrics(tmp_path, tmp_path, 'op', 't')
+    assert m['best_score'] == 0.81            # 8.1 normalized
+    assert m['latest_score'] == 0.73          # regressed round
+    assert m['improved_over_best'] is False   # 0.73 did not beat prev best 0.81
+    assert m['best_checkpoint_id'] == 'ckp_002'

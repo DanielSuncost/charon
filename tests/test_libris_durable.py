@@ -167,3 +167,27 @@ def _reset_delay(tmp_path, dop):
     op = rt.get_operation(tmp_path, dop)
     op["not_before"] = 0.0
     rt._write_op(tmp_path, op)
+
+
+def test_revert_topic_draft_to_best_keeps_best(tmp_path):
+    """keep-if-better: when the latest checkpoint regressed, the working draft is
+    restored to the best-scoring checkpoint's report."""
+    op = lr.init_operation(tmp_path, tmp_path, prompt="p", coordinator_agent_id="c")
+    op_id = op["operation_id"]
+    topic = lr.init_topic(tmp_path, tmp_path, op_id, title="T")
+    slug = topic["slug"]
+    # round 1: good report -> high-scoring checkpoint
+    lr.save_report_draft(tmp_path, tmp_path, op_id, slug, markdown="GOOD draft (round 1)")
+    lr.save_checkpoint(tmp_path, tmp_path, op_id, slug, report_markdown="GOOD draft (round 1)",
+                       critique_markdown="c", summary_markdown="s", score=8.1)
+    # round 2: worse, thinner report -> low-scoring checkpoint, now the draft
+    lr.save_report_draft(tmp_path, tmp_path, op_id, slug, markdown="worse thin draft (round 2)")
+    lr.save_checkpoint(tmp_path, tmp_path, op_id, slug, report_markdown="worse thin draft (round 2)",
+                       critique_markdown="c", summary_markdown="s", score=7.3)
+    draft = lr.topic_dir(tmp_path, tmp_path, op_id, slug) / "draft-report.md"
+    assert "worse thin" in draft.read_text()          # regressed draft is current
+    changed = lr.revert_topic_draft_to_best(tmp_path, tmp_path, op_id, slug)
+    assert changed is True
+    assert "GOOD draft (round 1)" in draft.read_text()  # restored to the best
+    # idempotent: reverting again is a no-op (latest best already in place)
+    assert lr.revert_topic_draft_to_best(tmp_path, tmp_path, op_id, slug) is False

@@ -1619,6 +1619,42 @@ def select_best_checkpoint(state_dir: Path, project_root: Path, operation_id: st
     return best
 
 
+def revert_topic_draft_to_best(state_dir: Path, project_root: Path, operation_id: str,
+                               topic_slug: str) -> bool:
+    """Keep-if-better: make the working draft equal the best-scoring checkpoint's
+    report, so a regressed revision round never leaves a worse draft in place and
+    the next revision starts from the high-water mark. Returns True if the draft
+    was changed. No-op if the latest checkpoint already IS the best."""
+    items = list_checkpoints(state_dir, project_root, operation_id, topic_slug)
+    if len(items) < 2:
+        return False
+    best = select_best_checkpoint(state_dir, project_root, operation_id, topic_slug)
+    latest = items[-1]
+    if not best or best.get('checkpoint_id') == latest.get('checkpoint_id'):
+        return False  # latest is already the best — nothing to revert
+    best_report = _safe_read_text(str(best.get('report_path') or ''))
+    if not best_report.strip():
+        return False
+    tdir = topic_dir(state_dir, project_root, operation_id, topic_slug)
+    draft_path = tdir / 'draft-report.md'
+    if draft_path.exists() and draft_path.read_text(encoding='utf-8', errors='replace') == best_report:
+        return False
+    draft_path.write_text(best_report, encoding='utf-8')
+    _write_json(tdir / 'draft-report.json', {
+        'path': str(draft_path), 'topic_slug': topic_slug,
+        'updated_at': _now_iso(),
+        'note': f"reverted to best checkpoint {best.get('checkpoint_id')} (keep-if-better)",
+    })
+    append_operation_event(state_dir, project_root, operation_id, 'draft_reverted_to_best', {
+        'topic_slug': topic_slug,
+        'best_checkpoint_id': best.get('checkpoint_id'),
+        'best_score': best.get('score'),
+        'discarded_checkpoint_id': latest.get('checkpoint_id'),
+        'discarded_score': latest.get('score'),
+    })
+    return True
+
+
 def _safe_read_text(path_str: str) -> str:
     try:
         p = Path(str(path_str or ''))

@@ -74,18 +74,38 @@ def get_topic_checkpoint_metrics(state_dir: Path, project_root: Path, operation_
     latest_score = _norm01(latest.get('score')) if latest else 0.0
     prev_score = _norm01(prev.get('score')) if prev else 0.0
     score_delta = round(latest_score - prev_score, 4) if latest and prev else latest_score
+    # Best-relative tracking (the hill-climb signal): compare the latest round to
+    # the BEST prior round, not just the immediately previous one. A revision that
+    # scores below the running best is a regression whose draft should be
+    # discarded (keep-if-better), and a round that fails to set a new best means
+    # revision has stopped paying off.
+    scores = [_norm01(it.get('score')) for it in items]
+    best_score = max(scores) if scores else 0.0
+    prev_best = max(scores[:-1]) if len(scores) >= 2 else 0.0
+    latest_is_best = bool(items) and latest_score >= best_score
+    improved_over_best = len(scores) >= 2 and latest_score > prev_best + 1e-9
     # citation_quality is the dimension our judges most consistently ding; surface
     # it (normalised) so the revision loop can target citations specifically.
     latest_metrics = latest.get('metrics') or {}
     citation_quality = _norm01(latest_metrics.get('citation_quality')) if latest_metrics else 0.0
     critique_md = _read_text(str(latest.get('critique_path') or '')) if latest else ''
+    best_ckpt_id = ''
+    if items:
+        best_item = sorted(items, key=lambda it: (_norm01(it.get('score')), int(it.get('iteration') or 0)),
+                           reverse=True)[0]
+        best_ckpt_id = best_item.get('checkpoint_id') or ''
     return {
         'checkpoint_count': len(items),
         'latest_score': latest_score,
         'prev_score': prev_score,
         'score_delta': score_delta,
+        'best_score': best_score,
+        'prev_best': prev_best,
+        'latest_is_best': latest_is_best,
+        'improved_over_best': improved_over_best,
         'citation_quality': citation_quality,
         'latest_checkpoint_id': latest.get('checkpoint_id') or '',
+        'best_checkpoint_id': best_ckpt_id,
         'issue_count': critique_issue_count(critique_md),
     }
 
@@ -114,16 +134,25 @@ def should_request_additional_revision(
     remaining_revision_capacity = max(0, min(2, max_ckp - 1) - revision_round)
 
     latest_score = float(metrics.get('latest_score') or 0.0)
-    score_delta = float(metrics.get('score_delta') or 0.0)
     issue_count = int(metrics.get('issue_count') or 0)
     citation_quality = float(metrics.get('citation_quality') or 0.0)
+    best_score = float(metrics.get('best_score') or 0.0)
+    improved_over_best = bool(metrics.get('improved_over_best'))
 
     # Weak citations are a first-class reason to revise even if the overall score
     # is otherwise acceptable — citation quality is the most common judge ding.
     weak_citations = citation_quality > 0.0 and citation_quality < 0.8
     enough_quality = latest_score >= 0.84 and issue_count <= 1 and not weak_citations
-    plateau = checkpoint_count >= 2 and score_delta < 0.04
     serious_deficits = issue_count >= 2 or latest_score < 0.78 or weak_citations
+
+    # Stop-on-no-improvement (the hill-climb guard): once we have run at least one
+    # revision (>=2 checkpoints) and the latest round FAILED to beat the running
+    # best, further revision has stopped paying off — halt regardless of any
+    # lingering weak-citation signal. This is what prevents chasing a subscore
+    # into a regression. The regressed round's draft is discarded by keep-if-best
+    # (revert_topic_draft_to_best) in the caller.
+    no_improvement = checkpoint_count >= 2 and not improved_over_best
+    regressed = checkpoint_count >= 2 and latest_score < best_score - 1e-9
 
     should_revise = (
         checkpoint_count >= 1 and
@@ -131,7 +160,7 @@ def should_request_additional_revision(
         remaining_revision_capacity > 0 and
         serious_deficits and
         not enough_quality and
-        not plateau
+        not no_improvement
     )
 
     reasons = []
@@ -141,8 +170,11 @@ def should_request_additional_revision(
         reasons.append('weak_citations')
     if enough_quality:
         reasons.append('quality_good_enough')
-    if plateau:
-        reasons.append('score_plateau')
+    if regressed:
+        reasons.append('regressed')
+    if no_improvement:
+        reasons.append('no_improvement')
+        reasons.append('score_plateau')  # alias: keeps existing status-mapping working
     if remaining_checkpoint_slots <= 0:
         reasons.append('checkpoint_budget_exhausted')
     if remaining_revision_capacity <= 0:

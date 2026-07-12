@@ -303,6 +303,15 @@ def _step_supervise(ctx) -> rt.Directive:
         except Exception as e:
             _diag("libris_durable", "revision decision failed", error=e, topic_slug=slug)
 
+        # Keep-if-better: if the latest checkpoint regressed below the best, discard
+        # its draft and restore the best. This also makes the next revision start
+        # from the high-water mark (revise-from-best) — the loop becomes a strict
+        # hill-climb that cannot deliver a worse report than its best.
+        try:
+            lr.revert_topic_draft_to_best(sd, pr, op_id, slug)
+        except Exception as e:
+            _diag("libris_durable", "keep-if-better revert failed", error=e, topic_slug=slug)
+
         if plan.get("should_revise"):
             r = la.spawn_libris_role(sd, pr, role="researcher", operation_id=op_id,
                                      topic_slug=slug, user_goal=prompt, parent_agent_id=coord_id)
