@@ -124,6 +124,10 @@ def _default_usage() -> dict[str, Any]:
         'output_tokens': 0,
         'total_tokens': 0,
         'estimated_cost_usd': 0.0,
+        # Billing basis for estimated_cost_usd: 'metered' (real $), 'subscription'
+        # (OAuth flat-rate — $ is notional/not billed), 'local' (free), or '' when
+        # unknown. Consumers suppress or label the $ figure accordingly.
+        'cost_basis': '',
         'by_model': {},
         'by_role': {},
         'updated_at': _now_iso(),
@@ -1164,6 +1168,14 @@ def record_usage(
     usage['output_tokens'] = _coerce_int(usage.get('output_tokens')) + out
     usage['total_tokens'] = _coerce_int(usage.get('total_tokens')) + total
     usage['estimated_cost_usd'] = round(_coerce_float(usage.get('estimated_cost_usd')) + cost, 6)
+    # Record the billing basis so the $ estimate is never presented as a real cost
+    # under an OAuth/subscription (flat-rate) or local (free) provider.
+    if not usage.get('cost_basis'):
+        try:
+            from charon.providers.model_registry import resolve_billing_mode
+            usage['cost_basis'] = resolve_billing_mode(state_dir)
+        except Exception as exc:
+            _diag('libris_runtime', 'billing-mode resolution failed; cost_basis left unknown', error=exc)
     usage['updated_at'] = _now_iso()
 
     by_model = dict(usage.get('by_model') or {})
