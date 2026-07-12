@@ -65,3 +65,27 @@ def test_automate_commands_listed():
     assert '/automate cron "0 9 * * 1-5" check <url>' in cmds
     assert '/automate continuous every <n> seconds check <url>' in cmds
     assert '/monitor browser every hour <url> expect "text"' in cmds
+
+
+def test_on_setup_complete_emits_step_results(monkeypatch, tmp_path):
+    """Regression: per-step results (including error strings) were collected
+    but never emitted to the UI."""
+    from backend import common
+
+    backend = ChatBackend()
+    emitted = []
+    state = tmp_path / 'state'
+    state.mkdir(parents=True)
+
+    monkeypatch.setattr(common, 'emit', lambda event: emitted.append(event))
+    monkeypatch.setattr(common, 'STATE_DIR', state)
+
+    backend._on_setup_complete({'provider_mode': 'no-provider', 'project': str(tmp_path)}, 'req-setup')
+
+    status_msgs = [e.get('message', '') for e in emitted if e.get('type') == 'status']
+    assert any('No-provider mode' in m for m in status_msgs)
+
+    complete = [e for e in emitted if e.get('type') == 'setup_complete']
+    assert complete
+    assert complete[0]['results']
+    assert any('No-provider mode' in r for r in complete[0]['results'])

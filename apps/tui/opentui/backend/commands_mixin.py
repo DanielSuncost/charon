@@ -1779,10 +1779,14 @@ class CommandsMixin:
                     common.emit({'type': 'error', 'error': str(e), 'request_id': request_id})
                 return
             if command == '/tools' or command == '/tools list':
-                from charon.tools import ALL_TOOL_DEFS
+                from charon.tools import ALL_TOOL_DEFS, FAILED_TOOL_IMPORTS
                 lines = ['Built-in tools:']
                 for t in ALL_TOOL_DEFS:
                     lines.append(f'  {t["name"]}: {t["description"][:60]}')
+                if FAILED_TOOL_IMPORTS:
+                    lines.append('\nBroken tools (import failed, excluded from registry):')
+                    for f in FAILED_TOOL_IMPORTS:
+                        lines.append(f'  {f["tool"]}: {f["error"]}')
                 try:
                     from charon.tools.dynamic_loader import list_dynamic_tools, get_load_errors
                     dynamic = list_dynamic_tools()

@@ -67,6 +67,32 @@ setting. Entry modules that are launched by file path (`charon_loop.py`,
 only grouped into the clusters above. `charon_loop.py` and `charon_gym.py`
 stay at the package root.
 
+## Error handling policy
+
+Charon is a personal daemon: graceful degradation is deliberate. A failed
+subsystem (memory, a provider, an optional tool) must degrade the experience,
+never crash the loop. That policy has hard rules:
+
+- **Every silent fallback records to diagnostics.** Any `except` that swallows
+  an error and continues must call `charon.infra.diagnostics.record` (the
+  guarded `_diag` pattern) so degradation is observable after the fact.
+- **State files are written atomically** (temp file + `os.replace`; see
+  `charon.infra.fileio.write_json_atomic`) so a crash can never leave a
+  half-written file.
+- **Unreadable state is preserved, never overwritten.** If an existing state
+  file cannot be parsed, it is quarantined as `<name>.corrupt-<n>`
+  (`charon.infra.fileio.read_json_or_quarantine`) before the caller falls back
+  to an empty default — a transient read error must never become permanent
+  data loss on the next write. The same principle applies to the SQLite user
+  model: destructive rewrites run in a single transaction and roll back to the
+  prior state on failure.
+- **Auth fails closed.** An auth artifact that cannot be validated (e.g. an
+  unparseable JWT) is treated as expired/invalid and triggers the recovery
+  path (refresh), rather than being optimistically accepted and failing later.
+- **Background work must reach a terminal state.** A crashed worker marks its
+  batch/loop failed so status queries terminate instead of reporting
+  'running' forever.
+
 ## Configuration
 
 All `CHARON_*` environment variables are defined as typed accessors in

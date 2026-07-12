@@ -1013,6 +1013,21 @@ from charon.tools.skills_tool import SKILLS_TOOL_DEF, execute_skills
 from charon.tools.execute_code_tool import EXECUTE_CODE_TOOL_DEF, execute_execute_code
 from charon.tools.clarify_tool import CLARIFY_TOOL_DEF, execute_clarify
 
+# Optional tools may legitimately be missing (uninstalled extras) — that is an
+# ImportError and is only recorded to diagnostics. Any OTHER exception means
+# the tool itself is broken; it is recorded here so status/listing surfaces
+# (e.g. /tools) can show it instead of the tool silently vanishing.
+FAILED_TOOL_IMPORTS: list[dict[str, str]] = []
+
+
+def _record_tool_import_failure(tool_name: str, exc: BaseException) -> None:
+    if isinstance(exc, ImportError):
+        _diag('tools', f'optional tool {tool_name} not loaded (missing dependency)', error=exc, tool=tool_name)
+        return
+    _diag('tools', f'tool {tool_name} failed to import and was dropped from the registry', error=exc, tool=tool_name)
+    FAILED_TOOL_IMPORTS.append({'tool': tool_name, 'error': f'{type(exc).__name__}: {exc}'})
+
+
 # Browser tool — optional, only loads if playwright is installed
 # Suppress stdout/stderr during import (browser-use loads ML models noisily)
 try:
@@ -1021,8 +1036,9 @@ try:
     with _cl.redirect_stdout(_io.StringIO()), _cl.redirect_stderr(_io.StringIO()):
         from charon.tools.browser_tool import BROWSER_TOOL_DEF, execute_browser
     _HAS_BROWSER = True
-except (ImportError, Exception):
+except Exception as _e:
     _HAS_BROWSER = False
+    _record_tool_import_failure('Browser', _e)
 from charon.tools.shade_tool import SHADE_TOOL_DEF, execute_spawn_shade
 from charon.tools.judge_loop_tool import JUDGE_LOOP_TOOL_DEF, execute_judge_loop
 
@@ -1030,15 +1046,17 @@ from charon.tools.judge_loop_tool import JUDGE_LOOP_TOOL_DEF, execute_judge_loop
 try:
     from charon.tools.recall_tool import RECALL_TOOL_DEF, execute_recall
     _HAS_RECALL = True
-except (ImportError, Exception):
+except Exception as _e:
     _HAS_RECALL = False
+    _record_tool_import_failure('Recall', _e)
 
 # Timeline tool — episodic + procedural memory; same deps as Recall
 try:
     from charon.tools.timeline_tool import TIMELINE_TOOL_DEF, execute_timeline
     _HAS_TIMELINE = True
-except (ImportError, Exception):
+except Exception as _e:
     _HAS_TIMELINE = False
+    _record_tool_import_failure('Timeline', _e)
 
 # Fleet tools — optional, only loads if fleet_registry is available
 try:
@@ -1047,8 +1065,9 @@ try:
         execute_fleet_status, execute_fleet_send, execute_fleet_history, execute_fleet_onboard,
     )
     _HAS_FLEET = True
-except (ImportError, Exception):
+except Exception as _e:
     _HAS_FLEET = False
+    _record_tool_import_failure('Fleet', _e)
 
 ALL_TOOL_DEFS = [
     READ_TOOL_DEF, BASH_TOOL_DEF, EDIT_TOOL_DEF, WRITE_TOOL_DEF,

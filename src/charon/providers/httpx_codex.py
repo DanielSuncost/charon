@@ -155,8 +155,10 @@ class HttpxCodexProvider:
             exp = int(payload.get('exp') or 0)
             return bool(exp and exp <= int(time.time()) + skew_seconds)
         except Exception as e:
-            _diag('httpx_codex', 'JWT exp parse failed; assuming token not expiring, refresh skipped', error=e)
-            return False
+            # Fail closed: an unparseable JWT would 401 later anyway, so treat
+            # it as expiring — the refresh attempt is the recoverable path.
+            _diag('httpx_codex', 'JWT exp parse failed; treating token as expiring so a refresh is attempted', error=e)
+            return True
 
     def _save_token_data(self, token_data: dict[str, Any]) -> None:
         if not self._auth_store_path:

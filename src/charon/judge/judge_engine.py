@@ -157,21 +157,16 @@ def _loops_path(state_dir: Path) -> Path:
 
 
 def _load_loops(state_dir: Path) -> list[dict]:
-    p = _loops_path(state_dir)
-    if not p.exists():
-        return []
-    try:
-        data = json.loads(p.read_text())
-        return data if isinstance(data, list) else []
-    except Exception as e:
-        _diag('judge_engine', 'judge_loops.json unreadable; no saved loops loaded', error=e)
-        return []
+    # Unreadable-but-existing judge_loops.json is quarantined (renamed to
+    # judge_loops.json.corrupt-<n>) so a later _save_loops cannot destroy it.
+    from charon.infra.fileio import read_json_or_quarantine
+    data = read_json_or_quarantine(_loops_path(state_dir), [], component='judge_engine')
+    return data if isinstance(data, list) else []
 
 
 def _save_loops(state_dir: Path, loops: list[dict]) -> None:
-    p = _loops_path(state_dir)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(loops, indent=2, default=str))
+    from charon.infra.fileio import write_json_atomic
+    write_json_atomic(_loops_path(state_dir), loops, default=str)
 
 
 def save_loop(state_dir: Path, config: JudgeLoopConfig) -> None:

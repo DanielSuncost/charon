@@ -699,14 +699,19 @@ class SetupMixin:
         except Exception as exc:
             _diag('setup_mixin', 'onboarding sync to SQLite store failed; DB state may lag onboarding.json', error=exc)
 
-        # 4. Emit setup complete event
+        # 4. Report per-step results (including failures) to the UI
+        for line in results:
+            common.emit({'type': 'status', 'message': line, 'request_id': request_id})
+
+        # 5. Emit setup complete event
         common.emit({
             'type': 'setup_complete',
             'provider': provider,
             'model': model,
             'agent': agent_created.get('name') if agent_created else None,
+            'results': results,
             'request_id': request_id,
         })
 
-        # 5. Refresh the UI so dashboard shows the new agent
+        # 6. Refresh the UI so dashboard shows the new agent
         self.handle_refresh(request_id)

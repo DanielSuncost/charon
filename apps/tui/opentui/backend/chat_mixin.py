@@ -636,7 +636,7 @@ class ChatMixin:
                                 has_running = True
 
                             # Notify on completion (only once per batch)
-                            if status in ('completed', 'partial') and bid not in self._notified_batches:
+                            if status in ('completed', 'partial', 'failed') and bid not in self._notified_batches:
                                 self._notified_batches.add(bid)
 
                                 # Build per-task results

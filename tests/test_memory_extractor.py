@@ -5,6 +5,7 @@ from __future__ import annotations
 from charon.memory.memory_extractor import (
     parse_extraction_response,
     extract_facts_sync,
+    extract_facts_from_session,
     _format_session,
     extract_all_sessions,
 )
@@ -142,3 +143,55 @@ class TestExtractAllSessions:
         assert len(facts) == 2
         assert facts[0]["_session_date"] == "2023-05-01"
         assert facts[1]["_session_date"] == "2023-05-15"
+
+
+class TestExtractFactsFromSession:
+    """Regression: the async provider must be called exactly once — the old
+    asyncio.get_event_loop() path failed on py3.12+ and the retry fallback
+    double-called the provider."""
+
+    SESSION = [{"role": "user", "content": "I graduated with a Business Administration degree from State University."}]
+
+    def test_provider_called_once_from_sync_context(self):
+        calls = []
+
+        async def fake_provider(messages, model):
+            calls.append(model)
+            return '[{"content": "User graduated with Business Administration degree", "category": "biographical", "is_static": true}]'
+
+        facts = extract_facts_from_session(
+            self.SESSION, "2023-05-01", provider_call=fake_provider, model="m1",
+        )
+        assert len(facts) == 1
+        assert calls == ["m1"]
+
+    def test_provider_called_once_from_running_event_loop(self):
+        import asyncio
+
+        calls = []
+
+        async def fake_provider(messages, model):
+            calls.append(model)
+            return '[{"content": "User prefers dark mode", "category": "preference", "is_static": true}]'
+
+        async def main():
+            return extract_facts_from_session(
+                self.SESSION, "2023-05-01", provider_call=fake_provider, model="m2",
+            )
+
+        facts = asyncio.run(main())
+        assert len(facts) == 1
+        assert calls == ["m2"]
+
+    def test_provider_failure_yields_no_facts_and_no_retry(self):
+        calls = []
+
+        async def bad_provider(messages, model):
+            calls.append(1)
+            raise RuntimeError("provider down")
+
+        facts = extract_facts_from_session(
+            self.SESSION, "2023-05-01", provider_call=bad_provider,
+        )
+        assert facts == []
+        assert len(calls) == 1

@@ -139,7 +139,12 @@ def execute_spawn_batch(params: dict, ctx: ToolContext) -> ToolResult:
             try:
                 run_batch_worker(ctx.state_dir, batch['id'])
             except Exception as e:
-                _diag('batch_tool', 'background batch worker crashed; batch dies silently while reported as running', error=e, batch_id=str(batch.get('id') or ''))
+                _diag('batch_tool', 'background batch worker crashed; batch marked failed', error=e, batch_id=str(batch.get('id') or ''))
+                try:
+                    from charon.automation.batch_orchestrator import mark_batch_failed
+                    mark_batch_failed(ctx.state_dir, batch['id'], f'batch worker crashed: {e}')
+                except Exception as e2:
+                    _diag('batch_tool', 'failed to mark crashed batch as failed; batch may stay running forever', error=e2, batch_id=str(batch.get('id') or ''))
 
         t = threading.Thread(target=_run, daemon=True)
         t.start()
