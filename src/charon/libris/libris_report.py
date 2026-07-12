@@ -374,7 +374,10 @@ def _scorecard(checkpoints: list[dict]) -> str:
                 pass
             rows += f'<tr><td>{k.replace("_", " ")}</td><td class="score">{html.escape(str(v))}</td><td>{pct}</td></tr>'
     crit = last.get('critique_md') or ''
-    crit_html = f'<details class="critique"><summary>Judge critique</summary>{markdown_to_html(crit)}</details>' if crit else ''
+    # The critique often discusses the citation format using [cite:...] examples;
+    # strip any residual cite-shaped tokens so they don't render raw.
+    crit_html = (f'<details class="critique"><summary>Judge critique</summary>'
+                 f'{_CITE_RESIDUAL.sub("", markdown_to_html(crit))}</details>') if crit else ''
     score_line = f'<div class="score-overall">Overall judge score: <strong>{html.escape(str(score))}</strong></div>' if score is not None else ''
     table = f'<table class="scorecard">{rows}</table>' if rows else ''
     return f'<div class="judge">{score_line}{table}{crit_html}</div>'
