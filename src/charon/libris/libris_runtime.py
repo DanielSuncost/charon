@@ -920,6 +920,7 @@ def save_checkpoint(
         'report_path': str(report_path),
         'critique_path': str(critique_path),
         'summary_path': str(summary_path),
+        'report_chars': len(report_markdown or ''),
         'score': float(score) if score is not None else None,
         'metrics': metrics or {},
         'selected_by_researcher': False,
@@ -1607,16 +1608,98 @@ def infer_candidate_topics(prompt: str, limit: int = 4) -> list[dict[str, Any]]:
     return candidates[:max(1, limit)]
 
 
-def select_best_checkpoint(state_dir: Path, project_root: Path, operation_id: str, topic_slug: str) -> dict[str, Any]:
+def _ckpt_norm_score(item: dict[str, Any]) -> float:
+    """Coerce a checkpoint score to 0-1 (judges emit 0-10; some paths store 0-1)."""
+    try:
+        v = float(item.get('score') or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return v / 10.0 if v > 1.0 else v
+
+
+def _ckpt_report_len(item: dict[str, Any]) -> int:
+    """Length of a checkpoint's report. Prefers the stored report_chars (written
+    at save time); falls back to reading the report file for older checkpoints."""
+    n = item.get('report_chars')
+    if isinstance(n, int) and n > 0:
+        return n
+    return len(_safe_read_text(str(item.get('report_path') or '')))
+
+
+# A later checkpoint must beat the running best by more than this (0-1) for its
+# score gain to justify a large loss of content; within it, a shorter report is
+# treated as a hidden regression rather than an improvement.
+_DEPTH_SCORE_MARGIN = 0.15
+# A revision that keeps less than this fraction of the incumbent's length has
+# "collapsed" — added breadth at the cost of depth the coarse score can't see.
+_DEPTH_COLLAPSE_RATIO = 0.75
+
+
+def select_best_checkpoint(state_dir: Path, project_root: Path, operation_id: str, topic_slug: str,
+                           *, collapse_ratio: float = _DEPTH_COLLAPSE_RATIO,
+                           score_margin: float = _DEPTH_SCORE_MARGIN) -> dict[str, Any]:
+    """Pick the checkpoint to keep, hardened against silent regressions:
+
+    1. Incumbent-preferring tie-break — highest score wins, but on a *tie* the
+       EARLIER checkpoint keeps the crown. A new round must strictly beat the
+       running best to take over, so an equal-scoring rewrite never displaces a
+       proven report (this alone fixes the gut-microbiome regression, where a
+       shorter round tied the score and was wrongly promoted by recency).
+    2. Depth-collapse veto — a later checkpoint that shed a large fraction of its
+       content (<collapse_ratio of the incumbent's length) for only a marginal
+       score gain (<=score_margin over the incumbent) is a hidden regression the
+       judge's coarse score misses; keep the fuller incumbent instead. A genuinely
+       large score jump overrides the veto (we trust a decisive judge).
+    3. Pairwise-rejected checkpoints (demoted by the in-loop pairwise gate,
+       libris_pairwise) are excluded unless every checkpoint is rejected.
+    """
     items = list_checkpoints(state_dir, project_root, operation_id, topic_slug)
     if not items:
         return {}
 
-    def _score(item: dict[str, Any]) -> tuple[float, int]:
-        return (float(item.get('score') or 0.0), int(item.get('iteration') or 0))
+    live = [it for it in items if not it.get('pairwise_rejected')] or items
 
-    best = sorted(items, key=_score, reverse=True)[0]
-    return best
+    # (1) highest score, earliest iteration on a tie
+    ranked = sorted(live, key=lambda it: (_ckpt_norm_score(it), -int(it.get('iteration') or 0)),
+                    reverse=True)
+    leader = ranked[0]
+
+    # (2) depth-collapse veto against the best strictly-earlier checkpoint
+    leader_iter = int(leader.get('iteration') or 0)
+    earlier = [it for it in live if int(it.get('iteration') or 0) < leader_iter]
+    if earlier:
+        incumbent = sorted(earlier, key=lambda it: (_ckpt_norm_score(it), -int(it.get('iteration') or 0)),
+                           reverse=True)[0]
+        inc_len = _ckpt_report_len(incumbent)
+        if (inc_len > 0
+                and _ckpt_report_len(leader) < inc_len * collapse_ratio
+                and _ckpt_norm_score(leader) <= _ckpt_norm_score(incumbent) + score_margin):
+            return incumbent
+    return leader
+
+
+def mark_checkpoint_pairwise_rejected(state_dir: Path, project_root: Path, operation_id: str,
+                                      topic_slug: str, checkpoint_id: str, *,
+                                      winner: str = '', reason: str = '',
+                                      detail: dict[str, Any] | None = None) -> bool:
+    """Demote a checkpoint the in-loop pairwise gate judged worse than the running
+    best. select_best_checkpoint excludes pairwise-rejected checkpoints, so this
+    keeps a higher-scoring-but-actually-worse round from being delivered."""
+    cdir = topic_dir(state_dir, project_root, operation_id, topic_slug) / 'checkpoints'
+    for meta_path in sorted(cdir.glob('*-meta.json')):
+        meta = _read_json(meta_path, {})
+        if meta.get('checkpoint_id') == checkpoint_id:
+            meta['pairwise_rejected'] = True
+            meta['pairwise_verdict'] = {'winner': winner, 'reason': reason, **(detail or {})}
+            _write_json(meta_path, meta)
+            append_operation_event(state_dir, project_root, operation_id, 'checkpoint_pairwise_rejected', {
+                'topic_slug': topic_slug,
+                'checkpoint_id': checkpoint_id,
+                'winner': winner,
+                'reason': reason,
+            })
+            return True
+    return False
 
 
 def revert_topic_draft_to_best(state_dir: Path, project_root: Path, operation_id: str,

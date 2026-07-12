@@ -66,7 +66,7 @@ def _norm01(x: Any) -> float:
 
 
 def get_topic_checkpoint_metrics(state_dir: Path, project_root: Path, operation_id: str, topic_slug: str) -> dict[str, Any]:
-    from charon.libris.libris_runtime import list_checkpoints
+    from charon.libris.libris_runtime import list_checkpoints, select_best_checkpoint
 
     items = list_checkpoints(state_dir, project_root, operation_id, topic_slug)
     latest = items[-1] if items else {}
@@ -82,18 +82,19 @@ def get_topic_checkpoint_metrics(state_dir: Path, project_root: Path, operation_
     scores = [_norm01(it.get('score')) for it in items]
     best_score = max(scores) if scores else 0.0
     prev_best = max(scores[:-1]) if len(scores) >= 2 else 0.0
-    latest_is_best = bool(items) and latest_score >= best_score
     improved_over_best = len(scores) >= 2 and latest_score > prev_best + 1e-9
     # citation_quality is the dimension our judges most consistently ding; surface
     # it (normalised) so the revision loop can target citations specifically.
     latest_metrics = latest.get('metrics') or {}
     citation_quality = _norm01(latest_metrics.get('citation_quality')) if latest_metrics else 0.0
     critique_md = _read_text(str(latest.get('critique_path') or '')) if latest else ''
-    best_ckpt_id = ''
-    if items:
-        best_item = sorted(items, key=lambda it: (_norm01(it.get('score')), int(it.get('iteration') or 0)),
-                           reverse=True)[0]
-        best_ckpt_id = best_item.get('checkpoint_id') or ''
+    # Single source of truth for "which checkpoint we keep": the hardened selector
+    # (incumbent tie-break + depth-collapse veto + pairwise-rejection filter).
+    # latest_is_best reflects the ACTUAL selection, not a raw score comparison, so
+    # a tie or a depth-collapsed round is correctly not counted as the best.
+    best_item = select_best_checkpoint(state_dir, project_root, operation_id, topic_slug) if items else {}
+    best_ckpt_id = best_item.get('checkpoint_id') or ''
+    latest_is_best = bool(items) and best_ckpt_id == (latest.get('checkpoint_id') or '')
     return {
         'checkpoint_count': len(items),
         'latest_score': latest_score,
