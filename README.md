@@ -3,25 +3,26 @@
 </p>
 
 <p align="center">
-  <strong>An agent operating system for your local machine — staffed by long-lived specialist agents.</strong>
+  <strong>A local-first laboratory for agentic systems.</strong>
 </p>
 
 ---
 
-Charon runs a *team* of specialists, not a chat window. You staff your
-machine with persistent agents — a release engineer, a feature engineer,
-a security engineer, an optimization engineer — each with a standing role
-charter, its own memory, and a track record that survives new sessions,
-restarts, and even provider switches: swap the model, keep the engineer.
+Charon is where I work out how autonomous agents should remember,
+coordinate, research, and improve their own output. It runs as a durable
+agent runtime on your own machine, and every capability in it began as a
+question I wanted to answer in running code. It will continue to change
+and grow as my own interests change.
 
-Everything runs locally. Memory is SQLite + local embeddings. No cloud
-services for recall or context. You own the data — and so do your
-specialists: their identity and history live in files on your disk, not
-in a provider's account.
+Everything runs locally. Memory is SQLite plus on-device embeddings, with
+no cloud services for recall or context. You own the data, and so do the
+agents: their identity and history live in files on your disk, not in a
+provider's account. Swap the model and the agent keeps its memory.
 
-This is an active personal project. It works, it has tests, and I use
-it daily. It is not aiming at production stability for other people's
-workflows yet.
+This is an active personal project and a testbed. It works, it has tests,
+and I use it daily, but some experiments are further along than others,
+and I try to report each one honestly, including where it falls short. I
+cannot offer support, but I welcome suggestions and ideas.
 
 ---
 
@@ -47,14 +48,40 @@ More detail: [docs/install.md](docs/install.md)
 
 ---
 
-## What it does
+## What's inside
+
+Each of the following started as a question. They are experiments first
+and features second, and several are reported below with their limits,
+not just their wins.
+
+### Memory
+
+*How should an agent remember across sessions and projects?*
+
+Every conversation is indexed into a local vector database. Agents
+recall past discussions by meaning and learn your preferences once
+across all projects. Retrieval runs fully on-device: bge-base-en-v1.5
+embeddings plus sqlite-vec with an FTS5 keyword index, ~10ms per recall.
+No cloud calls for recall.
+
+What it actually does, measured on a LongMemEval_S subset: plain vector
+search carries it. The FTS5 plus reciprocal-rank-fusion "hybrid" adds
+nothing on abstractive questions, and version-chain update-detection
+gives no measurable retrieval gain. Single-session recall is
+near-saturated; multi-session is the hard case (recall@1 ~0.27).
+Reproduce with the eval scripts under `scripts/experiments/`
+(`exp_memory_ablation.py`, `exp_memeval.py`).
+
+[Three-tier design](docs/three-tier-memory.md)
 
 ### Specialists
+
+*Can an agent hold a durable identity and role across model swaps?*
 
 Long-lived agents with roles you assign. A specialist carries a standing
 charter injected into every task's system prompt, accumulates working
 memory and episodic history under its own agent id, and records decisions
-with rationale that you — or any other agent — can query later: *who
+with rationale that you, or any other agent, can query later: *who
 decided this, when, and why*.
 
 ```
@@ -64,34 +91,18 @@ decided this, when, and why*.
 ```
 
 Built-in templates: `release-engineer`, `feature-engineer`,
-`security-engineer`, `optimization-engineer` — or assign any custom
+`security-engineer`, `optimization-engineer`, or assign any custom
 specialization. Assigned roles are locked: the auto-labeler that tags
 generalist agents by their recent work never overwrites a specialist
 you named.
 
-### Memory
-
-Every conversation is indexed into a local vector database. Agents
-recall past discussions by meaning and learn your preferences once
-across all projects. Retrieval runs fully on-device: bge-base-en-v1.5
-embeddings + sqlite-vec with an FTS5 keyword index, ~10ms per recall.
-No cloud calls for recall.
-
-What it actually does, measured on a LongMemEval_S subset: plain vector
-search carries it. The FTS5 + reciprocal-rank-fusion "hybrid" adds
-nothing on abstractive questions, and version-chain update-detection
-gives no measurable retrieval gain. Single-session recall is
-near-saturated; multi-session is the hard case (recall@1 ≈0.27).
-Reproduce with the eval scripts under `scripts/experiments/`
-(`exp_memory_ablation.py`, `exp_memeval.py`).
-
-[Three-tier design](docs/three-tier-memory.md)
-
 ### Shades
 
+*How do you parallelize agent work without letting workers step on each other?*
+
 Ephemeral worker agents with their own conversation, model, and scope
-restrictions. An agent can spawn shades to do work in parallel —
-each one is prevented from touching files outside its contract.
+restrictions. An agent can spawn shades to do work in parallel, and each
+one is prevented from touching files outside its contract.
 
 ```
 You: "Generate test fixtures for all 6 tool modules"
@@ -103,8 +114,10 @@ independent tasks. Budget limits on tokens, time, and iterations.
 
 ### Judge Loops
 
-Define a quality signal and Charon iterates: snapshot → implement →
-judge → keep-if-better / rollback → repeat → converge. Checkpoints use
+*Can an agent reliably improve its own work against a quality signal?*
+
+Define a quality signal and Charon iterates: snapshot, implement,
+judge, keep-if-better or rollback, repeat, converge. Checkpoints use
 a shadow git repo so your working tree stays clean, and rollback is
 byte-exact (it also removes files a discarded iteration added).
 
@@ -121,7 +134,7 @@ tick  action     score  kept   best
 
 This run uses the deterministic Quantitative judge (the score is the
 program's output, no LLM), so it reproduces exactly. The LLM-implementer
-path — where a model proposes each change — also runs end-to-end: it
+path, where a model proposes each change, also runs end-to-end: it
 reads a frozen checker, edits within its scope, and converges, with the
 frozen-file and rollback gates holding. Demonstrated on small tasks, not
 a benchmarked agent capability.
@@ -133,21 +146,43 @@ a benchmarked agent capability.
 | Aesthetic | LLM scores against a rubric | "Rewrite for clarity" |
 | Composite | Weighted mix | "Fast, correct, and readable" |
 
-### Session Grid
+### Autonomous Research (Libris)
 
-A terminal multiplexer built into the TUI. Each cell is a real VTE
-terminal emulator. You see rendered output and type into any session
-without leaving Charon.
+*Can a swarm of agents produce genuinely-cited research, not confident prose?*
 
-Sessions can be native Charon agents, existing tmux sessions, or
-external agents (Claude Code, Hermes, pi, Codex) wrapped via
-Charon's Boat and connected over Unix sockets.
-
-```bash
-charons-boat wrap --name review -- pi   # appears in grid
+```
+/libris research the role of reinforcement learning in the brain during skill vs language learning
 ```
 
+Libris is a multi-agent research swarm: a coordinator scouts topics,
+researchers investigate them against the live scholarly literature
+(arXiv, Semantic Scholar, OpenAlex), and a judge critiques the drafts.
+Every claim is graded for **confidence** and **evidence strength**, and
+contradicting evidence is surfaced rather than smoothed over. Results
+render to a self-contained, citation-linked HTML report.
+
+**See real output:** three fully-cited demo reports on frontier science
+questions (RL in the brain, gut microbiome and neurodegeneration,
+epigenetic aging clocks), with every source cross-checked against
+CrossRef and arXiv. Browse them rendered at the
+[**demos index**](https://raw.githack.com/DanielSuncost/charon/master/demos/libris/index.html),
+or see [demos/libris/](demos/libris/).
+
+### Autonomous Work
+
+*How far can an agent get on a goal it set for itself?*
+
+```
+/autonomous on
+```
+
+The agent proposes goals inferred from conversation, plans steps, works
+through them with git checkpoints, and verifies completion. Set time
+and token budgets. Interrupt anytime.
+
 ### Conversation Rooms
+
+*What happens when several agents deliberate instead of one answering?*
 
 Multi-agent conversation rooms where two or more agents discuss a
 topic with structured turn-taking. Charon manages orchestration and
@@ -162,6 +197,8 @@ architect/reviewer, pair-programmers.
 
 ### Remote Coordination (Harbor)
 
+*Does coordination hold up when the agents are on different machines?*
+
 Dispatch structured tasks to agents on remote machines. The local
 Charon (the "Harbor") builds a context packet from memory and project
 knowledge, sends it over SSH, and the remote worker executes it.
@@ -172,36 +209,25 @@ flow back and get indexed locally.
 /voyage dispatch gpu-box agent-01 "run the full benchmark suite"
 ```
 
-### Autonomous Work
+### Session Grid
 
+*The substrate: one terminal that holds every agent and session.*
+
+A terminal multiplexer built into the TUI. Each cell is a real VTE
+terminal emulator. You see rendered output and type into any session
+without leaving Charon.
+
+Sessions can be native Charon agents, existing tmux sessions, or
+external agents (Claude Code, Hermes, pi, Codex) wrapped via
+Charon's Boat and connected over Unix sockets.
+
+```bash
+charons-boat wrap --name review -- pi   # appears in grid
 ```
-/autonomous on
-```
-
-The agent proposes goals inferred from conversation, plans steps, works
-through them with git checkpoints, and verifies completion. Set time
-and token budgets. Interrupt anytime.
-
-### Autonomous Research (Libris)
-
-```
-/libris research the role of reinforcement learning in the brain during skill vs language learning
-```
-
-Libris is a multi-agent research swarm: a coordinator scouts topics,
-researchers investigate them against the live scholarly literature
-(arXiv, Semantic Scholar, OpenAlex), and a judge critiques the drafts.
-Every claim is graded for **confidence** and **evidence strength**, and
-contradicting evidence is surfaced rather than smoothed over. Results
-render to a self-contained, citation-linked HTML report.
-
-**See real output:** three fully-cited demo reports on frontier science
-questions (RL in the brain, gut microbiome & neurodegeneration, epigenetic
-aging clocks) — 27/27 citations verified against CrossRef. Browse them
-rendered at the [**demos index**](https://raw.githack.com/DanielSuncost/charon/master/demos/libris/index.html),
-or see [demos/libris/](demos/libris/).
 
 ### Multi-Provider
+
+*Keep the agent, swap the brain.*
 
 ```bash
 charon claude-code      # Anthropic
@@ -210,7 +236,7 @@ charon lmstudio         # local models
 ```
 
 Switch mid-session with `/provider`. Separate provider config for
-shades. All provider communication uses raw httpx — no SDK
+shades. All provider communication uses raw httpx, with no SDK
 dependencies.
 
 ### Tools
@@ -291,7 +317,7 @@ full list.
 | [Procedures & Judge Loops](docs/plans/procedure-learning-and-optimization-loops.md) | Iterative optimization with pluggable scoring |
 | [Autonomous Work](docs/plans/autonomous-goal-driven-work.md) | Goal-driven self-assignment |
 | [Remote Agent Teams](docs/remote-agent-teams.md) | Fleet configuration, team roles, Harbor dispatch |
-| [Capability Roadmap](docs/plans/capability-roadmap.md) | Prioritized feature plan (P0–P3) |
+| [Capability Roadmap](docs/plans/capability-roadmap.md) | Prioritized feature plan (P0 to P3) |
 | [Master Plan](docs/plans/MASTER_PLAN.md) | Architecture and build phases |
 
 ---
