@@ -19,7 +19,7 @@ import asyncio
 import json
 import re
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 try:
     from charon.infra.diagnostics import record as _diag

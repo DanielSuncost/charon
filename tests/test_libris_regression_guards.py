@@ -134,8 +134,10 @@ def test_gate_cheap_skips_when_latest_not_selected(monkeypatch):
 def test_gate_demotes_latest_when_it_loses(monkeypatch, tmp_path):
     # Latest scored highest (so it WOULD be delivered) but loses the pairwise ->
     # mark rejected + revert draft.
-    old = tmp_path / 'old.md'; old.write_text('OLD BETTER full report')
-    new = tmp_path / 'new.md'; new.write_text('NEW worse thin report')
+    old = tmp_path / 'old.md'
+    old.write_text('OLD BETTER full report')
+    new = tmp_path / 'new.md'
+    new.write_text('NEW worse thin report')
     cks = [{'checkpoint_id': 'ckp_002', 'iteration': 2, 'score': 8.1, 'report_chars': 15000,
             'report_path': str(old)},
            {'checkpoint_id': 'ckp_003', 'iteration': 3, 'score': 8.4, 'report_chars': 15100,
