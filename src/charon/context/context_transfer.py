@@ -1008,6 +1008,315 @@ def apply_transfer_to_engine(engine: Any, bundle: dict[str, Any]) -> None:
     engine.transfer_compiled = compiled
 
 
+# ── Full-fidelity checkpoints (IPMS swap primitive) ─────────────────────────
+#
+# The transfer bundle above is a deliberately lossy, budget-aware handoff for
+# interactive provider switching: it compiles state down to the target model's
+# context budget and announces itself via a [CONTEXT TRANSFER] block. The
+# functions below are the opposite: a verbatim snapshot of the agent-visible
+# state (system prompt + full untruncated message history + backbone metadata)
+# at an arbitrary turn boundary, and a *silent* resume that changes only the
+# backbone. IPMS measures identity persistence across a model swap, so any
+# state loss or swap announcement at the boundary would confound the
+# measurement. Checkpoints should be taken at turn boundaries; orphaned tool
+# calls in a mid-turn snapshot are repaired at resume-assembly time by the
+# engine, with synthetic error results.
+#
+# Fidelity note: the checkpoint JSON preserves message content verbatim
+# (including list-of-block content). When a resume seeds an engine's lossless
+# store, the store's own persistence flattens block content to plain text —
+# acceptable for text-only trajectories, which is all IPMS v1 runs.
+
+
+def _checkpoint_id() -> str:
+    return f"ckpt-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+
+
+def create_checkpoint(
+    *,
+    state_dir: Path | str,
+    messages: list[Message],
+    system_prompt: str,
+    source_provider: str,
+    source_model: str,
+    session_id: str = '',
+    agent_id: str = '',
+    thinking_level: str = 'off',
+    max_tokens: int | None = None,
+    tools: list[str] | None = None,
+    agent: dict[str, Any] | None = None,
+    label: str = '',
+) -> dict[str, Any]:
+    """Snapshot full agent-visible state at an arbitrary turn boundary.
+
+    Writes ``{state_dir}/transfers/{checkpoint_id}.json`` and returns the
+    checkpoint dict. ``agent`` may carry the agent record (charter,
+    specialization) for provenance and scaffold ablations at resume time.
+    ``max_tokens`` and ``tools`` (tool names) record the source engine's
+    generation-time scaffold so a resume can detect scaffold drift that
+    would masquerade as identity drift.
+    """
+    state_dir = Path(state_dir)
+    checkpoint = {
+        'id': _checkpoint_id(),
+        'kind': 'ipms_checkpoint',
+        'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'label': label,
+        'source': {
+            'provider': source_provider,
+            'model': source_model,
+            'session_id': session_id,
+            'agent_id': agent_id,
+            'thinking_level': thinking_level,
+            'max_tokens': max_tokens,
+            'tools': sorted(tools) if tools is not None else None,
+        },
+        'system_prompt': system_prompt,
+        'messages': _serialize_messages(messages, truncate=False),
+        'agent': dict(agent) if agent else {},
+    }
+    path = _xfer_dir(state_dir) / f"{checkpoint['id']}.json"
+    path.write_text(json.dumps(checkpoint, indent=2, ensure_ascii=False), encoding='utf-8')
+    record_transfer_event(state_dir, {
+        'ts': checkpoint['created_at'],
+        'type': 'checkpoint_created',
+        'checkpoint_id': checkpoint['id'],
+        'source_provider': source_provider,
+        'source_model': source_model,
+        'session_id': session_id,
+        'message_count': len(checkpoint['messages']),
+    })
+    return checkpoint
+
+
+def create_checkpoint_from_engine(
+    engine: Any,
+    *,
+    state_dir: Path | str | None = None,
+    session_id: str = '',
+    agent: dict[str, Any] | None = None,
+    label: str = '',
+) -> dict[str, Any]:
+    """Snapshot a live ConversationEngine.
+
+    ``state_dir`` falls back to ``engine.state_dir``; engines constructed
+    without one (to keep the lossless store inactive) must pass it explicitly.
+
+    Caveat: this captures ``engine.messages`` — the raw, never-compacted
+    in-memory history. For an engine whose lossless store has already
+    compacted (summaries in the context window), the model's assembled view
+    differs from this snapshot. IPMS v1 runs store-inactive engines with
+    auto_compact off, where the two are identical by construction.
+    """
+    target_dir = Path(state_dir) if state_dir else getattr(engine, 'state_dir', None)
+    if target_dir is None:
+        raise ValueError('create_checkpoint_from_engine requires state_dir when the engine has none')
+    tool_names = [
+        str(t.get('name', '')) for t in (getattr(engine, 'tools', None) or [])
+        if isinstance(t, dict)
+    ]
+    return create_checkpoint(
+        state_dir=target_dir,
+        messages=list(engine.messages),
+        system_prompt=engine.system_prompt,
+        source_provider=getattr(engine, 'provider_name', '') or '',
+        source_model=getattr(getattr(engine, 'model', None), 'model_id', '') or '',
+        session_id=session_id,
+        agent_id=getattr(engine, 'agent_id', '') or '',
+        thinking_level=getattr(engine, 'thinking_level', 'off') or 'off',
+        max_tokens=getattr(engine, 'max_tokens', None),
+        tools=tool_names,
+        agent=agent,
+        label=label,
+    )
+
+
+def load_checkpoint(state_dir: Path | str, checkpoint_id: str) -> dict[str, Any] | None:
+    path = _xfer_dir(Path(state_dir)) / f'{checkpoint_id}.json'
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+        return data if isinstance(data, dict) else None
+    except Exception as e:
+        _diag('context_transfer', 'checkpoint file unreadable', error=e)
+        return None
+
+
+def checkpoint_messages(checkpoint: dict[str, Any], *, strip_thinking: bool = True) -> list[Message]:
+    """Deserialize a checkpoint's messages.
+
+    ``strip_thinking`` defaults on: replayed thinking blocks are rejected by
+    some providers (Anthropic requires signatures on replayed thinking), and
+    thinking is not part of the agent-visible state under test anyway.
+    """
+    from charon.conversation.conversation_store import dict_to_message
+
+    out: list[Message] = []
+    for item in checkpoint.get('messages', []) or []:
+        msg = dict_to_message(item)
+        if strip_thinking:
+            msg.thinking = ''
+        out.append(msg)
+    return out
+
+
+def _message_matches_stored(msg: Message, stored: Any) -> bool:
+    """Compare a checkpoint message against a StoredMessage.
+
+    Content is compared through the store's own flattening so list-of-block
+    content matches what persist_message wrote.
+    """
+    from charon.context.context_store import _message_content_text
+
+    if msg.role != stored.role:
+        return False
+    if _message_content_text(msg) != (stored.content or ''):
+        return False
+    if (msg.tool_call_id or None) != (stored.tool_call_id or None):
+        return False
+    restored_tc = [(tc.id, tc.name) for tc in (msg.tool_calls or [])]
+    stored_tc = [(tc.id, tc.name) for tc in (stored.tool_calls or [])]
+    return restored_tc == stored_tc
+
+
+def _reconcile_store_for_resume(engine: Any, restored: list[Message]) -> None:
+    """Make the lossless store agree with the checkpoint, or raise.
+
+    Runs BEFORE any engine mutation. The store matters because DB assembly
+    overrides in-memory messages at the next LLM call: a store holding a
+    different same-shaped trajectory, a partially imported one, or a context
+    window out of sync with the raw rows (after reset() or compaction) would
+    all silently swap in the wrong history.
+    """
+    from charon.context.context_store import ContextStore
+
+    db = engine._ctx_db
+    agent_id = engine.agent_id
+    existing = ContextStore.message_count(db, agent_id)
+
+    if existing == 0:
+        if not restored:
+            return
+        imported = engine.import_into_store(restored)
+        if imported != len(restored):
+            raise RuntimeError(
+                'apply_checkpoint_to_engine: seeding the lossless store for '
+                f'agent_id {agent_id!r} failed ({imported} of {len(restored)} '
+                'messages imported); the store may now hold a partial prefix — '
+                'resume into a fresh agent_id/state_dir'
+            )
+        return
+
+    stored = ContextStore.get_messages_for_agent(db, agent_id, limit=10000)
+    if len(stored) != len(restored) or not all(
+        _message_matches_stored(m, s) for m, s in zip(restored, stored, strict=False)
+    ):
+        raise RuntimeError(
+            'apply_checkpoint_to_engine: agent_id '
+            f'{agent_id!r} already has a divergent history in the lossless '
+            f'store ({len(stored)} messages vs checkpoint {len(restored)}); '
+            'resume into a fresh agent_id/state_dir'
+        )
+
+    # Raw rows match; the context window must still be the verbatim view
+    # (reset() clears it; compaction swaps ranges for summaries).
+    window = ContextStore.get_context_window(db, agent_id)
+    message_items = [i for i in window if i.item_type == 'message']
+    if len(message_items) != len(restored) or len(window) != len(message_items):
+        raise RuntimeError(
+            'apply_checkpoint_to_engine: the lossless context window for '
+            f'agent_id {agent_id!r} is no longer the verbatim history '
+            f'({len(window)} window items, {len(message_items)} messages, '
+            f'checkpoint {len(restored)}) — it was reset or compacted; '
+            'resume into a fresh agent_id/state_dir'
+        )
+
+
+def apply_checkpoint_to_engine(
+    engine: Any,
+    checkpoint: dict[str, Any],
+    *,
+    strip_thinking: bool = True,
+    system_prompt_override: str | None = None,
+) -> int:
+    """Silent full-fidelity resume: only the backbone differs.
+
+    Replaces the engine's system prompt with the checkpoint's verbatim (no
+    [CONTEXT TRANSFER] block is added) and restores the full message history.
+    ``system_prompt_override`` substitutes a different prompt for scaffold
+    ablations (memory-off / charter-stripped conditions). Sets
+    ``engine.auto_compact = False``: a full-fidelity resume is incompatible
+    with in-place history rewriting before the next turn.
+
+    If the engine has an active lossless store, the store is seeded (or
+    verified message-by-message when the agent_id already has history) BEFORE
+    the engine is mutated; a divergent, partially seeded, reset, or compacted
+    store raises RuntimeError rather than silently measuring the wrong
+    history.
+
+    Generation-time scaffold drift (thinking_level / max_tokens / tool set
+    differing from the checkpoint source) is detected and recorded in
+    ``engine.resume_checkpoint['scaffold_mismatches']`` and the transfer
+    event — callers doing controlled measurement should require it empty.
+
+    Returns the number of restored messages.
+    """
+    restored = checkpoint_messages(checkpoint, strip_thinking=strip_thinking)
+
+    if getattr(engine, 'has_lossless_store', False) and getattr(engine, 'agent_id', ''):
+        _reconcile_store_for_resume(engine, restored)
+
+    if system_prompt_override is not None:
+        engine.system_prompt = system_prompt_override
+    else:
+        prompt = checkpoint.get('system_prompt', '')
+        if prompt:
+            engine.system_prompt = prompt
+
+    engine.messages = restored
+    engine.auto_compact = False
+
+    source = dict(checkpoint.get('source', {}) or {})
+    mismatches: list[str] = []
+    ck_thinking = source.get('thinking_level')
+    if ck_thinking is not None and getattr(engine, 'thinking_level', None) != ck_thinking:
+        mismatches.append(
+            f'thinking_level: source={ck_thinking!r} target={getattr(engine, "thinking_level", None)!r}')
+    ck_max_tokens = source.get('max_tokens')
+    if ck_max_tokens is not None and getattr(engine, 'max_tokens', None) != ck_max_tokens:
+        mismatches.append(
+            f'max_tokens: source={ck_max_tokens} target={getattr(engine, "max_tokens", None)}')
+    ck_tools = source.get('tools')
+    if ck_tools is not None:
+        target_tools = sorted(
+            str(t.get('name', '')) for t in (getattr(engine, 'tools', None) or [])
+            if isinstance(t, dict)
+        )
+        if target_tools != list(ck_tools):
+            mismatches.append(f'tools: source={list(ck_tools)} target={target_tools}')
+
+    engine.resume_checkpoint = {
+        'id': checkpoint.get('id', ''),
+        'source': source,
+        'scaffold_mismatches': mismatches,
+    }
+
+    if getattr(engine, 'state_dir', None):
+        record_transfer_event(engine.state_dir, {
+            'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            'type': 'checkpoint_resumed',
+            'checkpoint_id': checkpoint.get('id', ''),
+            'source_provider': (checkpoint.get('source', {}) or {}).get('provider', ''),
+            'source_model': (checkpoint.get('source', {}) or {}).get('model', ''),
+            'target_provider': getattr(engine, 'provider_name', '') or '',
+            'target_model': getattr(getattr(engine, 'model', None), 'model_id', '') or '',
+            'message_count': len(restored),
+            'scaffold_mismatches': mismatches,
+        })
+    return len(restored)
+
+
 def record_pending_transfer(state_dir: Path | str, bundle: dict[str, Any]) -> None:
     path = Path(state_dir) / 'pending_transfer.json'
     path.write_text(json.dumps(bundle, indent=2, ensure_ascii=False), encoding='utf-8')
