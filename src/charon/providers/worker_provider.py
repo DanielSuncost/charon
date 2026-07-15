@@ -16,7 +16,9 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 DEFAULT_WORKER_MODELS = {
-    'codex': 'gpt-5.6',
+    # gpt-5.6 was dropped from ChatGPT-account Codex (HTTP 400 "model is not
+    # supported") in July 2026; gpt-5.5 is the strongest accepted id.
+    'codex': 'gpt-5.5',
     'lmstudio': 'qwen3-30b-a3b',
 }
 
