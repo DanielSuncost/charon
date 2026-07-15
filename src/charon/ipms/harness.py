@@ -68,6 +68,8 @@ class Probe:
     kind: str  # 'continuity' | 'consistency' | 'decision' | 'persona' | 'preference'
     text: str
     expected: str | None = None
+    pre_text: str | None = None  # original phrasing, asked pre-swap on the prefix
+                                 # model (text is then the paraphrase variant)
     meta: dict[str, Any] = field(default_factory=dict)
 
 
@@ -103,6 +105,7 @@ class PairResult:
     suffix: str
     checkpoint_id: str
     transcript: list[dict[str, Any]]
+    pre_responses: list[dict[str, Any]]
     conditions: dict[str, ConditionResult]
     billing_mode: str
     started_at: str
@@ -212,22 +215,19 @@ async def _run_condition(
             condition, prefix=prefix, suffix=suffix, spec=spec,
             checkpoint=checkpoint, prefix_messages=prefix_messages,
         )
+        base = {'probe_id': probe.id, 'kind': probe.kind}
+        if probe.expected is not None:
+            base['expected'] = probe.expected
         try:
             reply, usage = await _submit_checked(engine, probe.text)
         except IpmsRunError as e:
             _diag('ipms', f'probe failed under condition {condition}', error=e)
-            responses.append({
-                'probe_id': probe.id, 'kind': probe.kind,
-                'response': '', 'error': str(e),
-            })
+            responses.append({**base, 'response': '', 'error': str(e)})
             error = error or str(e)
             continue
         usage_total['input_tokens'] += usage['input_tokens']
         usage_total['output_tokens'] += usage['output_tokens']
-        responses.append({
-            'probe_id': probe.id, 'kind': probe.kind,
-            'response': reply, 'usage': usage,
-        })
+        responses.append({**base, 'response': reply, 'usage': usage})
     return ConditionResult(
         condition=condition,
         prefix_model=prefix.name,
@@ -264,6 +264,29 @@ async def _run_pair_async(
     )
     prefix_messages = _fork_messages(engine_a.messages)
 
+    # Pre-pass: probes with an original-phrasing variant are asked to the
+    # PREFIX model at the checkpoint (each on an isolated fork). These are
+    # the "pre" responses paraphrase-matched probes pair against (§4 Cons).
+    pre_responses: list[dict[str, Any]] = []
+    for probe in spec.probes:
+        if probe.pre_text is None:
+            continue
+        fork = _make_engine(prefix, spec.system_prompt, spec.max_tokens)
+        fork.messages = _fork_messages(prefix_messages)
+        try:
+            reply, usage = await _submit_checked(fork, probe.pre_text)
+        except IpmsRunError as e:
+            _diag('ipms', 'pre-pass probe failed', error=e)
+            pre_responses.append({
+                'probe_id': probe.id, 'kind': probe.kind,
+                'response': '', 'error': str(e),
+            })
+            continue
+        pre_responses.append({
+            'probe_id': probe.id, 'kind': probe.kind,
+            'response': reply, 'usage': usage,
+        })
+
     results: dict[str, ConditionResult] = {}
     for condition in conditions:
         results[condition] = await _run_condition(
@@ -285,6 +308,7 @@ async def _run_pair_async(
         suffix=suffix.name,
         checkpoint_id=checkpoint['id'],
         transcript=transcript,
+        pre_responses=pre_responses,
         conditions=results,
         billing_mode=billing_mode,
         started_at=started,
@@ -322,6 +346,7 @@ def _persist_pair(run_dir: Path, pair: PairResult) -> Path:
         'started_at': pair.started_at,
         'finished_at': pair.finished_at,
         'transcript': pair.transcript,
+        'pre_responses': pair.pre_responses,
         'conditions': {
             name: {
                 'condition': c.condition,
