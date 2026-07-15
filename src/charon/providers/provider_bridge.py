@@ -78,7 +78,13 @@ CONTEXT_WINDOWS = {
     # GPT-5 family
     'gpt-5': 200000,
     'gpt-5.4': 200000,
+    'gpt-5.5': 200000,
     'gpt-5.6': 200000,
+    # GPT-5.6 variant line (Jul 2026: bare 'gpt-5.6' was replaced by
+    # sol/terra/luna on the ChatGPT-account Codex backend)
+    'gpt-5.6-sol': 200000,
+    'gpt-5.6-terra': 200000,
+    'gpt-5.6-luna': 200000,
     # Local (conservative defaults)
     'qwen3-30b-a3b': 65536,
 }
