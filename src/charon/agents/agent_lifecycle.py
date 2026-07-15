@@ -101,15 +101,25 @@ def _use_store() -> bool:
     return _HAS_STORE and not config.no_sqlite()
 
 
+def _state_dir() -> Path:
+    """Effective state dir, honoring CHARON_STATE_DIR at call time.
+
+    Falls back to the repo-local module constant when the env override is
+    unset, so single-user runs are unchanged while headless/sandboxed runs
+    with CHARON_STATE_DIR set write agents where the daemon reads them.
+    """
+    return config.state_dir() or STATE_DIR
+
+
 def load_agents(state_dir: Path | None = None) -> list[dict]:
-    sd = state_dir or STATE_DIR
+    sd = state_dir or _state_dir()
     if _use_store():
         try:
             db = _get_db(sd)
             return _db_agent_list(db)
         except Exception as e:
             _diag('agent_lifecycle', 'SQLite agent list failed; falling back to agents.json', error=e)
-    af = (sd / 'agents.json') if state_dir else AGENTS_FILE
+    af = sd / 'agents.json'
     if not af.exists():
         return []
     try:
@@ -120,10 +130,10 @@ def load_agents(state_dir: Path | None = None) -> list[dict]:
 
 
 def save_agents(agents: list[dict], state_dir: Path | None = None) -> None:
-    sd = state_dir or STATE_DIR
+    sd = state_dir or _state_dir()
     sd.mkdir(parents=True, exist_ok=True)
     # Always write JSON as backup/export
-    af = (sd / 'agents.json') if state_dir else AGENTS_FILE
+    af = sd / 'agents.json'
     af.write_text(json.dumps(agents, indent=2))
 
 
@@ -220,7 +230,7 @@ def create_agent(
     # Also write to SQLite store
     if _use_store():
         try:
-            db = _get_db(STATE_DIR)
+            db = _get_db(_state_dir())
             if not _db_agent_get(db, agent_id):
                 _db_agent_insert(db, dict(a))
         except Exception as e:
@@ -256,7 +266,7 @@ def assign_specialization(agent_id: str, specialization: str,
             save_agents(agents)
             if _use_store():
                 try:
-                    db = _get_db(STATE_DIR)
+                    db = _get_db(_state_dir())
                     _db_agent_update(
                         db, agent_id,
                         specialization=a.get('specialization', ''),
@@ -278,7 +288,7 @@ def set_status(agent_id: str, status: str) -> dict | None:
             save_agents(agents)
             if _use_store():
                 try:
-                    db = _get_db(STATE_DIR)
+                    db = _get_db(_state_dir())
                     _db_agent_update(db, agent_id, status=status)
                 except Exception as e:
                     _diag('agent_lifecycle', 'status mirror to SQLite failed; store diverges from agents.json', error=e, agent_id=agent_id)
