@@ -110,6 +110,7 @@ class PairResult:
     billing_mode: str
     started_at: str
     finished_at: str
+    record_path: str = ''
 
 
 def _now_iso() -> str:
@@ -129,16 +130,25 @@ def _make_engine(backbone: Backbone, system_prompt: str, max_tokens: int) -> Con
 
 
 async def _submit_checked(engine: ConversationEngine, text: str) -> tuple[str, dict[str, int]]:
-    """Submit one turn; raise on provider errors instead of returning ''."""
+    """Submit one turn; raise on FAILED turns instead of returning ''.
+
+    The engine emits an 'error' event and then retries transient provider
+    failures within the same submit; a turn that recovers and produces a
+    reply is a success, so error events alone are not grounds to raise —
+    only an empty final reply is.
+    """
     reply, events = await engine.submit_and_collect(text)
     usage = {'input_tokens': 0, 'output_tokens': 0}
+    errors: list[str] = []
     for ev in events:
         if ev.type == 'error':
-            raise IpmsRunError(str(ev.data.get('error', 'provider error')))
+            errors.append(str(ev.data.get('error', 'provider error')))
         if ev.type == 'message_end':
             u = ev.data.get('usage') or {}
             usage['input_tokens'] += int(u.get('input_tokens', 0) or 0)
             usage['output_tokens'] += int(u.get('output_tokens', 0) or 0)
+    if not str(reply or '').strip():
+        raise IpmsRunError(errors[-1] if errors else 'empty reply with no error event')
     return reply, usage
 
 
@@ -314,7 +324,7 @@ async def _run_pair_async(
         started_at=started,
         finished_at=_now_iso(),
     )
-    _persist_pair(run_dir, pair)
+    pair.record_path = str(_persist_pair(run_dir, pair))
     return pair
 
 

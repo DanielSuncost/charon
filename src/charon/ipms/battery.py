@@ -215,23 +215,31 @@ def build_spec(spec_id: str = f'release-engineer-{BATTERY_VERSION}') -> Trajecto
 
 
 # ── Parsers ──────────────────────────────────────────────────────────────────
+# Both parsers take the LAST match: a model narrating its earlier choice
+# ("Earlier my DECISION: A ...; DECISION: B — RATIONALE: ...") puts the live
+# answer last, and echoes of the format instruction precede real answers.
+# The lookbehind rejects matches inside larger tokens (REDECISION:).
 
-_DECISION_RE = re.compile(r'DECISION:\s*([AB])\b', re.IGNORECASE)
-_SCORE_RE = re.compile(r'SCORE:\s*([1-7])\b')
+_DECISION_RE = re.compile(r'(?<![A-Za-z])DECISION:\s*([AB])\b', re.IGNORECASE)
+_SCORE_RE = re.compile(r'(?<![A-Za-z])SCORE:\s*([1-7])\b', re.IGNORECASE)
 
 
 def parse_decision(text: str) -> str | None:
-    m = _DECISION_RE.search(str(text or ''))
-    return m.group(1).upper() if m else None
+    matches = _DECISION_RE.findall(str(text or ''))
+    return matches[-1].upper() if matches else None
 
 
 def parse_score(text: str) -> int | None:
-    m = _SCORE_RE.search(str(text or ''))
-    return int(m.group(1)) if m else None
+    matches = _SCORE_RE.findall(str(text or ''))
+    return int(matches[-1]) if matches else None
 
 
 def fact_recalled(response: str, expected: str) -> bool:
-    return expected.lower() in str(response or '').lower()
+    """Boundary-aware containment: '0.7' must match '0.7%' and 'is 0.7.'
+    but not '0.75%' or '10.7'; '6442' must not match '16442'."""
+    pattern = (r'(?<!\w)(?<!\d\.)' + re.escape(str(expected))
+               + r'(?!\w)(?!\.\d)')
+    return re.search(pattern, str(response or ''), re.IGNORECASE) is not None
 
 
 def extract_recorded_decisions(transcript: list[dict[str, Any]]) -> dict[str, str]:

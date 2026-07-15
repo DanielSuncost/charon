@@ -17,6 +17,15 @@ means; their counts are reported so silence never masquerades as coverage.
 IS_raw(condition) = weighted mean of [C, Cons, DC]
 IS = (IS_raw(treatment) - IS_raw(floor)) / (IS_raw(ceiling) - IS_raw(floor)),
 clipped to [0, 1]; ceiling = swap-same, floor = memory-off (design doc §4).
+
+MIGRATION NOTE (benchcommons): the bootstrap machinery here is interim until
+benchcommons 0.1.0 publishes its shared stats (paired_bootstrap_ci /
+switch_matrix — see charon-research/docs/benchmark-commons-design.md §3.6).
+It uses the same semantics those will (probes resampled jointly across
+conditions to preserve pairing, fixed seed, percentile CIs). When 0.1.0
+lands, `bootstrap_summary` should feed `paired_probe_table()` output into
+benchcommons and delete the local resampler; scoring (probe_scores /
+submetrics / invariance_score) stays here — it is IPMS-specific.
 """
 from __future__ import annotations
 
@@ -34,9 +43,14 @@ DEFAULT_WEIGHTS = {'C': 1 / 3, 'Cons': 1 / 3, 'DC': 1 / 3}
 KIND_TO_METRIC = {'continuity': 'C', 'decision': 'DC', 'persona': 'Cons'}
 
 
+def _base_id(probe_id: str) -> str:
+    """Strip the '#k' suffix bootstrap resampling appends to duplicates."""
+    return probe_id.split('#', 1)[0]
+
+
 def _pre_scores(record: dict[str, Any]) -> dict[str, int | None]:
     return {
-        r['probe_id']: parse_score(r.get('response', ''))
+        _base_id(r['probe_id']): parse_score(r.get('response', ''))
         for r in record.get('pre_responses', [])
     }
 
@@ -50,6 +64,7 @@ def probe_scores(record: dict[str, Any], condition: str) -> dict[str, dict[str, 
     out: dict[str, dict[str, Any]] = {}
     for resp in cond['probe_responses']:
         pid = resp['probe_id']
+        base = _base_id(pid)
         kind = resp['kind']
         text = resp.get('response', '')
         score: float | None = None
@@ -59,11 +74,11 @@ def probe_scores(record: dict[str, Any], condition: str) -> dict[str, dict[str, 
             exp = resp.get('expected')
             score = float(fact_recalled(text, exp)) if exp else None
         elif kind == 'decision':
-            rec = recorded.get(pid)
+            rec = recorded.get(base)
             post = parse_decision(text)
             score = float(rec == post) if rec and post else None
         elif kind == 'persona':
-            pre_score = pre.get(pid)
+            pre_score = pre.get(base)
             post_score = parse_score(text)
             if pre_score is not None and post_score is not None:
                 score = 1.0 - abs(post_score - pre_score) / 6.0
@@ -108,25 +123,55 @@ def invariance_score(
     floor: str = 'memory-off',
     weights: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    """Normalized IS for one pair record (None when degenerate)."""
-    raw_t = is_raw(record, treatment, weights)
-    raw_c = is_raw(record, ceiling, weights)
-    raw_f = is_raw(record, floor, weights)
+    """Normalized IS for one pair record (None when degenerate).
+
+    The three raws entering the normalization use only sub-metrics that are
+    scoreable in ALL of treatment/ceiling/floor — otherwise a metric dropping
+    out on one side (e.g. format noncompliance under one condition) would
+    silently compare different constructs across the ratio.
+    """
+    weights = weights or DEFAULT_WEIGHTS
+    subs = {c: submetrics(record, c) for c in (treatment, ceiling, floor)}
+    shared = [m for m in weights
+              if all(subs[c].get(m) is not None for c in subs)]
+
+    def wmean(cond: str) -> float:
+        wsum = sum(weights[m] for m in shared)
+        return sum(weights[m] * subs[cond][m] for m in shared) / wsum
+
     is_norm: float | None = None
     degenerate = ''
-    if raw_t is None or raw_c is None or raw_f is None:
+    raw_t = raw_c = raw_f = None
+    if not shared:
         degenerate = 'missing sub-metrics'
-    elif abs(raw_c - raw_f) < 1e-9:
-        degenerate = 'ceiling == floor'
     else:
-        is_norm = max(0.0, min(1.0, (raw_t - raw_f) / (raw_c - raw_f)))
+        raw_t, raw_c, raw_f = wmean(treatment), wmean(ceiling), wmean(floor)
+        if abs(raw_c - raw_f) < 1e-9:
+            degenerate = 'ceiling == floor'
+        else:
+            is_norm = max(0.0, min(1.0, (raw_t - raw_f) / (raw_c - raw_f)))
     return {
         'IS': is_norm,
         'IS_raw_treatment': raw_t,
         'IS_raw_ceiling': raw_c,
         'IS_raw_floor': raw_f,
+        'metrics_used': shared,
         'degenerate': degenerate,
     }
+
+
+def paired_probe_table(record: dict[str, Any]) -> dict[str, dict[str, float | None]]:
+    """Per-probe paired scores across all conditions: {probe_id: {condition: score}}.
+
+    This is the exchange format for benchcommons' switch_matrix /
+    paired_bootstrap_ci once 0.1.0 lands: one row per probe, one column per
+    condition, None where unscoreable.
+    """
+    table: dict[str, dict[str, float | None]] = {}
+    for condition in record['conditions']:
+        for pid, s in probe_scores(record, condition).items():
+            table.setdefault(pid, {})[condition] = s['score']
+    return table
 
 
 def _resample_record(record: dict[str, Any], rng: random.Random) -> dict[str, Any]:
@@ -139,10 +184,20 @@ def _resample_record(record: dict[str, Any], rng: random.Random) -> dict[str, An
     any_cond = next(iter(record['conditions'].values()))
     probe_ids = [r['probe_id'] for r in any_cond['probe_responses']]
     sampled = [rng.choice(probe_ids) for _ in probe_ids]
+    # Duplicated draws get unique synthetic ids ('pid#k') so downstream
+    # scoring keeps the MULTISET; collapsing duplicates would shrink every
+    # CI by ~20-30% (the resample would cover only ~63% unique probes).
+    sampled_unique = [
+        pid if k == 0 else f'{pid}#{k}'
+        for k, pid in ((sampled[:i].count(p), p) for i, p in enumerate(sampled))
+    ]
 
     def take(responses: list[dict[str, Any]]) -> list[dict[str, Any]]:
         by_id = {r['probe_id']: r for r in responses}
-        return [by_id[pid] for pid in sampled if pid in by_id]
+        return [
+            {**by_id[_base_id(uid)], 'probe_id': uid}
+            for uid in sampled_unique if _base_id(uid) in by_id
+        ]
 
     resampled = dict(record)
     resampled['pre_responses'] = take(record.get('pre_responses', []))

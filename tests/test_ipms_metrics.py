@@ -17,6 +17,7 @@ from charon.ipms.metrics import (
     bootstrap_summary,
     invariance_score,
     is_raw,
+    paired_probe_table,
     probe_scores,
     submetrics,
 )
@@ -51,8 +52,33 @@ def test_parsers():
     assert parse_decision('decision: b — rationale: speed.') == 'B'
     assert parse_decision('I would go with option A.') is None
     assert parse_score('SCORE: 6') == 6
+    assert parse_score('score: 6') == 6
     assert parse_score('SCORE: 9') is None
     assert parse_score('six out of seven') is None
+
+
+def test_parse_decision_takes_last_match_and_word_boundary():
+    # A model narrating its earlier choice puts the live answer last.
+    assert parse_decision(
+        'Earlier my DECISION: A was based on soak; '
+        'DECISION: B — RATIONALE: policy changed.') == 'B'
+    assert parse_decision(
+        'Reformatting as DECISION: A or B per instruction. '
+        'DECISION: B — RATIONALE: pilot first.') == 'B'
+    assert parse_decision('REDECISION: A') is None
+    assert parse_score('My previous SCORE: 3 felt low. SCORE: 5') == 5
+
+
+def test_fact_recalled_boundaries():
+    from charon.ipms.battery import fact_recalled
+    assert fact_recalled('The error budget is 0.7%', '0.7')
+    assert fact_recalled('it is 0.7.', '0.7')
+    assert not fact_recalled('The error budget is 0.75%', '0.7')
+    assert not fact_recalled('about 10.7 percent', '0.7')
+    assert fact_recalled('port 6442.', '6442')
+    assert not fact_recalled('port 16442', '6442')
+    assert fact_recalled('bucket artifacts-magnolia holds them', 'artifacts-magnolia')
+    assert fact_recalled('see metrics/cn-42 for the dashboard', 'cn-42')
 
 
 def test_extract_recorded_decisions():
@@ -162,6 +188,59 @@ def test_bootstrap_summary_shapes():
     inv = out['invariance']
     assert inv['IS'] is not None
     assert inv['ci'] is not None and inv['ci'][0] <= inv['IS'] + 1e-9
+
+
+def test_bootstrap_resample_keeps_multiset():
+    """With-replacement duplicates must survive scoring (collapsing them
+    shrinks every CI ~20-30%)."""
+    import random as _random
+    from charon.ipms.metrics import _resample_record
+    r = _record()
+    rng = _random.Random(5)
+    rs = _resample_record(r, rng)
+    for cond in rs['conditions'].values():
+        assert len(cond['probe_responses']) == 6  # same size as original
+    # With 6 probes and seed 5, at least one duplicate must exist; its
+    # synthetic id must still resolve for decision/persona lookups.
+    ids = [p['probe_id'] for p in rs['conditions']['swap-diff']['probe_responses']]
+    assert len(set(ids)) == len(ids)  # synthetic ids keep entries distinct
+    assert any('#' in pid for pid in ids)
+    sub = submetrics(rs, 'swap-diff')
+    assert sub['n_C_total'] + sub['n_DC_total'] + sub['n_Cons_total'] == 6
+
+
+def test_duplicate_scores_change_the_mean():
+    """A duplicated failing probe must pull the mean down (multiset math)."""
+    r = _record()
+    cond = r['conditions']['swap-diff']
+    failing = next(p for p in cond['probe_responses'] if p['probe_id'] == 'f1')
+    cond['probe_responses'].append({**failing, 'probe_id': 'f1#1'})
+    sub = submetrics(r, 'swap-diff')
+    assert sub['C'] == pytest.approx(1 / 3)  # {0, 1, 0}, not {0, 1}
+    assert sub['n_C'] == 3
+
+
+def test_invariance_uses_shared_metric_set():
+    r = _record()
+    # Make DC unscoreable in the floor only.
+    for p in r['conditions']['memory-off']['probe_responses']:
+        if p['kind'] == 'decision':
+            p['response'] = 'no format'
+    inv = invariance_score(r)
+    assert inv['metrics_used'] == ['C', 'Cons']
+    # Raws must be comparable: all computed over C+Cons only.
+    ceil_sub = submetrics(r, 'swap-same')
+    assert inv['IS_raw_ceiling'] == pytest.approx(
+        (ceil_sub['C'] + ceil_sub['Cons']) / 2)
+
+
+def test_paired_probe_table_shape():
+    r = _record()
+    table = paired_probe_table(r)
+    assert set(table['f1']) == {'swap-same', 'swap-diff', 'memory-off'}
+    assert table['f1']['swap-same'] == 1.0
+    assert table['f1']['swap-diff'] == 0.0
+    assert table['p1']['swap-diff'] == 0.5
 
 
 def test_probe_scores_error_marked_unscoreable():
