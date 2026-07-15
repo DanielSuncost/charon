@@ -25,6 +25,62 @@ from charon.providers import ModelInfo  # noqa: E402
 from charon.providers.provider_bridge import create_provider_and_model  # noqa: E402
 
 
+def _format_invariance(inv: dict) -> str:
+    def f(v):
+        return f'{v:.3f}' if isinstance(v, (int, float)) else 'n/a'
+    return (f'IS={f(inv["IS"])} ci={inv["ci"]} '
+            f'(raw: treat={f(inv["IS_raw_treatment"])} '
+            f'ceil={f(inv["IS_raw_ceiling"])} floor={f(inv["IS_raw_floor"])})'
+            + (f' DEGENERATE: {inv["degenerate"]}' if inv.get('degenerate') else ''))
+
+
+def rescore(run_dir: Path, out_path: Path, n_boot: int) -> int:
+    """Re-score saved pair records (no model calls) — used after metric fixes."""
+    records = sorted(run_dir.glob('pair-*.json'))
+    if not records:
+        print(f'no pair records under {run_dir}', file=sys.stderr)
+        return 2
+    matrix: dict[str, dict] = {}
+    spec_id = ''
+    models: list[str] = []
+    for path in records:
+        record = json.loads(path.read_text())
+        spec_id = record['spec_id']
+        a = record['prefix'].split('/')[-1]
+        b = record['suffix'].split('/')[-1]
+        for m in (a, b):
+            if m not in models:
+                models.append(m)
+        summary = bootstrap_summary(record, n_boot=n_boot)
+        matrix[f'{a}->{b}'] = {
+            'summary': summary,
+            'checkpoint_id': record['checkpoint_id'],
+            'record_path': str(path),
+            'billing_mode': record.get('billing_mode', 'unknown'),
+            'condition_errors': {c: v['error'] for c, v in record['conditions'].items()
+                                 if v.get('error')},
+            'rescored': True,
+        }
+        print(f'{a}->{b}: {_format_invariance(summary["invariance"])}', flush=True)
+    out = {
+        'experiment': 'ipms_switch_matrix',
+        'battery_version': BATTERY_VERSION,
+        'spec_id': spec_id,
+        'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'models': models,
+        'provider': 'openai',
+        'snapshot_pinned': False,
+        'n_boot': n_boot,
+        'run_dir': str(run_dir),
+        'rescored_from_saved_records': True,
+        'matrix': matrix,
+    }
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding='utf-8')
+    print(f'wrote {out_path}')
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--models', default='gpt-5.4,gpt-5.5',
@@ -34,7 +90,12 @@ def main() -> int:
                     help='where raw pair records + checkpoints go (default .ipms_runs/<ts>)')
     ap.add_argument('--out', default=str(ROOT.parent / 'charon-research' / 'results' / 'exp_ipms_switch_matrix.json'))
     ap.add_argument('--n-boot', type=int, default=2000)
+    ap.add_argument('--rescore-from', default='',
+                    help='re-score saved pair records from this run dir instead of running models')
     args = ap.parse_args()
+
+    if args.rescore_from:
+        return rescore(Path(args.rescore_from), Path(args.out), args.n_boot)
 
     stamp = time.strftime('%Y%m%d-%H%M%S')
     run_dir = Path(args.run_dir) if args.run_dir else ROOT / '.ipms_runs' / stamp
@@ -46,6 +107,12 @@ def main() -> int:
         return 2
 
     model_ids = [m.strip() for m in args.models.split(',') if m.strip()]
+    # MIGRATION NOTE (benchcommons): once benchcommons 0.1.0 publishes, resolve
+    # ModelRefs via benchcommons.providers.routing (dev=subscription,
+    # camera_ready=pinned metered) with its content-addressed cache, instead of
+    # constructing from Charon onboarding state here. The Charon
+    # ConversationEngine stays: the scaffold under test IS Charon; only model
+    # resolution/caching and single-shot judge calls move to benchcommons.
     backbones = {
         mid: Backbone(provider, ModelInfo(provider=base_model.provider, model_id=mid,
                                           context_window=base_model.context_window))
@@ -62,22 +129,18 @@ def main() -> int:
         t0 = time.time()
         pair = run_pair(backbones[a], backbones[b], spec,
                         run_dir=run_dir, billing_state_dir=args.auth_state_dir)
-        record_path = next(run_dir.glob(f'pair-{spec.id}-*{a}__*{b}.json'))
-        record = json.loads(record_path.read_text())
+        record = json.loads(Path(pair.record_path).read_text())
         summary = bootstrap_summary(record, n_boot=args.n_boot)
         errors = {c: r.error for c, r in pair.conditions.items() if r.error}
         matrix[key] = {
             'summary': summary,
             'checkpoint_id': pair.checkpoint_id,
-            'record_path': str(record_path),
+            'record_path': pair.record_path,
             'billing_mode': pair.billing_mode,
             'condition_errors': errors,
             'wall_seconds': round(time.time() - t0, 1),
         }
-        inv = summary['invariance']
-        print(f'    IS={inv["IS"]} ci={inv["ci"]} '
-              f'(raw: treat={inv["IS_raw_treatment"]:.3f} '
-              f'ceil={inv["IS_raw_ceiling"]:.3f} floor={inv["IS_raw_floor"]:.3f})'
+        print(f'    {_format_invariance(summary["invariance"])}'
               + (f' ERRORS={errors}' if errors else ''), flush=True)
 
     out = {

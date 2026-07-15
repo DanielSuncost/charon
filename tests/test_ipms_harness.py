@@ -163,6 +163,39 @@ def test_usage_accumulates(tmp_path):
         assert cond.usage['output_tokens'] == 4  # 2 probes x 2
 
 
+def test_transient_error_with_recovery_does_not_raise(tmp_path):
+    """The engine retries 429/502/503 within one submit; a recovered turn is
+    a success even though an 'error' event was emitted."""
+
+    class FlakyProvider(ScriptedProvider):
+        def __init__(self):
+            super().__init__('mock-flaky')
+            self.attempts = 0
+
+        async def stream(self, messages, model, system_prompt, tools=None,
+                         thinking_level='off', max_tokens=16384):
+            self.attempts += 1
+            if self.attempts == 1:
+                yield StreamDelta(type='error', error='429 too many requests')
+                return
+            async for d in super().stream(messages, model, system_prompt,
+                                          tools, thinking_level, max_tokens):
+                yield d
+
+    a = Backbone(FlakyProvider(), ModelInfo(provider='mock-a', model_id='model-a'))
+    b = Backbone(ScriptedProvider('mock-b'), ModelInfo(provider='mock-b', model_id='model-b'))
+    pair = run_pair(a, b, _spec(), run_dir=tmp_path)
+    assert len(pair.transcript) == 2  # trajectory survived the transient error
+
+
+def test_pair_result_carries_record_path(tmp_path):
+    a, b, _, _ = _backbones()
+    pair = run_pair(a, b, _spec(), run_dir=tmp_path)
+    from pathlib import Path
+    assert Path(pair.record_path).exists()
+    assert json.loads(Path(pair.record_path).read_text())['spec_id'] == 't1'
+
+
 def test_apply_strict_rejects_scaffold_drift(tmp_path):
     from charon.context.context_transfer import create_checkpoint_from_engine
     from charon.ipms.harness import IpmsRunError, _apply_strict, _make_engine
