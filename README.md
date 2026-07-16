@@ -165,7 +165,7 @@ render to a self-contained, citation-linked HTML report.
 questions (RL in the brain, gut microbiome and neurodegeneration,
 epigenetic aging clocks), with every source cross-checked against
 CrossRef and arXiv. Browse them rendered at the
-[**demos index**](https://raw.githack.com/DanielSuncost/charon/master/demos/libris/index.html),
+[**demos index**](https://danielsuncost.github.io/charon/demos/libris/),
 or see [demos/libris/](demos/libris/).
 
 ### Autonomous Work
