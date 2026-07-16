@@ -18,14 +18,15 @@ IS_raw(condition) = weighted mean of [C, Cons, DC]
 IS = (IS_raw(treatment) - IS_raw(floor)) / (IS_raw(ceiling) - IS_raw(floor)),
 clipped to [0, 1]; ceiling = swap-same, floor = memory-off (design doc §4).
 
-MIGRATION NOTE (benchcommons): the bootstrap machinery here is interim until
-benchcommons 0.1.0 publishes its shared stats (paired_bootstrap_ci /
-switch_matrix — see charon-research/docs/benchmark-commons-design.md §3.6).
-It uses the same semantics those will (probes resampled jointly across
-conditions to preserve pairing, fixed seed, percentile CIs). When 0.1.0
-lands, `bootstrap_summary` should feed `paired_probe_table()` output into
-benchcommons and delete the local resampler; scoring (probe_scores /
-submetrics / invariance_score) stays here — it is IPMS-specific.
+Statistics split (benchcommons 0.1.0): the per-condition C/Cons/DC grids and
+their paired bootstrap CIs come from benchcommons.stats.switch_matrix when
+the package is installed (it consumes paired_probe_table() output and ports
+these exact semantics — see charon-research/docs/benchmark-commons-design.md
+§3.6). The IS composite (weighted mean over shared sub-metrics, normalized
+against ceiling/floor) is IPMS-specific by design, so its joint-resample
+bootstrap stays here. The local per-metric resampler remains only as a
+fallback for environments without benchcommons (it is not yet public);
+point estimates are identical on both paths.
 """
 from __future__ import annotations
 
@@ -38,6 +39,11 @@ from charon.ipms.battery import (
     parse_decision,
     parse_score,
 )
+
+try:
+    from benchcommons.stats import switch_matrix as _bc_switch_matrix
+except ImportError:  # benchcommons is optional until it goes public
+    _bc_switch_matrix = None
 
 DEFAULT_WEIGHTS = {'C': 1 / 3, 'Cons': 1 / 3, 'DC': 1 / 3}
 KIND_TO_METRIC = {'continuity': 'C', 'decision': 'DC', 'persona': 'Cons'}
@@ -216,28 +222,62 @@ def bootstrap_summary(
     weights: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Point estimates + paired bootstrap 95% CIs for every condition's
-    sub-metrics and for IS."""
+    sub-metrics and for IS.
+
+    C/Cons/DC grids come from benchcommons.stats.switch_matrix when
+    installed; the IS/IS_raw composites always use the local joint-resample
+    loop (IPMS-specific — see the module docstring).
+    """
     rng = random.Random(seed)
+    conditions = list(record['conditions'])
 
     point: dict[str, Any] = {
-        cond: submetrics(record, cond) for cond in record['conditions']
+        cond: submetrics(record, cond) for cond in conditions
     }
-    for cond in record['conditions']:
+    for cond in conditions:
         point[cond]['IS_raw'] = is_raw(record, cond, weights)
     is_point = invariance_score(record, weights=weights)
 
+    # Per-kind CIs via the shared stats package when available.
+    metric_ci: dict[str, dict[str, list[float] | None]] = {
+        cond: {} for cond in conditions
+    }
+    use_benchcommons = _bc_switch_matrix is not None
+    if use_benchcommons:
+        kind_of: dict[str, str] = {}
+        for cond in conditions:
+            for pid, s in probe_scores(record, cond).items():
+                kind_of[pid] = s['kind']
+        table = paired_probe_table(record)
+        for kind, metric in KIND_TO_METRIC.items():
+            kind_table = {pid: row for pid, row in table.items()
+                          if kind_of.get(pid) == kind}
+            if not kind_table:
+                for cond in conditions:
+                    metric_ci[cond][metric] = None
+                continue
+            grid = _bc_switch_matrix(kind_table, conditions=conditions,
+                                     n_boot=n_boot, seed=seed)
+            for cond in conditions:
+                cell = grid.cells[cond]
+                metric_ci[cond][metric] = (
+                    [cell.lo, cell.hi] if cell.lo is not None else None)
+
+    # Local joint-resample loop: always for IS/IS_raw, and for C/Cons/DC
+    # only when benchcommons is absent.
     samples: dict[str, dict[str, list[float]]] = {
         cond: {'C': [], 'Cons': [], 'DC': [], 'IS_raw': []}
-        for cond in record['conditions']
+        for cond in conditions
     }
     is_samples: list[float] = []
     for _ in range(n_boot):
         rs = _resample_record(record, rng)
-        for cond in rs['conditions']:
-            sub = submetrics(rs, cond)
-            for metric in ('C', 'Cons', 'DC'):
-                if sub[metric] is not None:
-                    samples[cond][metric].append(sub[metric])
+        for cond in conditions:
+            if not use_benchcommons:
+                sub = submetrics(rs, cond)
+                for metric in ('C', 'Cons', 'DC'):
+                    if sub[metric] is not None:
+                        samples[cond][metric].append(sub[metric])
             raw = is_raw(rs, cond, weights)
             if raw is not None:
                 samples[cond]['IS_raw'].append(raw)
@@ -253,11 +293,18 @@ def bootstrap_summary(
         hi = ordered[int(0.975 * (len(ordered) - 1))]
         return [lo, hi]
 
-    out: dict[str, Any] = {'conditions': {}, 'n_boot': n_boot, 'seed': seed}
-    for cond in record['conditions']:
+    if not use_benchcommons:
+        for cond in conditions:
+            for metric in ('C', 'Cons', 'DC'):
+                metric_ci[cond][metric] = ci(samples[cond][metric])
+
+    out: dict[str, Any] = {'conditions': {}, 'n_boot': n_boot, 'seed': seed,
+                           'stats_backend': 'benchcommons' if use_benchcommons
+                           else 'interim-local'}
+    for cond in conditions:
         out['conditions'][cond] = {
             **point[cond],
-            'ci': {m: ci(samples[cond][m]) for m in ('C', 'Cons', 'DC', 'IS_raw')},
+            'ci': {**metric_ci[cond], 'IS_raw': ci(samples[cond]['IS_raw'])},
         }
     out['invariance'] = {**is_point, 'ci': ci(is_samples),
                          'n_boot_valid': len(is_samples)}

@@ -243,6 +243,32 @@ def test_paired_probe_table_shape():
     assert table['p1']['swap-diff'] == 0.5
 
 
+def test_benchcommons_backend_parity():
+    bc = pytest.importorskip('benchcommons.stats')
+    r = _record()
+    out = bootstrap_summary(r, n_boot=200, seed=3)
+    assert out['stats_backend'] == 'benchcommons'
+    # benchcommons grid points must agree with local scoring exactly.
+    from charon.ipms.metrics import KIND_TO_METRIC, paired_probe_table, probe_scores
+    kind_of = {}
+    for cond in r['conditions']:
+        for pid, s in probe_scores(r, cond).items():
+            kind_of[pid] = s['kind']
+    table = paired_probe_table(r)
+    for kind, metric in KIND_TO_METRIC.items():
+        kind_table = {p: row for p, row in table.items() if kind_of[p] == kind}
+        grid = bc.switch_matrix(kind_table, conditions=list(r['conditions']),
+                                n_boot=200, seed=3)
+        for cond in r['conditions']:
+            local_point = submetrics(r, cond)[metric]
+            assert grid.cells[cond].point == pytest.approx(local_point)
+            assert grid.cells[cond].n_scoreable == submetrics(r, cond)[f'n_{metric}']
+            reported = out['conditions'][cond]['ci'][metric]
+            if reported is not None:
+                lo, hi = reported
+                assert lo - 1e-9 <= local_point <= hi + 1e-9
+
+
 def test_probe_scores_error_marked_unscoreable():
     r = _record()
     r['conditions']['swap-diff']['probe_responses'][0]['error'] = 'boom'
