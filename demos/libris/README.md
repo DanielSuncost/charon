@@ -15,13 +15,10 @@ the report rather than removed.
 
 ## View them online
 
-GitHub shows `.html` as source, so use one of these to see them rendered:
+GitHub shows `.html` as source, so view them rendered via GitHub Pages:
 
-- **Instant (no setup):** [**open the demos index**](https://raw.githack.com/DanielSuncost/charon/master/demos/libris/index.html)
-  via raw.githack.com — renders the pushed HTML directly.
-- **GitHub Pages:** once enabled for this repo (Settings → Pages → Deploy from
-  `master`, root), they live at
-  `https://danielsuncost.github.io/charon/demos/libris/`.
+- **[Open the demos index](https://danielsuncost.github.io/charon/demos/libris/)** —
+  served via GitHub Pages from `master`.
 
 ## The reports
 
