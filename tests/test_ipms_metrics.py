@@ -5,8 +5,11 @@ import json
 from charon.ipms import Backbone, run_pair
 from charon.ipms.battery import (
     DECISIONS,
+    DECISIONS_EXTRA,
     FACTS,
+    FACTS_EXTRA,
     PERSONA_ITEMS,
+    PERSONA_ITEMS_V2,
     build_spec,
     extract_recorded_decisions,
     parse_decision,
@@ -28,23 +31,75 @@ import pytest
 
 # ── battery ──────────────────────────────────────────────────────────────────
 
-def test_build_spec_structure():
-    spec = build_spec()
-    assert len(spec.turns) == 2 + len(DECISIONS)
+def _kind_counts(spec):
     kinds = {}
     for p in spec.probes:
         kinds[p.kind] = kinds.get(p.kind, 0) + 1
-    assert kinds == {'continuity': len(FACTS), 'decision': len(DECISIONS),
-                     'persona': len(PERSONA_ITEMS)}
+    return kinds
+
+
+def _assert_probe_invariants(spec):
     for p in spec.probes:
         if p.kind == 'continuity':
             assert p.expected
             # anti-gaming: the answer never appears in the probe text
             assert p.expected.lower() not in p.text.lower()
+            assert p.expected.lower() not in spec.system_prompt.lower()
         if p.kind == 'persona':
             assert p.pre_text and p.pre_text != p.text
         if p.kind == 'decision':
             assert 'DECISION:' in p.text
+
+
+def test_build_spec_structure():
+    spec = build_spec()
+    assert spec.id == 'release-engineer-v0.2'
+    assert len(spec.turns) == 2 + len(DECISIONS)
+    assert _kind_counts(spec) == {'continuity': len(FACTS),
+                                  'decision': len(DECISIONS),
+                                  'persona': len(PERSONA_ITEMS_V2)}
+    assert len(PERSONA_ITEMS_V2) == 24
+    _assert_probe_invariants(spec)
+
+
+def test_build_spec_v1_reproduces_original_battery():
+    spec = build_spec(variant='v1')
+    assert spec.id == 'release-engineer-v0.1'
+    assert _kind_counts(spec) == {'continuity': len(FACTS),
+                                  'decision': len(DECISIONS),
+                                  'persona': len(PERSONA_ITEMS)}
+    _assert_probe_invariants(spec)
+
+
+def test_build_spec_long_variant():
+    spec = build_spec(variant='long')
+    assert spec.id == 'release-engineer-long-v0.2'
+    n_facts = len(FACTS) + len(FACTS_EXTRA)
+    n_dec = len(DECISIONS) + len(DECISIONS_EXTRA)
+    assert _kind_counts(spec) == {'continuity': n_facts, 'decision': n_dec,
+                                  'persona': len(PERSONA_ITEMS_V2)}
+    # 4 briefings + 14 decisions + 2 free-form context turns
+    assert len(spec.turns) == 4 + n_dec + 2
+    _assert_probe_invariants(spec)
+    # every planted fact and decision scenario appears in exactly one turn
+    all_turns = '\n'.join(spec.turns)
+    for f in FACTS + FACTS_EXTRA:
+        assert f['plant'] in all_turns
+    for d in DECISIONS + DECISIONS_EXTRA:
+        assert sum(d['scenario'] in t for t in spec.turns) == 1
+
+
+def test_build_spec_unknown_variant():
+    with pytest.raises(ValueError, match='unknown battery variant'):
+        build_spec(variant='nope')
+
+
+def test_extract_recorded_decisions_covers_long_variant():
+    transcript = [
+        {'user': f'{DECISIONS_EXTRA[0]["scenario"]} fmt',
+         'assistant': 'DECISION: B — RATIONALE: train them up.'},
+    ]
+    assert extract_recorded_decisions(transcript) == {DECISIONS_EXTRA[0]['id']: 'B'}
 
 
 def test_parsers():
@@ -296,7 +351,7 @@ class HistoryAwareProvider:
             text = 'Acknowledged.'
         else:  # continuity probe: recall only from history
             answer = 'unknown'
-            for f in FACTS:
+            for f in FACTS + FACTS_EXTRA:
                 if f['ask'].split('?')[0] in last:
                     if f['value'].lower() in haystack.lower():
                         answer = f['value']
@@ -318,7 +373,7 @@ def test_full_pipeline_with_history_aware_fake(tmp_path):
     record = json.loads(record_path.read_text())
 
     # pre-pass ran for every persona probe
-    assert len(record['pre_responses']) == len(PERSONA_ITEMS)
+    assert len(record['pre_responses']) == len(PERSONA_ITEMS_V2)
 
     out = bootstrap_summary(record, n_boot=100, seed=7)
     # history-carrying conditions recall all facts; the floor recalls none

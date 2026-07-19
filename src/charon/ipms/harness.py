@@ -117,6 +117,38 @@ def _now_iso() -> str:
     return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
 
 
+def backbone_from_entry(entry: str, *, codex_provider: Any,
+                        codex_provider_name: str = 'openai') -> Backbone:
+    """Build a Backbone from a '[provider:]model_id' entry.
+
+    'codex' (default) reuses the shared subscription provider instance;
+    'anthropic' constructs an API-key provider from ANTHROPIC_API_KEY —
+    deliberately never OAuth, whose wire path injects a "You are Claude
+    Code" system block (an identity confound for this benchmark).
+    """
+    import os
+
+    from charon.providers.provider_bridge import CONTEXT_WINDOWS, DEFAULT_CONTEXT_WINDOW
+
+    prov, _, mid = entry.rpartition(':')
+    prov = prov or 'codex'
+    ctx = CONTEXT_WINDOWS.get(mid, DEFAULT_CONTEXT_WINDOW)
+    if prov == 'codex':
+        return Backbone(codex_provider,
+                        ModelInfo(provider=codex_provider_name, model_id=mid,
+                                  context_window=ctx))
+    if prov == 'anthropic':
+        api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+        if not api_key:
+            raise ValueError(f'{entry}: ANTHROPIC_API_KEY is not set '
+                             '(API key required; OAuth deliberately unsupported here)')
+        from charon.providers.httpx_anthropic import HttpxAnthropicProvider
+        return Backbone(HttpxAnthropicProvider(api_key=api_key),
+                        ModelInfo(provider='anthropic', model_id=mid,
+                                  context_window=ctx))
+    raise ValueError(f'{entry}: unknown provider {prov!r}')
+
+
 def _make_engine(backbone: Backbone, system_prompt: str, max_tokens: int) -> ConversationEngine:
     engine = ConversationEngine(
         backbone.provider, backbone.model,

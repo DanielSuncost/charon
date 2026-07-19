@@ -19,9 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 
 from charon.ipms.battery import BATTERY_VERSION, build_spec  # noqa: E402
-from charon.ipms.harness import Backbone, run_pair  # noqa: E402
+from charon.ipms.harness import backbone_from_entry, run_pair  # noqa: E402
 from charon.ipms.metrics import bootstrap_summary  # noqa: E402
-from charon.providers import ModelInfo  # noqa: E402
 from charon.providers.provider_bridge import create_provider_and_model  # noqa: E402
 
 
@@ -84,7 +83,13 @@ def rescore(run_dir: Path, out_path: Path, n_boot: int) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--models', default='gpt-5.4,gpt-5.5',
-                    help='comma-separated model ids reachable via the authenticated provider')
+                    help="comma-separated '[provider:]model_id' entries; provider is "
+                         "'codex' (default, subscription) or 'anthropic' "
+                         "(metered, needs ANTHROPIC_API_KEY — deliberately not "
+                         'OAuth: the OAuth path injects an identity system block)')
+    ap.add_argument('--variant', default='standard',
+                    choices=['standard', 'long', 'v1'],
+                    help='battery variant (see charon.ipms.battery.build_spec)')
     ap.add_argument('--auth-state-dir', default=str(ROOT / '.charon_state'))
     ap.add_argument('--run-dir', default='',
                     help='where raw pair records + checkpoints go (default .ipms_runs/<ts>)')
@@ -106,20 +111,24 @@ def main() -> int:
         print('no ready provider (check onboarding.json / auth)', file=sys.stderr)
         return 2
 
+    # MIGRATION NOTE (benchcommons): once benchcommons ships routing (its
+    # tasks 6-7), resolve ModelRefs via benchcommons.providers.routing
+    # (dev=subscription, camera_ready=pinned metered) with its cache, instead
+    # of constructing here. The Charon ConversationEngine stays: the scaffold
+    # under test IS Charon; only model resolution/caching and single-shot
+    # judge calls move to benchcommons.
     model_ids = [m.strip() for m in args.models.split(',') if m.strip()]
-    # MIGRATION NOTE (benchcommons): once benchcommons 0.1.0 publishes, resolve
-    # ModelRefs via benchcommons.providers.routing (dev=subscription,
-    # camera_ready=pinned metered) with its content-addressed cache, instead of
-    # constructing from Charon onboarding state here. The Charon
-    # ConversationEngine stays: the scaffold under test IS Charon; only model
-    # resolution/caching and single-shot judge calls move to benchcommons.
-    backbones = {
-        mid: Backbone(provider, ModelInfo(provider=base_model.provider, model_id=mid,
-                                          context_window=base_model.context_window))
-        for mid in model_ids
-    }
+    try:
+        backbones = {
+            mid: backbone_from_entry(mid, codex_provider=provider,
+                                     codex_provider_name=base_model.provider)
+            for mid in model_ids
+        }
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        return 2
 
-    spec = build_spec()
+    spec = build_spec(variant=args.variant)
     matrix: dict[str, dict] = {}
     for a, b in itertools.permutations(model_ids, 2):
         key = f'{a}->{b}'

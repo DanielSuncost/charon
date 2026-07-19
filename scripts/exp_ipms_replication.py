@@ -21,11 +21,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 
 from charon.ipms.battery import BATTERY_VERSION, build_spec  # noqa: E402
-from charon.ipms.harness import Backbone, run_pair  # noqa: E402
+from charon.ipms.harness import backbone_from_entry, run_pair  # noqa: E402
 from charon.ipms.metrics import (  # noqa: E402
     bootstrap_summary, probe_scores, submetrics,
 )
-from charon.providers import ModelInfo  # noqa: E402
 from charon.providers.provider_bridge import create_provider_and_model  # noqa: E402
 
 DEFAULT_PAIRS = 'gpt-5.6-luna>gpt-5.4,gpt-5.6-sol>gpt-5.4,gpt-5.6-sol>gpt-5.6-terra'
@@ -48,6 +47,9 @@ def main() -> int:
     ap.add_argument('--pairs', default=DEFAULT_PAIRS,
                     help="comma-separated 'prefix>suffix' model-id pairs")
     ap.add_argument('--reps', type=int, default=10)
+    ap.add_argument('--variant', default='standard',
+                    choices=['standard', 'long', 'v1'],
+                    help='battery variant (see charon.ipms.battery.build_spec)')
     ap.add_argument('--auth-state-dir', default=str(ROOT / '.charon_state'))
     ap.add_argument('--run-dir', default='')
     ap.add_argument('--out', default=str(ROOT.parent / 'charon-research' / 'results' / 'exp_ipms_replication.json'))
@@ -63,12 +65,12 @@ def main() -> int:
         print('no ready provider', file=sys.stderr)
         return 2
 
-    def backbone(mid: str) -> Backbone:
-        return Backbone(provider, ModelInfo(provider=base_model.provider, model_id=mid,
-                                            context_window=base_model.context_window))
+    def backbone(mid: str):
+        return backbone_from_entry(mid, codex_provider=provider,
+                                   codex_provider_name=base_model.provider)
 
     pairs = [tuple(p.split('>')) for p in args.pairs.split(',') if p.strip()]
-    spec = build_spec()
+    spec = build_spec(variant=args.variant)
 
     results: dict[str, dict] = {}
     for a, b in pairs:
