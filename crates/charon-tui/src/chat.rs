@@ -553,6 +553,8 @@ pub struct ChatState {
     pub provisional_outcomes: Vec<ProvisionalOutcome>,
     pub context_menu: Option<ContextMenu>,
     pub pending_queue: Vec<String>,
+    /// Full text from a multi-line paste. `input` shows condensed summary.
+    pub paste_buffer: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -604,6 +606,7 @@ impl ChatState {
             provisional_outcomes: Vec::new(),
             context_menu: None,
             pending_queue: Vec::new(),
+            paste_buffer: None,
         })
     }
 
@@ -647,10 +650,18 @@ impl ChatState {
     }
 
     pub fn submit_input(&mut self) {
-        if self.input.trim().is_empty() {
-            return;
-        }
-        let text = self.input.trim().to_string();
+        // A multi-line paste is held in `paste_buffer`; `input` only shows a summary.
+        let text = if let Some(pasted) = self.paste_buffer.take() {
+            if pasted.trim().is_empty() {
+                return;
+            }
+            pasted.trim().to_string()
+        } else {
+            if self.input.trim().is_empty() {
+                return;
+            }
+            self.input.trim().to_string()
+        };
         self.input_history.push(text.clone());
         self.history_index = None;
         self.scroll = 0;

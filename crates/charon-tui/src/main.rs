@@ -782,12 +782,22 @@ impl EventLoop {
         } else {
             match key.code {
                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if self.app.chat.paste_buffer.is_some() {
+                        // Typing discards the pending paste and starts fresh
+                        self.app.chat.paste_buffer = None;
+                        self.app.chat.input.clear();
+                    }
                     self.app.chat.input.push(c);
                     self.app.chat.maybe_open_command_menu();
                     self.local_view_dirty = true;
                 }
                 KeyCode::Backspace => {
-                    self.app.chat.input.pop();
+                    if self.app.chat.paste_buffer.is_some() {
+                        self.app.chat.paste_buffer = None;
+                        self.app.chat.input.clear();
+                    } else {
+                        self.app.chat.input.pop();
+                    }
                     self.app.chat.maybe_open_command_menu();
                     self.local_view_dirty = true;
                 }
@@ -1393,7 +1403,23 @@ impl EventLoop {
     /// Route a bracketed paste to the chat input or the focused session pane.
     fn handle_paste(&mut self, text: String) -> io::Result<()> {
         if self.app.active_view == View::Chat && !self.app.chat.copy_mode {
-            self.app.chat.input.push_str(&text);
+            let line_count = text.lines().count();
+            if line_count > 1 {
+                // Multi-line paste: hold the full text, show a condensed summary
+                let first_line = text.lines().next().unwrap_or("");
+                let preview: String = first_line.chars().take(37).collect();
+                let summary = if first_line.chars().count() > 37 {
+                    format!("[pasted {} lines: {}...]", line_count, preview)
+                } else {
+                    format!("[pasted {} lines: {}]", line_count, preview)
+                };
+                self.app.chat.paste_buffer = Some(text);
+                self.app.chat.input = summary;
+            } else {
+                // Single-line paste: append normally
+                self.app.chat.paste_buffer = None;
+                self.app.chat.input.push_str(&text);
+            }
             self.app.chat.maybe_open_command_menu();
             self.local_view_dirty = true;
         } else if self.app.active_view == View::Sessions && self.app.sessions.terminal_mode {
