@@ -88,7 +88,7 @@ def cmd_register(args):
         print(f'SSH connection failed: {result.stderr.strip()}')
         print('Make sure your SSH key is set up: ssh-copy-id', target)
         sys.exit(1)
-    print(f'SSH OK.')
+    print('SSH OK.')
 
     # Check if remote has charon installed
     result = subprocess.run(
@@ -165,7 +165,7 @@ def resolve_project_paths(project: str) -> list[str]:
             paths.append(f'agents/{aid}/')
             paths.append(f'conversations/{aid}.jsonl')
             # Also session conversations linked to this agent
-            for f in (STATE_DIR / 'conversations').glob(f'session-*.jsonl'):
+            for f in (STATE_DIR / 'conversations').glob('session-*.jsonl'):
                 paths.append(f'conversations/{f.name}')
 
     # Goals for this project
@@ -266,7 +266,7 @@ def cmd_push(args):
             str(STATE_DIR) + '/',
             remote_state,
         ]
-        print(f'  Syncing...')
+        print('  Syncing...')
         result = subprocess.run(cmd, timeout=300)
 
         # Push the safe SQLite backups
@@ -287,7 +287,7 @@ def cmd_push(args):
                 'at': _now(),
             }
             save_remotes(config)
-            print(f'Push complete.')
+            print('Push complete.')
         else:
             print(f'Push failed (rsync exit code {result.returncode})')
             sys.exit(1)
@@ -322,7 +322,7 @@ def cmd_pull(args):
         remote_state,
         str(STATE_DIR) + '/',
     ]
-    print(f'  Syncing...')
+    print('  Syncing...')
     result = subprocess.run(cmd, timeout=300)
 
     if result.returncode == 0:
@@ -332,7 +332,7 @@ def cmd_pull(args):
             'at': _now(),
         }
         save_remotes(config)
-        print(f'Pull complete.')
+        print('Pull complete.')
     else:
         print(f'Pull failed (rsync exit code {result.returncode})')
         sys.exit(1)
@@ -356,7 +356,7 @@ def cmd_status(args):
 
     last = config.get('last_sync', {})
     if last:
-        print(f'\nLast sync:')
+        print('\nLast sync:')
         for name, info in last.items():
             direction = info.get('direction', '?')
             project = info.get('project', 'all')

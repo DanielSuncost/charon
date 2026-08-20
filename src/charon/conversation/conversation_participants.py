@@ -73,13 +73,11 @@ class PiConversationAdapter(BoatWrappedCliAdapter):
     command = ['pi']
 
 
-class CharonConversationAdapter(ConversationParticipantAdapter):
+class CharonConversationAdapter(BoatWrappedCliAdapter):
     agent_type = 'charon'
     display_name = 'Charon'
-    capabilities = ConversationRuntimeCapabilities(can_spawn=False, supports_streaming=True, supports_structured_completion=False, supports_tools=True, native_boat=True)
-
-    def spawn_command(self, *, project_root: Path, session_name: str, participant: ConversationParticipantSpec) -> list[str]:
-        raise NotImplementedError('Charon conversation participants require a native adapter/session path; spawn command not wired yet.')
+    capabilities = ConversationRuntimeCapabilities(can_spawn=True, supports_streaming=True, supports_structured_completion=False, supports_tools=True, native_boat=False)
+    command = ['charon']
 
 
 _ADAPTERS: dict[str, ConversationParticipantAdapter] = {

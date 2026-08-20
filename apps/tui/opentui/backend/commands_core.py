@@ -272,6 +272,17 @@ class CoreCommandsMixin:
             return
         return UNHANDLED
 
+    def _cmd_shutdown(self, command: str, request_id: str | None):
+        if command == '/shutdown':
+            # Flush conversation state before the TUI closes the pipe, so a
+            # Ctrl+Q during streaming can't lose the last messages or leave
+            # the session registered as live for the next resume.
+            self._save_conversation_now()
+            self._cleanup_owned_sessions()
+            common.emit({'type': 'status', 'message': 'Shutdown complete.', 'request_id': request_id})
+            return
+        return UNHANDLED
+
     def _cmd_thoughts(self, command: str, request_id: str | None):
         if command == '/thoughts':
             self.visible_thoughts = not self.visible_thoughts

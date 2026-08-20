@@ -184,6 +184,11 @@ fn main() -> io::Result<()> {
         was_streaming: false,
     };
     event_loop.run()?;
+
+    // Ask the backend to flush conversation state before we close the pipe.
+    let _ = event_loop.app.chat.backend.send_command("/shutdown");
+    std::thread::sleep(Duration::from_millis(200));
+
     let mut stdout = event_loop.stdout;
 
     stdout.queue(cursor::Show)?;

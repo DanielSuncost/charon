@@ -151,6 +151,7 @@ class CommandsMixin:
         '/timestamps': '_cmd_timestamps',
         '/interrupt': '_cmd_interrupt',
         '/abort': '_cmd_interrupt',
+        '/shutdown': '_cmd_shutdown',
         '/thoughts': '_cmd_thoughts',
         '/tools': '_cmd_tools',
         '/history': '_cmd_history',
