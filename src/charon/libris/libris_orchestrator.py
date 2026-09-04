@@ -13,48 +13,67 @@ def _tool_ctx(project_root: Path, state_dir: Path):
 def gather_source_leads_for_topic(state_dir: Path, project_root: Path, operation_id: str, topic: dict[str, Any], *, query: str = '') -> list[dict[str, Any]]:
     """Use Paper + SourceDiscovery to gather and score promising source leads."""
     from charon.libris.libris_runtime import index_promising_source, append_operation_event, emit_agent_phase
-    from charon.tools.paper_tool import execute_paper
-    from charon.tools.source_discovery_tool import execute_source_discovery
+    from charon.tools import ToolContext, execute_tool
 
     q = query or str(topic.get('title') or topic.get('slug') or '').strip()
     if not q:
         return []
-    ctx = _tool_ctx(project_root, state_dir)
+    topic_slug = str(topic.get('slug') or '')
+    ctx = ToolContext(
+        project_root=project_root,
+        state_dir=state_dir,
+        agent_id=str(topic.get('researcher_agent_id') or ''),
+        operation_id=operation_id,
+        operation_domain='research',
+        work_unit_id=topic_slug,
+        operation_role='researcher',
+        runtime_role='background_agent',
+    )
     leads: list[dict[str, Any]] = []
     if topic.get('researcher_agent_id'):
         emit_agent_phase(
             state_dir, project_root, operation_id,
             agent_id=str(topic.get('researcher_agent_id') or ''), role='researcher',
-            phase='reviewing_leads', status='running', topic_slug=str(topic.get('slug') or ''),
+            phase='reviewing_leads', status='running', topic_slug=topic_slug,
             summary='Gathering and scoring promising source leads.'
         )
 
-    paper_res = execute_paper({'action': 'search', 'query': q, 'backend': 'auto', 'limit': 5}, ctx)
+    paper_res = execute_tool(
+        'Paper',
+        {'action': 'search', 'query': q, 'backend': 'auto', 'limit': 5},
+        ctx,
+    )
     for row in ((paper_res.details or {}).get('results') or [])[:5]:
         source = dict(row)
         source['source_type'] = source.get('source_type') or 'paper'
         leads.append(index_promising_source(
             state_dir, project_root,
             operation_id=operation_id,
-            topic_slug=str(topic.get('slug') or ''),
+            topic_slug=topic_slug,
             source=source,
             query=q,
         ))
 
-    disc_res = execute_source_discovery({'action': 'discover', 'query': q, 'limit': 5}, ctx)
+    disc_res = execute_tool(
+        'SourceDiscovery',
+        {'action': 'discover', 'query': q, 'limit': 5},
+        ctx,
+    )
     for row in ((disc_res.details or {}).get('results') or [])[:5]:
         leads.append(index_promising_source(
             state_dir, project_root,
             operation_id=operation_id,
-            topic_slug=str(topic.get('slug') or ''),
+            topic_slug=topic_slug,
             source=dict(row),
             query=q,
         ))
 
     append_operation_event(state_dir, project_root, operation_id, 'source_leads_gathered', {
-        'topic_slug': str(topic.get('slug') or ''),
+        'topic_slug': topic_slug,
         'count': len(leads),
         'query': q,
+        'paper_error': paper_res.content if paper_res.is_error else '',
+        'discovery_error': disc_res.content if disc_res.is_error else '',
     })
     leads.sort(key=lambda r: float(r.get('lead_score') or 0), reverse=True)
     return leads

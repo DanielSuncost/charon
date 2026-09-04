@@ -108,7 +108,8 @@ def _role_prompt(role: str, operation_id: str, topic_slug: str = '', user_goal: 
             '2. Search broadly for promising topics and trends using Paper and SourceDiscovery where appropriate.',
             '3. Produce a shortlist of candidate topics with relevance and novelty notes.',
             '4. Save candidate topics with Research.save_candidate_topics.',
-            '5. If appropriate, initialize high-value topics with Research.init_topic.',
+            '5. Stop after saving the shortlist. The durable controller exclusively owns topic '
+            'initialization, researcher fanout, judging, convergence, and final delivery.',
             '6. Prefer source-diverse scouting: papers, official sources, repos, and trend surfaces.',
             'Be budget-aware: avoid spawning too many topics when the budget is tight.',
             'IMPORTANT: during scouting no topics exist yet, so do NOT call '
@@ -121,7 +122,8 @@ def _role_prompt(role: str, operation_id: str, topic_slug: str = '', user_goal: 
             'You may call it again later to refine if budget remains. A good-enough '
             'shortlist saved immediately beats a perfect one lost to turn/token caps.',
             'Your run is NOT complete until you have called Research.save_candidate_topics '
-            'with your shortlist — save it even if scouting was only partially successful.',
+            'with your shortlist — save it even if scouting was only partially successful. '
+            'After that call, do not initialize topics or finalize the operation.',
         ])
     if operation_id:
         base.append(f'Operation ID: {operation_id}')
@@ -238,20 +240,58 @@ def spawn_libris_role(
     topic_slug: str = '',
     user_goal: str = '',
     parent_agent_id: str = '',
+    agent_id: str = '',
+    restart_existing: bool = False,
 ) -> dict[str, Any]:
-    from charon.agents.agent_lifecycle import create_agent
+    from charon.agents.agent_lifecycle import create_agent, load_agents
 
     goal = user_goal or f'Libris {role} for {topic_slug or operation_id}'
-    agent = create_agent(
-        name=None,
-        mode='temp',
-        goal=goal,
-        project=str(project_root),
-        role=role,
-        visibility='background',
-        parent_agent_id=parent_agent_id or None,
-        require_tmux=False,
+    existing = next(
+        (
+            row for row in load_agents(Path(state_dir))
+            if agent_id and str(row.get('id') or '').lower() == agent_id.lower()
+        ),
+        None,
     )
+    if existing is not None:
+        expected_project = str(Path(project_root).resolve())
+        try:
+            existing_project = str(Path(str(existing.get('project') or '')).resolve())
+        except OSError:
+            existing_project = str(existing.get('project') or '')
+        mismatches = {
+            key: values
+            for key, values in {
+                'role': (str(existing.get('role') or ''), role),
+                'project': (existing_project, expected_project),
+                'goal': (str(existing.get('goal') or ''), goal),
+                'parent_agent_id': (
+                    str(existing.get('parent_agent_id') or ''),
+                    str(parent_agent_id or ''),
+                ),
+            }.items()
+            if values[0] != values[1]
+        }
+        if mismatches:
+            raise ValueError(
+                f'agent id {agent_id!r} already exists with a different '
+                f'Libris launch identity: {mismatches!r}'
+            )
+        agent = dict(existing)
+        if not restart_existing:
+            return agent
+    else:
+        agent = create_agent(
+            name=None,
+            mode='temp',
+            goal=goal,
+            project=str(project_root),
+            agent_id=agent_id or None,
+            role=role,
+            visibility='background',
+            parent_agent_id=parent_agent_id or None,
+            require_tmux=False,
+        )
 
     thread = threading.Thread(
         target=_run_libris_role,
@@ -353,6 +393,7 @@ def _run_operation_controller(
             get_budget_status,
             emit_agent_phase,
             emit_agent_comm,
+            TERMINAL_TOPIC_STATUSES,
         )
 
         emit_agent_phase(
@@ -584,6 +625,8 @@ def _run_operation_controller(
             for topic in op.get('topics') or []:
                 slug = str(topic.get('slug') or '')
                 if not slug:
+                    continue
+                if str(topic.get('status') or '') in TERMINAL_TOPIC_STATUSES:
                     continue
                 has_draft = bool(topic.get('draft_report_path'))
                 checkpoint_count = int(topic.get('checkpoint_count') or 0)

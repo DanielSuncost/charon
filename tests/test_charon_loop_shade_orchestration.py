@@ -4,6 +4,10 @@ import os
 import subprocess
 import sys
 
+from charon import charon_loop
+from charon.orchestration.graph_runtime import get_run, start_run
+from charon.orchestration.graph_schema import GraphDefinition
+
 SCRIPT = Path(__file__).resolve().parents[1] / 'src' / 'charon' / 'charon_loop.py'
 
 
@@ -99,3 +103,109 @@ def test_charon_task_delegates_to_shade_contract_and_indexes_phases(tmp_path):
     child_tasks = [t for t in final_queue if (t.get('shade_phase') or {}).get('contract_id') == contract.get('id')]
     assert child_tasks
     assert all((t.get('shade_phase') or {}).get('phase_lookup_key', '').startswith(contract.get('id') + ':') for t in child_tasks)
+
+
+def test_explicit_route_bypasses_automatic_shade_delegation(
+    tmp_path,
+    monkeypatch,
+):
+    state_dir = tmp_path / 'state'
+    project = tmp_path / 'project'
+    state_dir.mkdir()
+    project.mkdir()
+    agent = {
+        'id': 'AG-routed',
+        'name': 'routed-agent',
+        'mode': 'persistent',
+        'goal': 'execute the selected route',
+        'project': str(project),
+        'status': 'running',
+        'role': 'charon',
+    }
+    (state_dir / 'agents.json').write_text(json.dumps([agent]))
+    route = {
+        'provider': 'local',
+        'model_id': 'qwen3-30b-a3b',
+        'context_window': 65_536,
+    }
+    task = {
+        'id': 'task-routed-complex',
+        'instruction': 'Execute a complex routed task.',
+        'status': 'in_progress',
+        'task_type': 'agent_task',
+        'owner_agent_id': agent['id'],
+        'project': str(project),
+        'scope': ['src', 'tests'],
+        'constraints': ['keep compatibility', 'record evidence'],
+        'expected_outputs': ['implementation', 'test report'],
+        'model_route': route,
+    }
+    calls = []
+
+    def fake_run_task_tick(state, current, *, agent, llm_adapter):
+        calls.append((state, current['id'], agent['id']))
+        current['selected_model'] = dict(route)
+        current['executed_model'] = dict(route)
+        current['route_honored'] = True
+        return True, {
+            'status': 'task_succeeded',
+            'summary': 'routed execution completed',
+            'attempt_id': 'att-routed',
+        }
+
+    monkeypatch.setattr(
+        charon_loop.AGENT_RUNTIME,
+        'run_task_tick',
+        fake_run_task_tick,
+    )
+    monkeypatch.setattr(
+        charon_loop,
+        '_tick_shade_contract',
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError('routed task was delegated to shades')
+        ),
+    )
+
+    ok, result = charon_loop.process_task(
+        task,
+        state_dir,
+        [task],
+    )
+
+    assert ok is True
+    assert result['attempt_id'] == 'att-routed'
+    assert calls == [(state_dir, task['id'], agent['id'])]
+    assert task['route_honored'] is True
+    assert 'shade_orchestration' not in task
+
+
+def test_daemon_registers_builtin_graph_executors_after_restart(
+    tmp_path,
+    monkeypatch,
+):
+    state_dir = tmp_path / 'state'
+    stop_file = tmp_path / 'STOP'
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / 'agents.json').write_text('[]')
+    (state_dir / 'queue.json').write_text('[]')
+    definition = GraphDefinition.from_dict({
+        'schema_version': 1,
+        'graph_id': 'daemon-smoke',
+        'entry_nodes': ['finish'],
+        'nodes': [{
+            'id': 'finish',
+            'handler': 'noop',
+            'terminal': True,
+            'config': {'output': {'ok': True}},
+        }],
+        'edges': [],
+    })
+    started = start_run(state_dir, definition)
+    monkeypatch.setenv('CHARON_HEARTBEAT_INTERVAL', '1')
+
+    proc = _run_loop(state_dir, stop_file, max_cycles=3)
+
+    assert proc.returncode == 0, proc.stderr
+    final = get_run(state_dir, started['run_id'])
+    assert final['status'] == 'completed'
+    assert final['node_states']['finish']['output'] == {'ok': True}

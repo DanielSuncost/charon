@@ -72,20 +72,32 @@ def load_operation(operation_dir: Path) -> dict[str, Any]:
     claims = [c for c in all_claims if c.get('operation_id') == op_id]
     sources = [s for s in all_sources if s.get('operation_id') == op_id]
     sources_by_id = {s.get('source_id'): s for s in sources}
+    delivered_topic_ids = {
+        str(topic_id)
+        for topic_id in (op.get('delivered_topic_ids') or [])
+        if str(topic_id)
+    }
 
     topics = []
     troot = operation_dir / 'topics'
     if troot.exists():
         for tdir in sorted(p for p in troot.iterdir() if p.is_dir()):
             tj = _read_json(tdir / 'topic.json', {})
+            if delivered_topic_ids and str(tj.get('topic_id') or '') not in delivered_topic_ids:
+                continue
             slug = tj.get('slug') or tdir.name
             report_md = ''
             dr = tdir / 'draft-report.md'
             if dr.exists():
                 report_md = dr.read_text(encoding='utf-8')
-            # prefer the latest judged checkpoint report if present
+            # Prefer the coordinator-selected final report.  Falling back to
+            # the latest checkpoint can surface a regressed revision even when
+            # the selection logic correctly retained an earlier high-water mark.
+            final_report = tdir / 'final' / 'best-report.md'
             ckpts = _load_checkpoints(tdir)
-            if ckpts and ckpts[-1].get('report_md'):
+            if final_report.exists():
+                report_md = final_report.read_text(encoding='utf-8')
+            elif ckpts and ckpts[-1].get('report_md'):
                 report_md = ckpts[-1]['report_md']
             topics.append({
                 'slug': slug,

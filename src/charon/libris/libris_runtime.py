@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import os
 import re
+import threading
 import uuid
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,11 +19,26 @@ except Exception:  # diagnostics is best-effort and must never block import
         return None
 
 
+_EVENT_LOCKS: dict[str, threading.RLock] = {}
+_EVENT_LOCKS_GUARD = threading.Lock()
+_JSONL_CACHE_LIMIT = 64
+_JSONL_CACHE_ROW_LIMIT = 100_000
+_JSONL_CACHE: OrderedDict[
+    str,
+    tuple[tuple[int, int, int, int], tuple[dict[str, Any], ...]],
+] = OrderedDict()
+_JSONL_CACHE_LOCK = threading.RLock()
+
+
 # ── Helpers ─────────────────────────────────────────────────────────
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _operation_init_checkpoint(_stage: str, _operation_id: str) -> None:
+    """Fault-injection seam for operation-initialization recovery tests."""
 
 
 def _slug(text: str, fallback: str = 'item', max_len: int = 80) -> str:
@@ -52,6 +71,22 @@ def _write_json(path: Path, data: Any) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
 
 
+def _write_json_atomic(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f'.{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp')
+    try:
+        with temp.open('x', encoding='utf-8') as handle:
+            json.dump(data, handle, indent=2, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
+
+
 def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a', encoding='utf-8') as f:
@@ -59,8 +94,32 @@ def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
 
 
 def _iter_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
+    path = Path(path)
+    cache_key = str(path.resolve())
+    try:
+        before = path.stat()
+    except FileNotFoundError:
+        with _JSONL_CACHE_LOCK:
+            _JSONL_CACHE.pop(cache_key, None)
         return []
+    except OSError as e:
+        _diag('libris_runtime', 'JSONL log cannot be inspected; yielding no rows', error=e)
+        return []
+
+    signature = (
+        int(before.st_dev),
+        int(before.st_ino),
+        int(before.st_size),
+        int(before.st_mtime_ns),
+    )
+    with _JSONL_CACHE_LOCK:
+        cached = _JSONL_CACHE.get(cache_key)
+        if cached and cached[0] == signature:
+            _JSONL_CACHE.move_to_end(cache_key)
+            # The cache owns its tuple. Callers may sort or slice the returned
+            # list, or replace top-level fields, without changing the entry.
+            return [dict(row) for row in cached[1]]
+
     rows: list[dict[str, Any]] = []
     try:
         for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
@@ -76,6 +135,30 @@ def _iter_jsonl(path: Path) -> list[dict[str, Any]]:
     except Exception as e:
         _diag('libris_runtime', 'JSONL log unreadable; yielding no rows', error=e)
         return []
+
+    try:
+        after = path.stat()
+        after_signature = (
+            int(after.st_dev),
+            int(after.st_ino),
+            int(after.st_size),
+            int(after.st_mtime_ns),
+        )
+    except OSError:
+        after_signature = None
+    if after_signature == signature:
+        with _JSONL_CACHE_LOCK:
+            _JSONL_CACHE[cache_key] = (
+                signature,
+                tuple(dict(row) for row in rows),
+            )
+            _JSONL_CACHE.move_to_end(cache_key)
+            while len(_JSONL_CACHE) > _JSONL_CACHE_LIMIT or (
+                len(_JSONL_CACHE) > 1
+                and sum(len(entry[1]) for entry in _JSONL_CACHE.values())
+                > _JSONL_CACHE_ROW_LIMIT
+            ):
+                _JSONL_CACHE.popitem(last=False)
     return rows
 
 
@@ -208,24 +291,74 @@ def _evaluate_budget(operation: dict[str, Any]) -> dict[str, Any]:
 
 # ── Project paths / metadata ────────────────────────────────────────
 
+from charon.infra.project_registry import get_project_by_root  # noqa: E402 — deliberate late import: section-local dependency
 from charon.infra.project_registry_loader import load_ensure_project  # noqa: E402 — deliberate late import: section-local dependency
 
 _ensure_project_registry = load_ensure_project(__file__, 'libris_runtime')
 
 
 def derive_project_id(project_root: Path) -> str:
+    """Backward-compatible project-id helper.
+
+    New storage code must use ``resolve_project_id`` because deriving a registry
+    location from ``project_root.parent`` can select a different Charon state
+    tree than the caller's explicit ``state_dir``.
+    """
     state_dir = project_root.parent / '.charon_state'
+    return resolve_project_id(state_dir, project_root)
+
+
+def resolve_project_id(state_dir: Path, project_root: Path) -> str:
+    """Resolve the project id in the caller's state tree.
+
+    Older Libris builds accidentally consulted ``project_root.parent/.charon_state``
+    even when the runtime was using ``project_root/.charon_state``.  Preserve an
+    existing research directory for the same root so historical operations do
+    not disappear merely because a registry id changed.
+    """
+    state_dir = Path(state_dir)
+    root = Path(project_root).resolve()
     try:
-        proj = _ensure_project_registry(state_dir, project_root, provisional=True)
-        return str(proj.get('id') or '') or _slug(project_root.name or 'project', 'project', 48)
+        # Project lookup is a read-heavy hot path. Do not rewrite both
+        # registry files on every topic, event, and index lookup.
+        proj = get_project_by_root(state_dir, root)
+        if proj is None:
+            proj = _ensure_project_registry(state_dir, root, provisional=True)
+        canonical = str(proj.get('id') or '').strip()
+        candidates: list[tuple[int, float, str]] = []
+        projects_dir = state_dir / 'projects'
+        for project_json in projects_dir.glob('*/project.json'):
+            try:
+                doc = _read_json(project_json, {})
+                roots = {str(Path(x).resolve()) for x in (doc.get('roots') or []) if str(x).strip()}
+                if doc.get('root_path'):
+                    roots.add(str(Path(doc['root_path']).resolve()))
+                if str(root) not in roots:
+                    continue
+                research = project_json.parent / 'research'
+                op_count = len(list((research / 'operations').glob('*/operation.json')))
+                if op_count:
+                    candidates.append((op_count, research.stat().st_mtime, project_json.parent.name))
+            except Exception:
+                continue
+        if candidates:
+            # Prefer the canonical registry directory whenever it already holds
+            # history. Otherwise fall back to the richest legacy directory so
+            # old operations remain discoverable after an id migration.
+            canonical_matches = [c for c in candidates if c[2] == canonical]
+            if canonical_matches:
+                return canonical
+            return max(candidates)[2]
+        if canonical:
+            return canonical
     except Exception as e:
         _diag('libris_runtime', 'project registry lookup failed; using hash-derived project id', error=e)
-        base = _slug(project_root.name or 'project', 'project', 48)
-        return f'{base}-{_short_hash(str(project_root.resolve()))}'
+    base = _slug(root.name or 'project', 'project', 48)
+    return f'{base}-{_short_hash(str(root))}'
 
 
 def project_dir(state_dir: Path, project_root: Path) -> Path:
-    return state_dir / 'projects' / derive_project_id(project_root)
+    return Path(state_dir) / 'projects' / resolve_project_id(state_dir, project_root)
 
 
 def project_json_path(state_dir: Path, project_root: Path) -> Path:
@@ -299,6 +432,74 @@ def topic_dir(state_dir: Path, project_root: Path, operation_id: str, topic_slug
     return operation_dir(state_dir, project_root, operation_id) / 'topics' / topic_slug
 
 
+def _apply_lifecycle_projection(
+    state_dir: Path,
+    entity_id: str,
+    document: dict[str, Any],
+    *,
+    entity_type: str,
+    projection_path: Path | None = None,
+) -> dict[str, Any]:
+    """Overlay authoritative lifecycle state without mutating the projection."""
+    try:
+        from charon.libris import libris_lifecycle as lifecycle
+
+        instance = lifecycle.load_lifecycle(
+            state_dir,
+            entity_id,
+            entity_type=entity_type,
+        )
+    except Exception as exc:
+        _diag(
+            'libris_runtime',
+            'authoritative lifecycle could not be loaded; using persisted projection',
+            error=exc,
+            entity_type=entity_type,
+            entity_id=entity_id,
+        )
+        failed = dict(document)
+        failed['status'] = 'lifecycle_error'
+        failed['lifecycle_integrity'] = {
+            'valid': False,
+            'reason': str(exc),
+        }
+        return failed
+    if instance is None:
+        return document
+    projected = dict(document)
+    projected['status'] = lifecycle.projected_status(instance)
+    projected['lifecycle_state'] = instance.state
+    projected['lifecycle_revision'] = instance.revision
+    projected['lifecycle_event_seq'] = instance.event_seq
+    projected['lifecycle_updated_at'] = instance.updated_at
+    projected['lifecycle_integrity'] = {'valid': True, 'reason': ''}
+    if projection_path is not None:
+        def reconcile(current: dict[str, Any]) -> dict[str, Any]:
+            if int(current.get('lifecycle_revision') or -1) <= instance.revision:
+                _persist_lifecycle_projection_fields(
+                    current,
+                    instance,
+                    lifecycle.projected_status(instance),
+                )
+                current['lifecycle_integrity'] = {'valid': True, 'reason': ''}
+            return current
+
+        lifecycle.mutate_projection(projection_path, reconcile)
+    return projected
+
+
+def _persist_lifecycle_projection_fields(
+    document: dict[str, Any],
+    instance: Any,
+    projected_status: str,
+) -> None:
+    document['status'] = projected_status
+    document['lifecycle_state'] = instance.state
+    document['lifecycle_revision'] = instance.revision
+    document['lifecycle_event_seq'] = instance.event_seq
+    document['lifecycle_updated_at'] = instance.updated_at
+
+
 # ── Research tree setup ─────────────────────────────────────────────
 
 
@@ -321,7 +522,7 @@ def ensure_research_tree(state_dir: Path, project_root: Path) -> dict[str, str]:
     index_path = rroot / 'index.json'
     if not index_path.exists():
         _write_json(index_path, {
-            'project_id': derive_project_id(project_root),
+            'project_id': resolve_project_id(state_dir, project_root),
             'updated_at': _now_iso(),
             'operations': [],
             'topics': [],
@@ -347,15 +548,46 @@ def append_operation_event(
     operation_id: str,
     event_type: str,
     payload: dict[str, Any] | None = None,
+    *,
+    event_id: str | None = None,
 ) -> dict[str, Any]:
+    path = operation_dir(state_dir, project_root, operation_id) / 'events.jsonl'
+    lock_path = path.with_name('.events.lock')
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_key = str(lock_path.resolve())
+    with _EVENT_LOCKS_GUARD:
+        local_lock = _EVENT_LOCKS.setdefault(lock_key, threading.RLock())
     row = {
-        'event_id': _new_id('evt'),
+        'event_id': event_id or _new_id('evt'),
         'operation_id': operation_id,
         'type': event_type,
         'timestamp': _now_iso(),
         'payload': payload or {},
     }
-    _append_jsonl(operation_dir(state_dir, project_root, operation_id) / 'events.jsonl', row)
+    with local_lock:
+        with lock_path.open('a+', encoding='utf-8') as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                if event_id:
+                    for existing in _iter_jsonl(path):
+                        if str(existing.get('event_id') or '') != event_id:
+                            continue
+                        if (
+                            existing.get('operation_id') != operation_id
+                            or existing.get('type') != event_type
+                            or (existing.get('payload') or {}) != (payload or {})
+                        ):
+                            raise ValueError(
+                                f'operation event id {event_id!r} was reused for different content'
+                            )
+                        return existing
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open('a', encoding='utf-8') as event_handle:
+                    event_handle.write(json.dumps(row, ensure_ascii=False) + '\n')
+                    event_handle.flush()
+                    os.fsync(event_handle.fileno())
+            finally:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
     return row
 
 
@@ -432,6 +664,12 @@ def rebuild_project_index(state_dir: Path, project_root: Path) -> dict[str, Any]
                 continue
             op = _read_json(op_path / 'operation.json', {})
             if op:
+                op = _apply_lifecycle_projection(
+                    state_dir,
+                    str(op.get('operation_id') or op_path.name),
+                    op,
+                    entity_type='operation',
+                )
                 operations.append({
                     'operation_id': op.get('operation_id'),
                     'status': op.get('status'),
@@ -447,6 +685,12 @@ def rebuild_project_index(state_dir: Path, project_root: Path) -> dict[str, Any]
                         continue
                     topic = _read_json(topic_path / 'topic.json', {})
                     if topic:
+                        topic = _apply_lifecycle_projection(
+                            state_dir,
+                            str(topic.get('topic_id') or topic_path.name),
+                            topic,
+                            entity_type='topic',
+                        )
                         topics.append({
                             'topic_id': topic.get('topic_id'),
                             'operation_id': topic.get('operation_id'),
@@ -460,7 +704,7 @@ def rebuild_project_index(state_dir: Path, project_root: Path) -> dict[str, Any]
                     brief_count += len(list((topic_path / 'checkpoints').glob('*-report.md')))
 
     idx = {
-        'project_id': derive_project_id(project_root),
+        'project_id': resolve_project_id(state_dir, project_root),
         'updated_at': _now_iso(),
         'operations': operations,
         'topics': topics,
@@ -491,6 +735,7 @@ def init_operation(
     summary: str = '',
     budget: dict[str, Any] | None = None,
     model_policy: dict[str, Any] | None = None,
+    durable_bootstrap: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ensure_project_metadata(
         state_dir,
@@ -502,20 +747,23 @@ def init_operation(
     )
     ensure_research_tree(state_dir, project_root)
 
-    op_id = f'rop_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")}_{uuid.uuid4().hex[:4]}'
+    # Twelve random hex digits keep the legacy-readable timestamp prefix while
+    # making cross-project collisions in the shared lifecycle store negligible.
+    op_id = f'rop_{datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")}_{uuid.uuid4().hex[:12]}'
     op_dir = operation_dir(state_dir, project_root, op_id)
     (op_dir / 'coordinator').mkdir(parents=True, exist_ok=True)
     (op_dir / 'topics').mkdir(parents=True, exist_ok=True)
 
+    now = _now_iso()
     doc = {
         'operation_id': op_id,
-        'project_id': derive_project_id(project_root),
+        'project_id': resolve_project_id(state_dir, project_root),
         'prompt': str(prompt).strip(),
         'mode': mode,
         'status': 'running',
         'coordinator_agent_id': coordinator_agent_id,
-        'created_at': _now_iso(),
-        'updated_at': _now_iso(),
+        'created_at': now,
+        'updated_at': now,
         'stop_requested': False,
         'selected_topic_ids': [],
         'delivered_topic_ids': [],
@@ -523,14 +771,71 @@ def init_operation(
         'model_policy': _normalize_model_policy(model_policy),
         'usage': _default_usage(),
     }
-    _write_json(op_dir / 'operation.json', doc)
-    append_operation_event(state_dir, project_root, op_id, 'operation_started', {
-        'prompt': str(prompt).strip()[:500],
-        'mode': mode,
-        'coordinator_agent_id': coordinator_agent_id,
-        'budget': doc['budget'],
-        'model_policy': doc['model_policy'],
-    })
+    if durable_bootstrap:
+        bootstrap = dict(durable_bootstrap)
+        bootstrap['operation_started_payload'] = {
+            'prompt': str(prompt).strip()[:500],
+            'mode': mode,
+            'coordinator_agent_id': coordinator_agent_id,
+            'budget': doc['budget'],
+            'model_policy': doc['model_policy'],
+        }
+        doc['durable_bootstrap'] = bootstrap
+    _write_json_atomic(op_dir / 'operation.json', doc)
+    if durable_bootstrap:
+        _operation_init_checkpoint('operation_projection_persisted', op_id)
+    return reconcile_operation_initialization(state_dir, project_root, op_id)
+
+
+def reconcile_operation_initialization(
+    state_dir: Path,
+    project_root: Path,
+    operation_id: str,
+) -> dict[str, Any]:
+    """Idempotently finish lifecycle, start-event, and index initialization."""
+    op_dir = operation_dir(state_dir, project_root, operation_id)
+    path = op_dir / 'operation.json'
+    doc = _read_json(path, {})
+    if not doc:
+        return {}
+    from charon.libris import libris_lifecycle as lifecycle
+
+    machine = lifecycle.initialize_lifecycle(
+        state_dir,
+        entity_type='operation',
+        entity_id=operation_id,
+        projected_status=str(doc.get('status') or 'running'),
+        now=str(doc.get('created_at') or _now_iso()),
+        data={'operation_id': operation_id},
+    )
+
+    def reconcile_projection(current: dict[str, Any]) -> dict[str, Any]:
+        _persist_lifecycle_projection_fields(
+            current,
+            machine,
+            lifecycle.projected_status(machine),
+        )
+        return current
+
+    doc = lifecycle.mutate_projection(path, reconcile_projection)
+    bootstrap = dict(doc.get('durable_bootstrap') or {})
+    start_payload = dict(bootstrap.get('operation_started_payload') or {})
+    if not start_payload:
+        start_payload = {
+            'prompt': str(doc.get('prompt') or '').strip()[:500],
+            'mode': str(doc.get('mode') or ''),
+            'coordinator_agent_id': str(doc.get('coordinator_agent_id') or ''),
+            'budget': doc.get('budget') or {},
+            'model_policy': doc.get('model_policy') or {},
+        }
+    append_operation_event(
+        state_dir,
+        project_root,
+        operation_id,
+        'operation_started',
+        start_payload,
+        event_id=f'libris-operation-started:{operation_id}',
+    )
     rebuild_project_index(state_dir, project_root)
     return doc
 
@@ -540,6 +845,13 @@ def get_operation_state(state_dir: Path, project_root: Path, operation_id: str) 
     op = _read_json(op_dir / 'operation.json', {})
     if not op:
         return {}
+    op = _apply_lifecycle_projection(
+        state_dir,
+        operation_id,
+        op,
+        entity_type='operation',
+        projection_path=op_dir / 'operation.json',
+    )
     op['candidate_topics'] = _read_json(op_dir / 'coordinator' / 'candidate-topics.json', [])
     op['events_tail'] = _iter_jsonl(op_dir / 'events.jsonl')[-20:]
     topics: list[dict[str, Any]] = []
@@ -555,13 +867,18 @@ def get_operation_state(state_dir: Path, project_root: Path, operation_id: str) 
 
 
 def request_stop(state_dir: Path, project_root: Path, operation_id: str, reason: str = '') -> dict[str, Any]:
+    from charon.libris import libris_lifecycle as lifecycle
+
     path = operation_dir(state_dir, project_root, operation_id) / 'operation.json'
-    op = _read_json(path, {})
-    if not op:
+    if not path.exists():
         return {}
-    op['stop_requested'] = True
-    op['updated_at'] = _now_iso()
-    _write_json(path, op)
+
+    def mark_stop(current: dict[str, Any]) -> dict[str, Any]:
+        current['stop_requested'] = True
+        current['updated_at'] = _now_iso()
+        return current
+
+    op = lifecycle.mutate_projection(path, mark_stop)
     append_operation_event(state_dir, project_root, operation_id, 'operation_stop_requested', {'reason': reason[:500]})
     rebuild_project_index(state_dir, project_root)
     return op
@@ -630,6 +947,7 @@ def init_topic(
     (tdir / 'final').mkdir(parents=True, exist_ok=True)
 
     topic_id = _new_id('top')
+    now = _now_iso()
     doc = {
         'topic_id': topic_id,
         'operation_id': operation_id,
@@ -648,16 +966,32 @@ def init_topic(
         'budget': _normalize_budget(topic_budget),
         'model_policy_override': _normalize_model_policy(model_policy_override),
         'usage': _default_usage(),
-        'created_at': _now_iso(),
-        'updated_at': _now_iso(),
+        'created_at': now,
+        'updated_at': now,
     }
     _write_json(tdir / 'topic.json', doc)
+    from charon.libris import libris_lifecycle as lifecycle
 
-    selected = list(op.get('selected_topic_ids') or [])
-    selected.append(topic_id)
-    op['selected_topic_ids'] = selected
-    op['updated_at'] = _now_iso()
-    _write_json(op_path, op)
+    machine = lifecycle.initialize_lifecycle(
+        state_dir,
+        entity_type='topic',
+        entity_id=topic_id,
+        projected_status='researching',
+        now=now,
+        data={'operation_id': operation_id, 'topic_slug': slug},
+    )
+    _persist_lifecycle_projection_fields(doc, machine, lifecycle.projected_status(machine))
+    _write_json(tdir / 'topic.json', doc)
+
+    def add_selected_topic(current: dict[str, Any]) -> dict[str, Any]:
+        selected = list(current.get('selected_topic_ids') or [])
+        if topic_id not in selected:
+            selected.append(topic_id)
+        current['selected_topic_ids'] = selected
+        current['updated_at'] = _now_iso()
+        return current
+
+    lifecycle.mutate_projection(op_path, add_selected_topic)
 
     append_operation_event(state_dir, project_root, operation_id, 'topic_selected', {
         'topic_id': topic_id,
@@ -675,6 +1009,13 @@ def get_topic_state(state_dir: Path, project_root: Path, operation_id: str, topi
     topic = _read_json(tdir / 'topic.json', {})
     if not topic:
         return {}
+    topic = _apply_lifecycle_projection(
+        state_dir,
+        str(topic.get('topic_id') or topic_slug),
+        topic,
+        entity_type='topic',
+        projection_path=tdir / 'topic.json',
+    )
     checkpoints = []
     meta_items = []
     cdir = tdir / 'checkpoints'
@@ -716,28 +1057,58 @@ def update_topic_runtime(
     judge_agent_id: str | None = None,
     extras: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    path = topic_dir(state_dir, project_root, operation_id, topic_slug) / 'topic.json'
+    from charon.libris import libris_lifecycle as lifecycle
+
+    tdir = topic_dir(state_dir, project_root, operation_id, topic_slug)
+    path = tdir / 'topic.json'
     topic = _read_json(path, {})
     if not topic:
         return {}
+    authoritative = _apply_lifecycle_projection(
+        state_dir,
+        str(topic.get('topic_id') or topic_slug),
+        topic,
+        entity_type='topic',
+    )
+    lifecycle_event: dict[str, Any] = {}
+    machine = None
     if status is not None:
-        topic['status'] = status
-    if researcher_agent_id is not None:
-        topic['researcher_agent_id'] = researcher_agent_id
-    if judge_agent_id is not None:
-        topic['judge_agent_id'] = judge_agent_id
-    if extras:
-        for k, v in extras.items():
-            topic[str(k)] = v
-    topic['updated_at'] = _now_iso()
-    _write_json(path, topic)
+        machine, lifecycle_event = lifecycle.transition_lifecycle(
+            state_dir,
+            entity_type='topic',
+            entity_id=str(topic.get('topic_id') or topic_slug),
+            current_projected_status=str(authoritative.get('status') or topic.get('status') or 'researching'),
+            target_projected_status=str(status),
+        )
+
+    def mutate_projection(current: dict[str, Any]) -> dict[str, Any]:
+        if machine is not None and int(current.get('lifecycle_revision') or -1) <= machine.revision:
+            _persist_lifecycle_projection_fields(
+                current,
+                machine,
+                lifecycle.projected_status(machine),
+            )
+        if researcher_agent_id is not None:
+            current['researcher_agent_id'] = researcher_agent_id
+        if judge_agent_id is not None:
+            current['judge_agent_id'] = judge_agent_id
+        if extras:
+            for key, value in extras.items():
+                current[str(key)] = value
+        current['updated_at'] = _now_iso()
+        return current
+
+    topic = lifecycle.mutate_projection(path, mutate_projection)
+    if not topic:
+        return {}
     append_operation_event(state_dir, project_root, operation_id, 'topic_runtime_updated', {
         'topic_slug': topic_slug,
         'status': topic.get('status'),
         'researcher_agent_id': topic.get('researcher_agent_id', ''),
         'judge_agent_id': topic.get('judge_agent_id', ''),
         'extras': extras or {},
-    })
+        'lifecycle_transition': lifecycle_event,
+    }, event_id=str(lifecycle_event.get('event_id') or '') or None)
     rebuild_project_index(state_dir, project_root)
     return topic
 
@@ -771,7 +1142,7 @@ def add_source(
 
     row = {
         'source_id': source_id,
-        'project_id': derive_project_id(project_root),
+        'project_id': resolve_project_id(state_dir, project_root),
         'operation_id': operation_id,
         'topic_slug': topic_slug,
         'url': url.strip(),
@@ -806,7 +1177,7 @@ def add_claim(
     ensure_research_tree(state_dir, project_root)
     row = {
         'claim_id': _new_id('clm'),
-        'project_id': derive_project_id(project_root),
+        'project_id': resolve_project_id(state_dir, project_root),
         'operation_id': operation_id,
         'topic_slug': topic_slug,
         'source_id': source_id,
@@ -1029,20 +1400,57 @@ def finalize_delivery(
 
     report_src = Path(str(ckp.get('report_path')))
     critique_src = Path(str(ckp.get('critique_path')))
-    if report_src.exists():
-        (final_dir / 'best-report.md').write_text(report_src.read_text(encoding='utf-8', errors='replace'), encoding='utf-8')
-    if critique_src.exists():
-        (final_dir / 'best-critique.md').write_text(critique_src.read_text(encoding='utf-8', errors='replace'), encoding='utf-8')
+    try:
+        report_markdown = report_src.read_text(encoding='utf-8', errors='replace')
+    except (OSError, ValueError) as exc:
+        _diag(
+            'libris_runtime',
+            'selected checkpoint report is unreadable; delivery not created',
+            error=exc,
+            operation_id=operation_id,
+            topic_slug=topic_slug,
+            checkpoint_id=checkpoint_id,
+        )
+        return {}
+    if not report_markdown.strip():
+        _diag(
+            'libris_runtime',
+            'selected checkpoint report is empty; delivery not created',
+            operation_id=operation_id,
+            topic_slug=topic_slug,
+            checkpoint_id=checkpoint_id,
+        )
+        return {}
+
+    (final_dir / 'best-report.md').write_text(report_markdown, encoding='utf-8')
+    if critique_src.is_file():
+        try:
+            critique_markdown = critique_src.read_text(encoding='utf-8', errors='replace')
+            (final_dir / 'best-critique.md').write_text(critique_markdown, encoding='utf-8')
+        except OSError as exc:
+            _diag(
+                'libris_runtime',
+                'selected checkpoint critique is unreadable; delivering report without critique',
+                error=exc,
+                operation_id=operation_id,
+                topic_slug=topic_slug,
+                checkpoint_id=checkpoint_id,
+            )
     (final_dir / 'delivery-note.md').write_text(note, encoding='utf-8')
 
-    delivered = list(op.get('delivered_topic_ids') or [])
     topic = _read_json(tdir / 'topic.json', {})
     topic_id = topic.get('topic_id')
-    if topic_id and topic_id not in delivered:
-        delivered.append(topic_id)
-    op['delivered_topic_ids'] = delivered
-    op['updated_at'] = _now_iso()
-    _write_json(op_path, op)
+    from charon.libris import libris_lifecycle as lifecycle
+
+    def add_delivered_topic(current: dict[str, Any]) -> dict[str, Any]:
+        delivered = list(current.get('delivered_topic_ids') or [])
+        if topic_id and topic_id not in delivered:
+            delivered.append(topic_id)
+        current['delivered_topic_ids'] = delivered
+        current['updated_at'] = _now_iso()
+        return current
+
+    lifecycle.mutate_projection(op_path, add_delivered_topic)
 
     append_operation_event(state_dir, project_root, operation_id, 'delivery_selected', {
         'topic_slug': topic_slug,
@@ -1065,20 +1473,29 @@ def update_operation_budget(
     budget: dict[str, Any] | None = None,
     model_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    from charon.libris import libris_lifecycle as lifecycle
+
     path = operation_dir(state_dir, project_root, operation_id) / 'operation.json'
-    op = _read_json(path, {})
-    if not op:
+    if not path.exists():
         return {}
-    if budget is not None:
-        merged_budget = dict(_normalize_budget(op.get('budget') or {}))
-        merged_budget.update({k: v for k, v in _normalize_budget(budget).items() if v not in (0, 0.0) or k in (budget or {})})
-        op['budget'] = merged_budget
-    if model_policy is not None:
-        merged_policy = dict(_normalize_model_policy(op.get('model_policy') or {}))
-        merged_policy.update(_normalize_model_policy(model_policy))
-        op['model_policy'] = merged_policy
-    op['updated_at'] = _now_iso()
-    _write_json(path, op)
+
+    def update_budget_projection(current: dict[str, Any]) -> dict[str, Any]:
+        if budget is not None:
+            merged_budget = dict(_normalize_budget(current.get('budget') or {}))
+            merged_budget.update({
+                key: value
+                for key, value in _normalize_budget(budget).items()
+                if value not in (0, 0.0) or key in (budget or {})
+            })
+            current['budget'] = merged_budget
+        if model_policy is not None:
+            merged_policy = dict(_normalize_model_policy(current.get('model_policy') or {}))
+            merged_policy.update(_normalize_model_policy(model_policy))
+            current['model_policy'] = merged_policy
+        current['updated_at'] = _now_iso()
+        return current
+
+    op = lifecycle.mutate_projection(path, update_budget_projection)
     append_operation_event(state_dir, project_root, operation_id, 'operation_budget_updated', {
         'budget': op.get('budget') or {},
         'model_policy': op.get('model_policy') or {},
@@ -1093,17 +1510,45 @@ def set_operation_status(
     status: str,
     note: str = '',
 ) -> dict[str, Any]:
+    from charon.libris import libris_lifecycle as lifecycle
+
     path = operation_dir(state_dir, project_root, operation_id) / 'operation.json'
     op = _read_json(path, {})
     if not op:
         return {}
-    op['status'] = str(status).strip() or op.get('status') or 'running'
-    op['updated_at'] = _now_iso()
-    _write_json(path, op)
+    target = str(status).strip() or str(op.get('status') or 'running')
+    authoritative = _apply_lifecycle_projection(
+        state_dir,
+        operation_id,
+        op,
+        entity_type='operation',
+    )
+    machine, lifecycle_event = lifecycle.transition_lifecycle(
+        state_dir,
+        entity_type='operation',
+        entity_id=operation_id,
+        current_projected_status=str(authoritative.get('status') or op.get('status') or 'running'),
+        target_projected_status=target,
+        note=note,
+        reason=note,
+    )
+
+    def mutate_projection(current: dict[str, Any]) -> dict[str, Any]:
+        if int(current.get('lifecycle_revision') or -1) <= machine.revision:
+            _persist_lifecycle_projection_fields(
+                current,
+                machine,
+                lifecycle.projected_status(machine),
+            )
+        current['updated_at'] = _now_iso()
+        return current
+
+    op = lifecycle.mutate_projection(path, mutate_projection)
     append_operation_event(state_dir, project_root, operation_id, 'operation_status_updated', {
         'status': op['status'],
         'note': note[:500],
-    })
+        'lifecycle_transition': lifecycle_event,
+    }, event_id=str(lifecycle_event.get('event_id') or '') or None)
     rebuild_project_index(state_dir, project_root)
     return op
 
@@ -1117,19 +1562,92 @@ def update_operation_runtime(
     status: str | None = None,
     note: str = '',
 ) -> dict[str, Any]:
+    from charon.libris import libris_lifecycle as lifecycle
+
     path = operation_dir(state_dir, project_root, operation_id) / 'operation.json'
     op = _read_json(path, {})
     if not op:
         return {}
-    if coordinator_agent_id is not None:
-        op['coordinator_agent_id'] = coordinator_agent_id
+    machine = None
+    lifecycle_event: dict[str, Any] = {}
     if status is not None:
-        op['status'] = status
-    op['updated_at'] = _now_iso()
-    _write_json(path, op)
+        authoritative = _apply_lifecycle_projection(
+            state_dir,
+            operation_id,
+            op,
+            entity_type='operation',
+        )
+        machine, lifecycle_event = lifecycle.transition_lifecycle(
+            state_dir,
+            entity_type='operation',
+            entity_id=operation_id,
+            current_projected_status=str(authoritative.get('status') or op.get('status') or 'running'),
+            target_projected_status=str(status),
+            note=note,
+            reason=note,
+        )
+
+    def mutate_projection(current: dict[str, Any]) -> dict[str, Any]:
+        if machine is not None and int(current.get('lifecycle_revision') or -1) <= machine.revision:
+            _persist_lifecycle_projection_fields(
+                current,
+                machine,
+                lifecycle.projected_status(machine),
+            )
+        if coordinator_agent_id is not None:
+            current['coordinator_agent_id'] = coordinator_agent_id
+        current['updated_at'] = _now_iso()
+        return current
+
+    op = lifecycle.mutate_projection(path, mutate_projection)
     append_operation_event(state_dir, project_root, operation_id, 'operation_runtime_updated', {
         'coordinator_agent_id': op.get('coordinator_agent_id', ''),
         'status': op.get('status', ''),
+        'note': note[:500],
+        'lifecycle_transition': lifecycle_event,
+    }, event_id=str(lifecycle_event.get('event_id') or '') or None)
+    rebuild_project_index(state_dir, project_root)
+    return op
+
+
+def adopt_legacy_incomplete_delivery(
+    state_dir: Path,
+    project_root: Path,
+    operation_id: str,
+    *,
+    note: str = 'Repairing an incomplete legacy delivery.',
+) -> dict[str, Any]:
+    """Move a pre-FSM false delivery into authoritative active recovery."""
+    from charon.libris import libris_lifecycle as lifecycle
+
+    path = operation_dir(state_dir, project_root, operation_id) / 'operation.json'
+    op = _read_json(path, {})
+    if not op:
+        return {}
+    if str(op.get('status') or '') != 'delivered':
+        raise ValueError('legacy delivery adoption requires a delivered projection')
+    manifest = get_delivery_manifest(state_dir, project_root, operation_id, op=op)
+    if manifest.get('ready'):
+        return get_operation_state(state_dir, project_root, operation_id)
+    machine = lifecycle.adopt_legacy_incomplete_delivery(
+        state_dir,
+        operation_id=operation_id,
+        note=note,
+    )
+
+    def project_recovery(current: dict[str, Any]) -> dict[str, Any]:
+        _persist_lifecycle_projection_fields(
+            current,
+            machine,
+            lifecycle.projected_status(machine),
+        )
+        current['updated_at'] = _now_iso()
+        return current
+
+    op = lifecycle.mutate_projection(path, project_recovery)
+    append_operation_event(state_dir, project_root, operation_id, 'legacy_delivery_reopened', {
+        'previous_status': 'delivered',
+        'status': op.get('status'),
         'note': note[:500],
     })
     rebuild_project_index(state_dir, project_root)
@@ -1162,43 +1680,49 @@ def record_usage(
     rle = (role or '').strip() or 'unknown'
     cost = _coerce_float(estimated_cost_usd, _estimate_cost_usd(mdl, inp, out))
 
-    usage = dict(_default_usage())
-    usage.update(op.get('usage') or {})
-    usage['input_tokens'] = _coerce_int(usage.get('input_tokens')) + inp
-    usage['output_tokens'] = _coerce_int(usage.get('output_tokens')) + out
-    usage['total_tokens'] = _coerce_int(usage.get('total_tokens')) + total
-    usage['estimated_cost_usd'] = round(_coerce_float(usage.get('estimated_cost_usd')) + cost, 6)
-    # Record the billing basis so the $ estimate is never presented as a real cost
-    # under an OAuth/subscription (flat-rate) or local (free) provider.
-    if not usage.get('cost_basis'):
-        try:
-            from charon.providers.model_registry import resolve_billing_mode
-            usage['cost_basis'] = resolve_billing_mode(state_dir)
-        except Exception as exc:
-            _diag('libris_runtime', 'billing-mode resolution failed; cost_basis left unknown', error=exc)
-    usage['updated_at'] = _now_iso()
+    from charon.libris import libris_lifecycle as lifecycle
 
-    by_model = dict(usage.get('by_model') or {})
-    md = dict(by_model.get(mdl) or {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0, 'estimated_cost_usd': 0.0})
-    md['input_tokens'] += inp
-    md['output_tokens'] += out
-    md['total_tokens'] += total
-    md['estimated_cost_usd'] = round(_coerce_float(md.get('estimated_cost_usd')) + cost, 6)
-    by_model[mdl] = md
-    usage['by_model'] = by_model
+    def add_operation_usage(current: dict[str, Any]) -> dict[str, Any]:
+        usage = dict(_default_usage())
+        usage.update(current.get('usage') or {})
+        usage['input_tokens'] = _coerce_int(usage.get('input_tokens')) + inp
+        usage['output_tokens'] = _coerce_int(usage.get('output_tokens')) + out
+        usage['total_tokens'] = _coerce_int(usage.get('total_tokens')) + total
+        usage['estimated_cost_usd'] = round(_coerce_float(usage.get('estimated_cost_usd')) + cost, 6)
+        if not usage.get('cost_basis'):
+            try:
+                from charon.providers.model_registry import resolve_billing_mode
+                usage['cost_basis'] = resolve_billing_mode(state_dir)
+            except Exception as exc:
+                _diag('libris_runtime', 'billing-mode resolution failed; cost_basis left unknown', error=exc)
+        usage['updated_at'] = _now_iso()
 
-    by_role = dict(usage.get('by_role') or {})
-    rl = dict(by_role.get(rle) or {'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0, 'estimated_cost_usd': 0.0})
-    rl['input_tokens'] += inp
-    rl['output_tokens'] += out
-    rl['total_tokens'] += total
-    rl['estimated_cost_usd'] = round(_coerce_float(rl.get('estimated_cost_usd')) + cost, 6)
-    by_role[rle] = rl
-    usage['by_role'] = by_role
+        by_model = dict(usage.get('by_model') or {})
+        model_usage = dict(by_model.get(mdl) or {
+            'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0, 'estimated_cost_usd': 0.0,
+        })
+        model_usage['input_tokens'] += inp
+        model_usage['output_tokens'] += out
+        model_usage['total_tokens'] += total
+        model_usage['estimated_cost_usd'] = round(_coerce_float(model_usage.get('estimated_cost_usd')) + cost, 6)
+        by_model[mdl] = model_usage
+        usage['by_model'] = by_model
 
-    op['usage'] = usage
-    op['updated_at'] = _now_iso()
-    _write_json(path, op)
+        by_role = dict(usage.get('by_role') or {})
+        role_usage = dict(by_role.get(rle) or {
+            'input_tokens': 0, 'output_tokens': 0, 'total_tokens': 0, 'estimated_cost_usd': 0.0,
+        })
+        role_usage['input_tokens'] += inp
+        role_usage['output_tokens'] += out
+        role_usage['total_tokens'] += total
+        role_usage['estimated_cost_usd'] = round(_coerce_float(role_usage.get('estimated_cost_usd')) + cost, 6)
+        by_role[rle] = role_usage
+        usage['by_role'] = by_role
+        current['usage'] = usage
+        current['updated_at'] = _now_iso()
+        return current
+
+    op = lifecycle.mutate_projection(path, add_operation_usage)
 
     event_payload = {
         'role': rle,
@@ -1215,24 +1739,30 @@ def record_usage(
 
     if topic_slug:
         tpath = topic_dir(state_dir, project_root, operation_id, topic_slug) / 'topic.json'
-        topic = _read_json(tpath, {})
-        if topic:
-            tusage = dict(_default_usage())
-            tusage.update(topic.get('usage') or {})
-            tusage['input_tokens'] = _coerce_int(tusage.get('input_tokens')) + inp
-            tusage['output_tokens'] = _coerce_int(tusage.get('output_tokens')) + out
-            tusage['total_tokens'] = _coerce_int(tusage.get('total_tokens')) + total
-            tusage['estimated_cost_usd'] = round(_coerce_float(tusage.get('estimated_cost_usd')) + cost, 6)
-            tusage['updated_at'] = _now_iso()
-            topic['usage'] = tusage
-            topic['updated_at'] = _now_iso()
-            _write_json(tpath, topic)
+        if tpath.exists():
+            def add_topic_usage(topic: dict[str, Any]) -> dict[str, Any]:
+                tusage = dict(_default_usage())
+                tusage.update(topic.get('usage') or {})
+                tusage['input_tokens'] = _coerce_int(tusage.get('input_tokens')) + inp
+                tusage['output_tokens'] = _coerce_int(tusage.get('output_tokens')) + out
+                tusage['total_tokens'] = _coerce_int(tusage.get('total_tokens')) + total
+                tusage['estimated_cost_usd'] = round(_coerce_float(tusage.get('estimated_cost_usd')) + cost, 6)
+                tusage['updated_at'] = _now_iso()
+                topic['usage'] = tusage
+                topic['updated_at'] = _now_iso()
+                return topic
+
+            lifecycle.mutate_projection(tpath, add_topic_usage)
 
     budget_status = _evaluate_budget(op)
     if (not budget_status['continue_running']) and op.get('status') == 'running':
-        op['status'] = 'budget_exhausted'
-        op['updated_at'] = _now_iso()
-        _write_json(path, op)
+        op = set_operation_status(
+            state_dir,
+            project_root,
+            operation_id,
+            'budget_exhausted',
+            ', '.join(budget_status['reasons']),
+        )
         append_operation_event(state_dir, project_root, operation_id, 'operation_budget_exhausted', {
             'reasons': budget_status['reasons'],
             'usage': op.get('usage') or {},
@@ -1837,6 +2367,7 @@ def build_operation_delivery_bundle(state_dir: Path, project_root: Path, operati
 
         bundle_topics.append({
             'rank': idx,
+            'topic_id': topic.get('topic_id'),
             'topic_slug': slug,
             'title': topic.get('title') or slug,
             'checkpoint_id': checkpoint_id,
@@ -1865,14 +2396,760 @@ def build_operation_delivery_bundle(state_dir: Path, project_root: Path, operati
     }
 
 
+DELIVERABLE_TOPIC_STATUSES = {
+    'checkpointed',
+    'ready_high_confidence',
+    'plateaued',
+}
+
+TERMINAL_TOPIC_STATUSES = {
+    *DELIVERABLE_TOPIC_STATUSES,
+    'judge_failed',
+    'no_report',
+    'excluded',
+}
+
+
+def _nonempty_file(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _file_attestation(path: Path, *, kind: str) -> dict[str, Any]:
+    """Return stable evidence for one file included in a completion certificate."""
+    resolved = path.resolve()
+    data = resolved.read_bytes()
+    if not data:
+        raise ValueError(f'Cannot attest empty {kind}: {resolved}')
+    return {
+        'kind': kind,
+        'path': str(resolved),
+        'size_bytes': len(data),
+        'sha256': hashlib.sha256(data).hexdigest(),
+    }
+
+
+def _certificate_digest(certificate: dict[str, Any]) -> str:
+    body = {
+        str(key): value
+        for key, value in certificate.items()
+        if key not in {'certificate_sha256', 'valid', 'path', 'reason'}
+    }
+    encoded = json.dumps(
+        body,
+        sort_keys=True,
+        separators=(',', ':'),
+        ensure_ascii=False,
+    ).encode('utf-8')
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _delivery_completion_evidence(
+    state_dir: Path,
+    project_root: Path,
+    operation_id: str,
+    *,
+    op: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Inspect delivery state without trusting the operation's projected status."""
+    op = op or get_operation_state(state_dir, project_root, operation_id)
+    if not op:
+        return {'ready': False, 'reason': 'Operation state is unavailable.', 'checks': {}}
+
+    op_dir = operation_dir(state_dir, project_root, operation_id)
+    operation_root = op_dir.resolve()
+    delivery_dir = op_dir / 'delivery'
+    bundle_path = delivery_dir / 'delivery-bundle.json'
+    summary_path = delivery_dir / 'executive-summary.md'
+    html_path = delivery_dir / 'report.html'
+    selection_path = op_dir / 'coordinator' / 'final-selection.md'
+    bundle = _read_json(bundle_path, {})
+    if not isinstance(bundle, dict):
+        bundle = {}
+    bundle_topics = bundle.get('topics') if isinstance(bundle.get('topics'), list) else []
+    topics = [topic for topic in (op.get('topics') or []) if isinstance(topic, dict)]
+    selected_ids = {str(value) for value in (op.get('selected_topic_ids') or []) if str(value)}
+    delivered_ids = {str(value) for value in (op.get('delivered_topic_ids') or []) if str(value)}
+    topic_ids = {str(topic.get('topic_id') or '') for topic in topics if str(topic.get('topic_id') or '')}
+    deliverable = [
+        topic for topic in topics
+        if str(topic.get('status') or '') in DELIVERABLE_TOPIC_STATUSES
+        and int(topic.get('checkpoint_count') or 0) > 0
+    ]
+    deliverable_ids = {
+        str(topic.get('topic_id') or '') for topic in deliverable if str(topic.get('topic_id') or '')
+    }
+    deliverable_slugs = {
+        str(topic.get('slug') or '') for topic in deliverable if str(topic.get('slug') or '')
+    }
+    bundle_slugs = {
+        str(topic.get('topic_slug') or '')
+        for topic in bundle_topics
+        if isinstance(topic, dict) and str(topic.get('topic_slug') or '')
+    }
+
+    topic_reports_valid = True
+    topic_attestations: list[dict[str, Any]] = []
+    for item in bundle_topics:
+        if not isinstance(item, dict):
+            topic_reports_valid = False
+            continue
+        slug = str(item.get('topic_slug') or '')
+        checkpoint_id = str(item.get('checkpoint_id') or '')
+        delivery = item.get('delivery') if isinstance(item.get('delivery'), dict) else {}
+        report_path = Path(str(delivery.get('report_path') or ''))
+        topic = next((candidate for candidate in deliverable if str(candidate.get('slug') or '') == slug), {})
+        if (
+            not slug
+            or not checkpoint_id
+            or not topic
+            or str(topic.get('best_checkpoint_id') or '') != checkpoint_id
+            or not report_path.is_absolute()
+            or not _path_is_within(report_path, operation_root)
+            or not _nonempty_file(report_path)
+        ):
+            topic_reports_valid = False
+            continue
+        try:
+            attestation = _file_attestation(report_path, kind='topic_report')
+        except (OSError, ValueError):
+            topic_reports_valid = False
+            continue
+        attestation.update({
+            'topic_id': str(topic.get('topic_id') or ''),
+            'topic_slug': slug,
+            'checkpoint_id': checkpoint_id,
+        })
+        topic_attestations.append(attestation)
+
+    checks = {
+        'has_topics': bool(topics),
+        'all_selected_topics_present': bool(selected_ids) and selected_ids == topic_ids,
+        'all_topics_terminal': bool(topics) and all(
+            str(topic.get('status') or '') in TERMINAL_TOPIC_STATUSES for topic in topics
+        ),
+        'has_deliverable_topics': bool(deliverable),
+        'delivered_topics_match_deliverable_topics': bool(deliverable_ids) and delivered_ids == deliverable_ids,
+        'bundle_topic_count_matches': (
+            bool(bundle_topics)
+            and int(bundle.get('topic_count') or 0) == len(bundle_topics) == len(deliverable)
+        ),
+        'bundle_topics_match_deliverable_topics': bool(deliverable_slugs) and bundle_slugs == deliverable_slugs,
+        'topic_reports_nonempty': (
+            topic_reports_valid and len(topic_attestations) == len(bundle_topics) == len(deliverable)
+        ),
+        'bundle_nonempty': _nonempty_file(bundle_path),
+        'summary_nonempty': _nonempty_file(summary_path),
+        'html_nonempty': _nonempty_file(html_path),
+        'selection_nonempty': _nonempty_file(selection_path),
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        return {
+            'ready': False,
+            'reason': f'Completion checks failed: {", ".join(failed)}.',
+            'checks': checks,
+            'topics': [],
+            'artifacts': [],
+        }
+
+    try:
+        artifacts = [
+            _file_attestation(bundle_path, kind='bundle'),
+            _file_attestation(summary_path, kind='summary'),
+            _file_attestation(html_path, kind='report'),
+            _file_attestation(selection_path, kind='selection'),
+            *topic_attestations,
+        ]
+    except (OSError, ValueError) as exc:
+        return {
+            'ready': False,
+            'reason': f'Could not attest delivery artifacts: {exc}',
+            'checks': checks,
+            'topics': [],
+            'artifacts': [],
+        }
+
+    certified_topics = [
+        {
+            'topic_id': str(topic.get('topic_id') or ''),
+            'topic_slug': str(topic.get('slug') or ''),
+            'status': str(topic.get('status') or ''),
+            'checkpoint_id': str(topic.get('best_checkpoint_id') or ''),
+        }
+        for topic in sorted(deliverable, key=lambda value: str(value.get('slug') or ''))
+    ]
+    return {
+        'ready': True,
+        'reason': '',
+        'checks': checks,
+        'selected_topic_ids': sorted(selected_ids),
+        'delivered_topic_ids': sorted(delivered_ids),
+        'topics': certified_topics,
+        'artifacts': artifacts,
+        'operation_updated_at': str(op.get('updated_at') or op.get('created_at') or ''),
+    }
+
+
+def issue_completion_certificate(
+    state_dir: Path,
+    project_root: Path,
+    operation_id: str,
+) -> dict[str, Any]:
+    """Write a content-addressed certificate only after every delivery check passes."""
+    evidence = _delivery_completion_evidence(state_dir, project_root, operation_id)
+    if not evidence.get('ready'):
+        return {
+            'valid': False,
+            'operation_id': operation_id,
+            'reason': str(evidence.get('reason') or 'Delivery is not certifiable.'),
+            'checks': evidence.get('checks') or {},
+        }
+    certificate = {
+        'schema_version': 1,
+        'operation_id': operation_id,
+        'issued_at': str(evidence.get('operation_updated_at') or _now_iso()),
+        'selected_topic_ids': evidence.get('selected_topic_ids') or [],
+        'delivered_topic_ids': evidence.get('delivered_topic_ids') or [],
+        'topic_count': len(evidence.get('topics') or []),
+        'topics': evidence.get('topics') or [],
+        'checks': evidence.get('checks') or {},
+        'artifacts': evidence.get('artifacts') or [],
+    }
+    certificate['certificate_sha256'] = _certificate_digest(certificate)
+    path = operation_dir(state_dir, project_root, operation_id) / 'delivery' / 'completion-certificate.json'
+    _write_json_atomic(path, certificate)
+    return {**certificate, 'valid': True, 'path': str(path.resolve()), 'reason': ''}
+
+
+def validate_completion_certificate(
+    state_dir: Path,
+    project_root: Path,
+    operation_id: str,
+) -> dict[str, Any]:
+    """Validate the certificate digest and every file attestation against disk."""
+    path = operation_dir(state_dir, project_root, operation_id) / 'delivery' / 'completion-certificate.json'
+    certificate = _read_json(path, {})
+    if not isinstance(certificate, dict) or not certificate:
+        return {'valid': False, 'path': str(path), 'reason': 'Completion certificate is missing.'}
+    if str(certificate.get('operation_id') or '') != operation_id:
+        return {'valid': False, 'path': str(path), 'reason': 'Completion certificate operation id does not match.'}
+    expected_digest = str(certificate.get('certificate_sha256') or '')
+    if not expected_digest or expected_digest != _certificate_digest(certificate):
+        return {'valid': False, 'path': str(path), 'reason': 'Completion certificate digest does not match.'}
+
+    for attestation in certificate.get('artifacts') or []:
+        if not isinstance(attestation, dict):
+            return {'valid': False, 'path': str(path), 'reason': 'Completion certificate has a malformed attestation.'}
+        artifact_path = Path(str(attestation.get('path') or ''))
+        if not artifact_path.is_absolute() or not _nonempty_file(artifact_path):
+            return {'valid': False, 'path': str(path), 'reason': f'Certified artifact is missing: {artifact_path}'}
+        try:
+            current = _file_attestation(artifact_path, kind=str(attestation.get('kind') or 'artifact'))
+        except (OSError, ValueError) as exc:
+            return {'valid': False, 'path': str(path), 'reason': f'Could not validate certified artifact: {exc}'}
+        if (
+            int(attestation.get('size_bytes') or -1) != current['size_bytes']
+            or str(attestation.get('sha256') or '') != current['sha256']
+        ):
+            return {'valid': False, 'path': str(path), 'reason': f'Certified artifact changed: {artifact_path}'}
+
+    current = _delivery_completion_evidence(state_dir, project_root, operation_id)
+    if not current.get('ready'):
+        return {'valid': False, 'path': str(path), 'reason': str(current.get('reason') or 'Completion checks failed.')}
+    if sorted(current.get('selected_topic_ids') or []) != sorted(certificate.get('selected_topic_ids') or []):
+        return {'valid': False, 'path': str(path), 'reason': 'Selected topics changed after certification.'}
+    if sorted(current.get('delivered_topic_ids') or []) != sorted(certificate.get('delivered_topic_ids') or []):
+        return {'valid': False, 'path': str(path), 'reason': 'Delivered topics changed after certification.'}
+    if current.get('topics') != certificate.get('topics'):
+        return {'valid': False, 'path': str(path), 'reason': 'Certified topic state changed.'}
+    if current.get('checks') != certificate.get('checks'):
+        return {'valid': False, 'path': str(path), 'reason': 'Certified completion checks changed.'}
+    if current.get('artifacts') != certificate.get('artifacts'):
+        return {'valid': False, 'path': str(path), 'reason': 'Certified artifact evidence changed.'}
+    return {**certificate, 'valid': True, 'path': str(path.resolve()), 'reason': ''}
+
+
+def get_delivery_manifest(
+    state_dir: Path,
+    project_root: Path,
+    operation_id: str,
+    *,
+    op: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a validated, UI-friendly description of an operation's outputs.
+
+    Operation status alone is deliberately not enough to claim success.  Older
+    runs could be marked ``delivered`` before any checkpoint was selected, so a
+    ready manifest requires a non-empty bundle and the primary files on disk.
+    """
+    state_dir = Path(state_dir).resolve()
+    project_root = Path(project_root).resolve()
+    op = op or get_operation_state(state_dir, project_root, operation_id)
+    if not op:
+        return {
+            'status': 'missing',
+            'ready': False,
+            'topic_count': 0,
+            'artifact_count': 0,
+            'primary_artifact': {},
+            'artifacts': [],
+            'reason': 'Operation state is unavailable.',
+        }
+
+    op_dir = operation_dir(state_dir, project_root, operation_id)
+    delivery_dir = op_dir / 'delivery'
+    bundle_path = delivery_dir / 'delivery-bundle.json'
+    summary_path = delivery_dir / 'executive-summary.md'
+    html_path = delivery_dir / 'report.html'
+    selection_path = op_dir / 'coordinator' / 'final-selection.md'
+    raw_bundle = _read_json(bundle_path, {}) if bundle_path.exists() else {}
+    bundle = raw_bundle if isinstance(raw_bundle, dict) else {}
+    raw_topics = bundle.get('topics')
+    bundle_topics = raw_topics if isinstance(raw_topics, list) else []
+    try:
+        topic_count = int(bundle.get('topic_count') or 0)
+    except (TypeError, ValueError):
+        topic_count = 0
+
+    artifacts: list[dict[str, Any]] = []
+
+    def add_artifact(kind: str, label: str, path: Path | str, media_type: str) -> None:
+        artifact_path = Path(str(path))
+        if not artifact_path.exists() or not artifact_path.is_file():
+            return
+        artifacts.append({
+            'kind': kind,
+            'label': label,
+            'path': str(artifact_path),
+            'media_type': media_type,
+            'exists': True,
+        })
+
+    add_artifact('report', 'Shareable HTML report', html_path, 'text/html')
+    add_artifact('summary', 'Executive summary', summary_path, 'text/markdown')
+    add_artifact('bundle', 'Delivery bundle', bundle_path, 'application/json')
+    add_artifact('selection', 'Final selection', selection_path, 'text/markdown')
+
+    valid_topic_report_count = 0
+    for topic in bundle_topics:
+        if not isinstance(topic, dict):
+            continue
+        delivery = topic.get('delivery') or {}
+        if not isinstance(delivery, dict):
+            continue
+        slug = str(topic.get('topic_slug') or '')
+        title = str(topic.get('title') or slug or 'Topic')
+        for kind, label, key in (
+            ('topic_report', f'{title} — report', 'report_path'),
+            ('topic_critique', f'{title} — critique', 'critique_path'),
+            ('topic_note', f'{title} — delivery note', 'delivery_note_path'),
+        ):
+            path = str(delivery.get(key) or '')
+            if not path:
+                continue
+            before = len(artifacts)
+            add_artifact(kind, label, path, 'text/markdown')
+            if len(artifacts) > before:
+                artifacts[-1]['topic_slug'] = slug
+                artifacts[-1]['score'] = topic.get('score')
+                if kind == 'topic_report':
+                    try:
+                        if Path(path).stat().st_size > 0:
+                            valid_topic_report_count += 1
+                    except OSError:
+                        pass
+
+    primary = next(
+        (item for item in artifacts if item.get('kind') == 'report'),
+        next((item for item in artifacts if item.get('kind') == 'summary'), {}),
+    )
+    status_claims_delivery = str(op.get('status') or '') == 'delivered'
+    bundle_is_complete = bool(
+        topic_count > 0
+        and len(bundle_topics) == topic_count
+        and all(isinstance(topic, dict) for topic in bundle_topics)
+        and valid_topic_report_count == topic_count
+    )
+    base_artifacts_ready = bool(
+        bundle_is_complete
+        and bundle_path.is_file()
+        and _nonempty_file(summary_path)
+        and _nonempty_file(html_path)
+        and primary
+    )
+
+    from charon.libris import libris_lifecycle as lifecycle
+
+    lifecycle_instance = None
+    lifecycle_error = ''
+    try:
+        lifecycle_instance = lifecycle.load_lifecycle(
+            state_dir,
+            operation_id,
+            entity_type='operation',
+        )
+    except Exception as exc:
+        lifecycle_error = str(exc)
+        _diag(
+            'libris_runtime',
+            'delivery manifest could not load authoritative lifecycle',
+            error=exc,
+            operation_id=operation_id,
+        )
+    lifecycle_projection_present = any(
+        key in op
+        for key in (
+            'lifecycle_state',
+            'lifecycle_revision',
+            'lifecycle_event_seq',
+            'lifecycle_updated_at',
+        )
+    )
+    if (
+        not lifecycle_error
+        and lifecycle_instance is None
+        and lifecycle_projection_present
+    ):
+        lifecycle_error = 'Authoritative lifecycle snapshot is missing.'
+    certificate = validate_completion_certificate(state_dir, project_root, operation_id)
+    # A genuinely complete pre-FSM delivery is migrated lazily. Reconciliation
+    # adds the certificate and canonical lifecycle, then refreshes compatibility
+    # projections without changing the timestamps used by recent-operation
+    # selection.
+    if (
+        not lifecycle_error
+        and lifecycle_instance is None
+        and status_claims_delivery
+        and base_artifacts_ready
+    ):
+        if not certificate.get('valid'):
+            certificate = issue_completion_certificate(state_dir, project_root, operation_id)
+        if certificate.get('valid'):
+            lifecycle_instance = lifecycle.adopt_legacy_completed_delivery(
+                state_dir,
+                operation_id=operation_id,
+                operation_dir=op_dir,
+                certificate=certificate,
+            )
+    certificate_required = bool(
+        lifecycle_error or status_claims_delivery or lifecycle_instance is not None
+    )
+    certificate_valid = bool(certificate.get('valid'))
+    lifecycle_certificate = (
+        (lifecycle_instance.data or {}).get('completion_certificate')
+        if lifecycle_instance is not None and lifecycle_instance.state == 'completed'
+        else {}
+    )
+    certificate_bound_to_lifecycle = bool(
+        lifecycle_instance is not None
+        and lifecycle_instance.state == 'completed'
+        and isinstance(lifecycle_certificate, dict)
+        and str(lifecycle_certificate.get('path') or '') == str(certificate.get('path') or '')
+        and str(lifecycle_certificate.get('sha256') or '') == str(certificate.get('certificate_sha256') or '')
+        and int(lifecycle_certificate.get('topic_count') or 0) == int(certificate.get('topic_count') or 0)
+    )
+    if certificate_valid:
+        add_artifact(
+            'certificate',
+            'Completion certificate',
+            str(certificate.get('path') or ''),
+            'application/json',
+        )
+    ready = bool(
+        status_claims_delivery
+        and base_artifacts_ready
+        and certificate_valid
+        and certificate_bound_to_lifecycle
+    )
+    active_topics = [
+        str(topic.get('slug') or topic.get('title') or 'topic')
+        for topic in (op.get('topics') or [])
+        if str(topic.get('status') or '') not in TERMINAL_TOPIC_STATUSES
+    ]
+
+    if lifecycle_error:
+        status = 'incomplete'
+        reason = f'Authoritative lifecycle is unavailable: {lifecycle_error}'
+    elif ready:
+        status = 'ready'
+        reason = ''
+    elif status_claims_delivery:
+        status = 'incomplete'
+        reason = 'The operation claimed delivery, but no validated non-empty delivery is available.'
+    elif str(op.get('status') or '') in ('reports_ready', 'assembling_delivery', 'verifying_delivery'):
+        status = 'assembling'
+        reason = 'Final reports are being assembled.'
+    elif str(op.get('status') or '') in ('failed', 'delivery_failed', 'budget_exhausted', 'stopped'):
+        status = 'incomplete'
+        reason = 'The operation stopped before a validated delivery was produced.'
+    else:
+        status = 'working'
+        reason = 'Research and review are still in progress.'
+
+    manifest = {
+        'operation_id': operation_id,
+        'status': status,
+        'ready': ready,
+        'topic_count': topic_count,
+        'artifact_count': len(artifacts),
+        'primary_artifact': primary,
+        'artifacts': artifacts,
+        'bundle_path': str(bundle_path) if bundle_path.exists() else '',
+        'active_topics': active_topics,
+        'reason': reason,
+        'completion_certificate': certificate,
+        'integrity': {
+            'lifecycle_valid': not bool(lifecycle_error),
+            'lifecycle_error': lifecycle_error,
+            'certificate_required': certificate_required,
+            'certificate_valid': certificate_valid,
+            'certificate_bound_to_lifecycle': certificate_bound_to_lifecycle,
+            'certificate_sha256': str(certificate.get('certificate_sha256') or ''),
+            'reason': lifecycle_error or str(certificate.get('reason') or ''),
+        },
+    }
+    if ready:
+        return _materialize_validated_delivery_outputs(
+            state_dir,
+            project_root,
+            operation_id,
+            manifest,
+        )
+    return manifest
+
+
+def _materialize_validated_delivery_outputs(
+    state_dir: Path,
+    project_root: Path,
+    operation_id: str,
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    """Atomically refresh compatibility outputs for a validated completion."""
+    from charon.libris import libris_lifecycle as lifecycle
+
+    if not manifest.get('ready'):
+        return dict(manifest)
+    machine = lifecycle.load_lifecycle(
+        state_dir,
+        operation_id,
+        entity_type='operation',
+    )
+    certificate = manifest.get('completion_certificate') or {}
+    bound = (machine.data or {}).get('completion_certificate') if machine else {}
+    if not (
+        machine is not None
+        and machine.state == 'completed'
+        and isinstance(bound, dict)
+        and str(bound.get('path') or '') == str(certificate.get('path') or '')
+        and str(bound.get('sha256') or '')
+        == str(certificate.get('certificate_sha256') or '')
+        and int(bound.get('topic_count') or 0)
+        == int(certificate.get('topic_count') or 0)
+    ):
+        return dict(manifest)
+
+    op_dir = operation_dir(state_dir, project_root, operation_id)
+    op_path = op_dir / 'operation.json'
+
+    def project_completed(current: dict[str, Any]) -> dict[str, Any]:
+        if int(current.get('lifecycle_revision') or -1) <= machine.revision:
+            _persist_lifecycle_projection_fields(
+                current,
+                machine,
+                lifecycle.projected_status(machine),
+            )
+        current['completion_certificate_path'] = str(
+            certificate.get('path') or ''
+        )
+        current['completion_certificate_sha256'] = str(
+            certificate.get('certificate_sha256') or ''
+        )
+        if not (machine.data or {}).get('adopted_legacy_projection'):
+            current['updated_at'] = machine.updated_at
+        return current
+
+    lifecycle.mutate_projection(op_path, project_completed)
+    materialized = dict(manifest)
+    manifest_path = op_dir / 'delivery' / 'manifest.json'
+    materialized['manifest_path'] = str(manifest_path)
+    if _read_json(manifest_path, None) != materialized:
+        _write_json_atomic(manifest_path, materialized)
+    return materialized
+
+
+def _reconcile_completed_delivery_outputs(
+    state_dir: Path,
+    project_root: Path,
+    operation_id: str,
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    """Materialize idempotent compatibility outputs from canonical completion.
+
+    The lifecycle snapshot commits before ``operation.json``, the legacy
+    timeline, and ``manifest.json``. A restart at any point after that commit
+    can call this helper to recreate those projections without dispatching a
+    second terminal transition.
+    """
+    from charon.libris import libris_lifecycle as lifecycle
+
+    machine = lifecycle.load_lifecycle(
+        state_dir,
+        operation_id,
+        entity_type='operation',
+    )
+    if machine is None or machine.state != 'completed':
+        return dict(manifest)
+    transition_id = str(
+        (machine.data or {}).get('last_transition_event_id') or ''
+    )
+    processed = (machine.processed_events or {}).get(transition_id) or {}
+    transition = processed.get('transition') or {}
+    if not transition_id or not isinstance(transition, dict):
+        raise RuntimeError(
+            'completed Libris lifecycle has no recoverable terminal transition'
+        )
+    op_dir = operation_dir(state_dir, project_root, operation_id)
+    materialized = _materialize_validated_delivery_outputs(
+        state_dir,
+        project_root,
+        operation_id,
+        manifest,
+    )
+    certificate = materialized.get('completion_certificate') or {}
+    note = str((transition.get('payload') or {}).get('note') or '')
+    append_operation_event(
+        state_dir,
+        project_root,
+        operation_id,
+        'operation_status_updated',
+        {
+            'status': 'delivered',
+            'note': note,
+            'lifecycle_transition': transition,
+        },
+        event_id=transition_id,
+    )
+
+    manifest_path = op_dir / 'delivery' / 'manifest.json'
+    primary_path = str(
+        (materialized.get('primary_artifact') or {}).get('path') or ''
+    )
+    append_operation_event(
+        state_dir,
+        project_root,
+        operation_id,
+        'final_deliveries_selected',
+        {
+            'count': int(materialized.get('topic_count') or 0),
+            'executive_summary_path': str(
+                op_dir / 'delivery' / 'executive-summary.md'
+            ),
+            'bundle_json_path': str(materialized.get('bundle_path') or ''),
+            'primary_artifact_path': primary_path,
+            'artifact_count': int(materialized.get('artifact_count') or 0),
+            'manifest_path': str(manifest_path),
+            'completion_certificate_path': str(certificate.get('path') or ''),
+            'completion_certificate_sha256': str(
+                certificate.get('certificate_sha256') or ''
+            ),
+        },
+        event_id=f'{transition_id}:manifest',
+    )
+    return materialized
+
+
 
 def finalize_operation_selection(state_dir: Path, project_root: Path, operation_id: str) -> dict[str, Any]:
     op = get_operation_state(state_dir, project_root, operation_id)
     if not op:
         return {}
+    existing_manifest = get_delivery_manifest(
+        state_dir,
+        project_root,
+        operation_id,
+        op=op,
+    )
+    if existing_manifest.get('ready'):
+        existing_manifest = _reconcile_completed_delivery_outputs(
+            state_dir,
+            project_root,
+            operation_id,
+            existing_manifest,
+        )
+        return {
+            'operation_id': operation_id,
+            'ready': True,
+            'status': 'ready',
+            'selections': [],
+            'bundle': _read_json(
+                operation_dir(state_dir, project_root, operation_id)
+                / 'delivery'
+                / 'delivery-bundle.json',
+                {},
+            ),
+            'delivery_manifest': existing_manifest,
+            'completion_certificate': existing_manifest.get('completion_certificate') or {},
+            'idempotent': True,
+        }
+    if str(op.get('status') or '') == 'delivered':
+        return {
+            'operation_id': operation_id,
+            'ready': False,
+            'status': 'incomplete',
+            'reason': str(existing_manifest.get('reason') or 'A completed delivery failed integrity validation.'),
+            'active_topics': existing_manifest.get('active_topics') or [],
+            'selections': [],
+            'bundle': {},
+            'delivery_manifest': existing_manifest,
+        }
+
+    topics = list(op.get('topics') or [])
+    active_topics = [
+        str(topic.get('slug') or topic.get('title') or 'topic')
+        for topic in topics
+        if str(topic.get('status') or '') not in TERMINAL_TOPIC_STATUSES
+    ]
+    if active_topics:
+        return {
+            'operation_id': operation_id,
+            'ready': False,
+            'status': 'waiting',
+            'reason': 'Topic work is still active.',
+            'active_topics': active_topics,
+            'selections': [],
+            'bundle': {},
+        }
+
+    selectable_topics = [
+        topic
+        for topic in topics
+        if str(topic.get('status') or '') in DELIVERABLE_TOPIC_STATUSES
+        and int(topic.get('checkpoint_count') or 0) > 0
+    ]
+    if not selectable_topics:
+        return {
+            'operation_id': operation_id,
+            'ready': False,
+            'status': 'incomplete',
+            'reason': 'No reviewed topic checkpoint is available for delivery.',
+            'active_topics': [],
+            'selections': [],
+            'bundle': {},
+        }
 
     selections = []
-    for topic in op.get('topics') or []:
+    for topic in selectable_topics:
         slug = str(topic.get('slug') or '')
         if not slug:
             continue
@@ -1896,7 +3173,36 @@ def finalize_operation_selection(state_dir: Path, project_root: Path, operation_
             })
             mark_best_checkpoint(state_dir, project_root, operation_id, slug, str(best.get('checkpoint_id') or ''), selector='coordinator')
 
+    if not selections:
+        return {
+            'operation_id': operation_id,
+            'ready': False,
+            'status': 'incomplete',
+            'reason': 'Reviewed checkpoints exist, but none could be copied into the delivery.',
+            'active_topics': [],
+            'selections': [],
+            'bundle': {},
+        }
+    if len(selections) != len(selectable_topics):
+        return {
+            'operation_id': operation_id,
+            'ready': False,
+            'status': 'incomplete',
+            'reason': 'Not every deliverable topic could be copied into the delivery.',
+            'active_topics': [],
+            'selections': selections,
+            'bundle': {},
+        }
+
     op_dir = operation_dir(state_dir, project_root, operation_id)
+    if str(op.get('status') or '') != 'verifying_delivery':
+        set_operation_status(
+            state_dir,
+            project_root,
+            operation_id,
+            'assembling_delivery',
+            'All terminal topic reports are being assembled.',
+        )
     bundle = build_operation_delivery_bundle(state_dir, project_root, operation_id, selections)
     summary_lines = ['# Libris Final Selection', '']
     for idx, sel in enumerate(sorted(selections, key=lambda s: float(s.get('score') or 0.0), reverse=True), start=1):
@@ -1905,17 +3211,105 @@ def finalize_operation_selection(state_dir: Path, project_root: Path, operation_
         summary_lines.extend(['', f'Executive summary: {bundle.get("executive_summary_path")}'])
     if bundle.get('bundle_json_path'):
         summary_lines.append(f'Delivery bundle JSON: {bundle.get("bundle_json_path")}')
-    (op_dir / 'coordinator' / 'final-selection.md').write_text('\n'.join(summary_lines), encoding='utf-8')
-    set_operation_status(state_dir, project_root, operation_id, 'delivered', 'Coordinator selected final deliveries.')
-    append_operation_event(state_dir, project_root, operation_id, 'final_deliveries_selected', {
-        'count': len(selections),
-        'executive_summary_path': bundle.get('executive_summary_path', ''),
-        'bundle_json_path': bundle.get('bundle_json_path', ''),
-    })
-    return {'operation_id': operation_id, 'selections': selections, 'bundle': bundle}
+    selection_path = op_dir / 'coordinator' / 'final-selection.md'
+    selection_path.write_text('\n'.join(summary_lines), encoding='utf-8')
+
+    try:
+        from charon.libris.libris_report import render_operation
+        report_html = render_operation(
+            op_dir,
+            title='Libris Research Report',
+            subtitle=str(op.get('prompt') or '')[:300],
+        )
+        report_path = op_dir / 'delivery' / 'report.html'
+        report_path.write_text(report_html, encoding='utf-8')
+    except Exception as exc:
+        _diag(
+            'libris_runtime',
+            'delivery HTML rendering failed; operation remains incomplete',
+            error=exc,
+            operation_id=operation_id,
+        )
+        return {
+            'operation_id': operation_id,
+            'ready': False,
+            'status': 'incomplete',
+            'reason': f'Could not render the shareable report: {exc}',
+            'active_topics': [],
+            'selections': selections,
+            'bundle': bundle,
+        }
+
+    set_operation_status(
+        state_dir,
+        project_root,
+        operation_id,
+        'verifying_delivery',
+        'Delivery artifacts are complete and undergoing final verification.',
+    )
+    certificate = issue_completion_certificate(
+        state_dir,
+        project_root,
+        operation_id,
+    )
+    if not certificate.get('valid'):
+        reason = str(certificate.get('reason') or 'Completion certificate could not be issued.')
+        set_operation_status(
+            state_dir,
+            project_root,
+            operation_id,
+            'delivery_failed',
+            reason,
+        )
+        return {
+            'operation_id': operation_id,
+            'ready': False,
+            'status': 'incomplete',
+            'reason': reason,
+            'active_topics': [],
+            'selections': selections,
+            'bundle': bundle,
+            'completion_certificate': certificate,
+        }
+
+    from charon.libris import libris_lifecycle as lifecycle
+
+    current = get_operation_state(state_dir, project_root, operation_id)
+    machine, lifecycle_event = lifecycle.complete_operation(
+        state_dir,
+        operation_id=operation_id,
+        operation_dir=op_dir,
+        current_projected_status=str(current.get('status') or 'verifying_delivery'),
+        certificate=certificate,
+        note='Coordinator selected and certified the final delivery.',
+    )
+    delivered_op = get_operation_state(state_dir, project_root, operation_id)
+    manifest = get_delivery_manifest(
+        state_dir,
+        project_root,
+        operation_id,
+        op=delivered_op,
+    )
+    manifest = _reconcile_completed_delivery_outputs(
+        state_dir,
+        project_root,
+        operation_id,
+        manifest,
+    )
+    return {
+        'operation_id': operation_id,
+        'ready': bool(manifest.get('ready')),
+        'status': str(manifest.get('status') or 'incomplete'),
+        'selections': selections,
+        'bundle': bundle,
+        'delivery_manifest': manifest,
+        'completion_certificate': certificate,
+    }
 
 
 def get_libris_swarm_state(state_dir: Path, project_root: Path, operation_id: str) -> dict[str, Any]:
+    state_dir = Path(state_dir).resolve()
+    project_root = Path(project_root).resolve()
     op = get_operation_state(state_dir, project_root, operation_id)
     if not op:
         return {}
@@ -2092,6 +3486,12 @@ def get_libris_swarm_state(state_dir: Path, project_root: Path, operation_id: st
         _diag('libris_runtime', 'executive-summary.md exists but unreadable; omitted from swarm state', error=e)
         executive_summary = ''
     delivery_bundle = _read_json(delivery_bundle_path, {}) if delivery_bundle_path.exists() else {}
+    delivery_manifest = get_delivery_manifest(
+        state_dir,
+        project_root,
+        operation_id,
+        op=op,
+    )
     edges = []
     edge_map: dict[tuple[str, str, str], dict[str, Any]] = {}
     for evt in events:
@@ -2163,6 +3563,54 @@ def get_libris_swarm_state(state_dir: Path, project_root: Path, operation_id: st
         edge['active_now'] = active_now
         edges.append(edge)
 
+    from charon.libris import libris_lifecycle as lifecycle
+    from charon.orchestration.fsm import project_machine
+
+    manifest_integrity = dict(delivery_manifest.get('integrity') or {})
+    lifecycle_error = str(manifest_integrity.get('lifecycle_error') or '')
+    lifecycle_instance = None
+    lifecycle_events = []
+    if not lifecycle_error:
+        try:
+            lifecycle_instance = lifecycle.load_lifecycle(
+                state_dir,
+                operation_id,
+                entity_type='operation',
+            )
+            if lifecycle_instance is not None:
+                from charon.orchestration.fsm_store import DurableMachineStore
+
+                lifecycle_events = DurableMachineStore(
+                    state_dir,
+                    lifecycle.OPERATION_MACHINE,
+                ).events(operation_id)
+        except Exception as exc:
+            lifecycle_error = str(exc)
+            _diag(
+                'libris_runtime',
+                'swarm state could not load authoritative lifecycle',
+                error=exc,
+                operation_id=operation_id,
+            )
+    if lifecycle_error:
+        manifest_integrity['lifecycle_valid'] = False
+        manifest_integrity['lifecycle_error'] = lifecycle_error
+        manifest_integrity['reason'] = lifecycle_error
+    lifecycle_graph = project_machine(lifecycle.OPERATION_MACHINE, lifecycle_instance)
+    lifecycle_view = {
+        'state': (
+            lifecycle_instance.state
+            if lifecycle_instance is not None
+            else ('lifecycle_error' if lifecycle_error else '')
+        ),
+        'projected_status': op.get('status') or 'unknown',
+        'revision': lifecycle_instance.revision if lifecycle_instance is not None else None,
+        'event_seq': lifecycle_instance.event_seq if lifecycle_instance is not None else None,
+        'last_transition': lifecycle_events[-1] if lifecycle_events else {},
+        'integrity': manifest_integrity,
+        'completion_certificate': delivery_manifest.get('completion_certificate') or {},
+    }
+
     return {
         'operation_id': operation_id,
         'prompt': op.get('prompt') or '',
@@ -2201,4 +3649,8 @@ def get_libris_swarm_state(state_dir: Path, project_root: Path, operation_id: st
         'final_selection_markdown': final_selection if isinstance(final_selection, str) else '',
         'executive_summary_markdown': executive_summary if isinstance(executive_summary, str) else '',
         'delivery_bundle': delivery_bundle if isinstance(delivery_bundle, dict) else {},
+        'delivery_manifest': delivery_manifest,
+        'lifecycle': lifecycle_view,
+        'lifecycle_graph': lifecycle_graph,
+        'workflow_graph': lifecycle_graph,
     }
