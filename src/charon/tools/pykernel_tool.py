@@ -21,10 +21,17 @@ timeout handling with no new machinery: a child that runs long enough to
 hit the timeout just interrupts the wait (state preserved, same as any
 other long-running kernel call), not the child itself.
 
-`SpawnShade`'s `retain=True` keeps a shade addressable after its work ends
-(idle, not stopped) instead of self-terminating. Call it again later with
+`charon.rlm(objective, retain=True)` (or `SpawnShade`'s own `retain=True`)
+keeps the new shade addressable after its work ends (idle, not stopped)
+instead of self-terminating — the result's `shade_id` is how you reach it
+again. Call it again later with
 `charon.rlm(objective, child_agent_id=<its id>)` — it resumes with its full
 prior conversation rather than starting fresh.
+
+`charon.rlm(objective, promote=True)` has an independent LLM judge score
+whether the result is a genuine, reusable finding — not just routine
+progress — before writing it into durable project memory. Never promoted
+on the shade's own say-so.
 
 Not a sandbox. Code runs as a subprocess with the daemon's own OS permissions,
 the same trust model as Bash and ExecuteCode.

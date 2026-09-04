@@ -3,6 +3,7 @@ import time
 
 from charon.agents.topology_budget import (
     PRESETS, effective_budget, mint_budget, try_reserve, current_state, record_usage,
+    token_budget_utilization,
 )
 
 
@@ -159,3 +160,20 @@ def test_try_reserve_fails_open_on_unwritable_state_dir(tmp_path):
     ok, reason = try_reserve(bogus_state_dir, budget, parent_agent_id='AG-1', depth=1)
     assert ok
     assert reason == ''
+
+
+def test_token_budget_utilization_none_when_unlimited(tmp_path):
+    budget = mint_budget('root-1', token_budget=0)
+    assert token_budget_utilization(tmp_path, budget) is None
+
+
+def test_token_budget_utilization_reflects_usage(tmp_path):
+    budget = mint_budget('root-1', token_budget=1000)
+    record_usage(tmp_path, budget, 250)
+    assert token_budget_utilization(tmp_path, budget) == 0.25
+
+
+def test_token_budget_utilization_clamped_to_one(tmp_path):
+    budget = mint_budget('root-1', token_budget=1000)
+    record_usage(tmp_path, budget, 5000)
+    assert token_budget_utilization(tmp_path, budget) == 1.0

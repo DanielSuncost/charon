@@ -68,6 +68,52 @@ def _trace_rlm_node(state_dir, *, node_id, parent_id, root_task_id, objective,
         pass  # tracing is best-effort observability, never load-bearing
 
 
+def _maybe_promote_output(state_dir, *, objective, output, shade_id, contract_id) -> dict:
+    """Judge whether a completed rlm() call's output is worth remembering,
+    and write it into durable project memory if so.
+
+    Never promotes on the shade's own say-so: an independent LLM judge
+    (judge_engine.score_text, the same one-shot verdict format Refine and
+    the aesthetic judge loop use) scores the output against a rubric first.
+    Best-effort — any failure here (no provider, judge error, memory write
+    failure) must never fail the rlm() call it's attached to; it just means
+    nothing gets promoted.
+    """
+    if not output or not state_dir:
+        return {'promoted': False, 'promotion_score': None}
+    try:
+        from charon.providers.model_registry import get_shade_provider_and_model
+        from charon.judge.judge_engine import score_text
+
+        provider, model, _meta = get_shade_provider_and_model(state_dir)
+        rubric = (
+            "You are deciding whether a sub-agent's output is worth remembering as "
+            "durable project knowledge — not routine progress, not a trivial or "
+            "obvious result, but a genuine, reusable finding (a real bug, a specific "
+            "root cause, a concrete decision) that would help on a *future*, "
+            "unrelated task.\n\n"
+            "Score 0-10: 8-10 is a specific, reusable finding; 4-7 is real but narrow "
+            "or already-obvious; 0-3 is routine status, vague, or not worth keeping."
+        )
+        verdict = score_text(output, rubric=rubric, context=objective, provider=provider, model=model)
+        if verdict.error or verdict.score < 7.0:
+            return {'promoted': False, 'promotion_score': verdict.score}
+
+        from pathlib import Path
+        from charon.memory.memory_engine import MemoryEngine
+        engine = MemoryEngine(Path(state_dir))
+        try:
+            engine.add(
+                output, category='rlm_finding', tier='project',
+                source_agent=shade_id, source_conv=contract_id,
+            )
+        finally:
+            engine.close()
+        return {'promoted': True, 'promotion_score': verdict.score}
+    except Exception:
+        return {'promoted': False, 'promotion_score': None}
+
+
 def _bridge_module(project_root: str, state_dir: str, agent_id: str) -> types.ModuleType:
     """Build the `charon` object exposed inside kernel globals.
 
@@ -113,7 +159,9 @@ def _bridge_module(project_root: str, state_dir: str, agent_id: str) -> types.Mo
         return dict(result.details or {})
 
     def rlm(objective: str, *, child_agent_id=None, scope=None, constraints=None,
-            expected_outputs=None, contract_id=None, poll_interval: float = 0.5) -> dict:
+            expected_outputs=None, contract_id=None, retain: bool = False,
+            promote: bool = False, task_complexity: str = 'normal',
+            poll_interval: float = 0.5) -> dict:
         """Call a sub-agent and block for its result, like a function call.
 
         Unlike spawn_shade (fire-and-forget), this waits for the child to
@@ -133,6 +181,22 @@ def _bridge_module(project_root: str, state_dir: str, agent_id: str) -> types.Mo
         child_agent_id: call an existing retained (idle) shade instead of
         spawning a fresh one. Errors — never silently spawns a fresh shade
         under that id — if it isn't found, isn't a shade, or isn't idle.
+
+        retain: only meaningful on a fresh spawn (child_agent_id omitted).
+        If true, the new shade goes idle instead of stopping once this call
+        returns, and can be called again later via
+        rlm(objective, child_agent_id=<the id from this call's result>).
+
+        promote: if the call completes successfully, have an independent
+        LLM judge score whether the output is a genuine, reusable finding
+        worth remembering for this project (not routine or trivial) before
+        writing it into durable project memory — never on the shade's own
+        say-so. See the result's 'promoted'/'promotion_score' keys.
+
+        task_complexity: 'simple'/'normal'/'complex' — only meaningful on a
+        fresh spawn; 'complex' asks for the strong model tier. Downgraded
+        automatically once this tree's token_budget is mostly spent,
+        regardless of what's requested here.
         """
         import time as _time
         from pathlib import Path
@@ -171,14 +235,21 @@ def _bridge_module(project_root: str, state_dir: str, agent_id: str) -> types.Mo
                     'scope': list(scope or []),
                     'constraints': list(constraints or []),
                     'expected_outputs': list(expected_outputs or []),
+                    'retain': bool(retain),
+                    'task_complexity': str(task_complexity or 'normal'),
                 },
                 ctx,
             )
             if result.is_error:
                 raise RuntimeError(result.content)
-            cid = dict(result.details or {}).get('contract_id')
+            details = dict(result.details or {})
+            cid = details.get('contract_id')
             if not cid:
                 raise RuntimeError('spawn succeeded but returned no contract_id')
+            if retain:
+                # The only way to learn the new shade's id for a later
+                # reactivation — printed alongside the contract id below.
+                print(json.dumps({'rlm_shade_id': details.get('shade_id')}), flush=True)
 
         # Printed before the wait begins — see the docstring above.
         print(json.dumps({'rlm_contract_id': cid}), flush=True)
@@ -201,11 +272,18 @@ def _bridge_module(project_root: str, state_dir: str, agent_id: str) -> types.Mo
             objective=objective, depth=meta.get('topology_depth'),
             budget=meta.get('topology_budget'), status=contract.get('status'), output_ref=cid,
         )
-        return {
+        result = {
             'status': contract.get('status'),
             'output': output if succeeded else contract.get('last_error'),
             'contract_id': cid,
+            'shade_id': contract.get('shade_agent_id'),
         }
+        if promote:
+            result.update(_maybe_promote_output(
+                ctx.state_dir, objective=objective, output=output if succeeded else None,
+                shade_id=contract.get('shade_agent_id'), contract_id=cid,
+            ))
+        return result
 
     mod.spawn_shade = spawn_shade
     mod.rlm = rlm

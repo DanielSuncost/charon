@@ -298,3 +298,19 @@ def try_reserve_reactivation(
 def current_state(state_dir: Path, root_id: str) -> dict[str, Any]:
     """Read-only snapshot of a tree's accounting, for status/debugging."""
     return _load(_state_path(Path(state_dir), root_id))
+
+
+def token_budget_utilization(state_dir: Path, budget: dict[str, Any]) -> float | None:
+    """Fraction (0-1) of this tree's token_budget already used, or None if
+    the budget is unlimited (token_budget <= 0).
+
+    Lets a caller downgrade to a cheaper model tier for the tree's remaining
+    calls as its budget runs low, instead of only finding out it's gone via
+    try_reserve()'s hard refusal once it's already exhausted.
+    """
+    token_budget = int(budget.get('token_budget') or 0)
+    if token_budget <= 0:
+        return None
+    root_id = str(budget.get('root_id') or 'root')
+    state = current_state(state_dir, root_id)
+    return min(1.0, int(state.get('total_tokens_used', 0)) / token_budget)

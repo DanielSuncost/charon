@@ -86,6 +86,16 @@ SHADE_TOOL_DEF = {
                     'Default: false (self-terminates as usual).'
                 ),
             },
+            'task_complexity': {
+                'type': 'string',
+                'enum': ['simple', 'normal', 'complex'],
+                'description': (
+                    'Determines which model tier the shade gets — complex=strong model, '
+                    'else=fast/cheap model (default: normal). Downgraded automatically, '
+                    'regardless of what is requested here, once this tree\'s token_budget '
+                    'is mostly spent — see topology_budget.token_budget_utilization.'
+                ),
+            },
         },
         'required': ['goal'],
     },
@@ -105,6 +115,7 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
     contract_type = str(params.get('contract_type', '')).strip()
     metadata = params.get('metadata') or {}
     retain = bool(params.get('retain', False))
+    task_complexity = str(params.get('task_complexity') or 'normal').strip().lower()
     state_dir = ctx.state_dir or Path('.charon_state')
 
     try:
@@ -187,7 +198,7 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
     # 3. Launch shade in background thread
     thread = threading.Thread(
         target=_run_shade,
-        args=(state_dir, shade_id, contract_id, goal, scope, constraints, ctx, depth, budget, retain),
+        args=(state_dir, shade_id, contract_id, goal, scope, constraints, ctx, depth, budget, retain, False, task_complexity),
         daemon=True,
     )
     thread.start()
@@ -224,6 +235,7 @@ def _run_shade(
     budget: dict | None = None,
     retain: bool = False,
     resume: bool = False,
+    task_complexity: str = 'normal',
 ):
     """Run a shade agent in a background thread."""
     import asyncio
@@ -237,14 +249,43 @@ def _run_shade(
             assess_contract_outcome, save_triage_record,
         )
 
+        # Budget-aware downgrade: once this tree has spent most of its
+        # token_budget, force the cheap tier regardless of what was
+        # requested, so remaining budget stretches across more calls
+        # instead of a 'complex' request spending it on a strong model
+        # right before the tree gets cut off entirely.
+        effective_complexity = task_complexity
+        if budget:
+            try:
+                from charon.agents.topology_budget import token_budget_utilization
+                utilization = token_budget_utilization(state_dir, budget)
+                if utilization is not None and utilization >= 0.75 and effective_complexity == 'complex':
+                    effective_complexity = 'normal'
+            except Exception as exc:
+                _diag('shade_tool', 'budget-aware tier downgrade check failed; using requested tier', error=exc, contract_id=contract_id)
+
         # Create provider using shade-specific config (falls back to main if not set)
-        provider, model, provider_meta = get_shade_provider_and_model(state_dir)
+        provider, model, provider_meta = get_shade_provider_and_model(state_dir, task_complexity=effective_complexity)
 
         # Build shade system prompt
         scope_str = ', '.join(scope) if scope else 'entire project'
         constraint_str = '\n'.join(f'- {c}' for c in constraints) if constraints else 'None'
+        identity = (
+            'a retained worker agent spawned by Charon — you stay addressable after this '
+            'task and may be called again later with a follow-up instruction'
+            if retain else
+            'an ephemeral worker agent spawned by Charon to complete a specific task'
+        )
+        refine_rule = (
+            "- If you hit real friction with an external system (an API's undocumented "
+            "behavior, a site's layout, an auth flow) that a future call to you is likely "
+            "to hit again, consider proposing a Refine on the relevant skill with that "
+            "concrete evidence — you're retained, so unlike a one-shot shade you're the one "
+            "who benefits from having fixed it.\n"
+            if retain else ''
+        )
         system_prompt = (
-            f'You are a Shade — an ephemeral worker agent spawned by Charon to complete a specific task.\n\n'
+            f'You are a Shade — {identity}.\n\n'
             f'YOUR GOAL: {goal}\n\n'
             f'SCOPE: {scope_str}\n'
             f'CONSTRAINTS:\n{constraint_str}\n\n'
@@ -253,6 +294,7 @@ def _run_shade(
             f'- Be efficient. Use tools to accomplish the task.\n'
             f'- When done, output a clear summary of what you accomplished.\n'
             f'- If you encounter an error you cannot resolve, explain what went wrong.\n'
+            f'{refine_rule}'
         )
 
         # A retained shade's agent_id activates the lossless-context store

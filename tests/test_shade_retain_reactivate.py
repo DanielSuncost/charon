@@ -39,9 +39,11 @@ def _fake_engine_class(monkeypatch, tokens=10):
 
     class _FakeEngine:
         load_from_store_calls = 0
+        last_system_prompt = ''
 
         def __init__(self, **kwargs):
             self.messages = []
+            type(self).last_system_prompt = kwargs.get('system_prompt', '')
 
         def load_from_store(self):
             type(self).load_from_store_calls += 1
@@ -82,6 +84,55 @@ def test_spawn_shade_without_retain_has_no_lifecycle(tmp_path, monkeypatch):
     result = execute_spawn_shade({'goal': 'ephemeral as usual'}, ctx)
     shade_id = result.details['shade_id']
     assert shade_lifecycle.get_state(ctx.state_dir, shade_id) is None
+
+
+# ---------------------------------------------------------------------------
+# System prompt: retained shades are told they're retained, and nudged
+# toward Refine when they hit real external friction
+# ---------------------------------------------------------------------------
+
+def test_retained_shade_prompt_identifies_as_retained_and_mentions_refine(tmp_path, monkeypatch):
+    from charon.shade.shade_orchestrator import create_contract
+
+    fake_engine = _fake_engine_class(monkeypatch)
+    monkeypatch.setattr('charon.agents.agent_lifecycle.set_status', lambda a, s: None)
+    state_dir = tmp_path / 'state'
+    state_dir.mkdir()
+    shade_lifecycle.initialize(state_dir, 'AG-SHADE')
+    contract = create_contract(
+        state_dir, parent_task_id='', parent_agent_id='AG-ROOT', shade_agent_id='AG-SHADE',
+        conversation_id='conv-1', project=str(tmp_path), goal='test goal',
+    )
+    budget = mint_budget('AG-ROOT', preset='standard')
+    ctx = ToolContext(project_root=tmp_path, state_dir=state_dir, agent_id='AG-ROOT')
+
+    _run_shade(state_dir, 'AG-SHADE', contract['id'], 'test goal', [], [], ctx, 1, budget, True)
+
+    prompt = fake_engine.last_system_prompt
+    assert 'retained worker agent' in prompt
+    assert 'ephemeral' not in prompt
+    assert 'Refine' in prompt
+
+
+def test_ephemeral_shade_prompt_says_ephemeral_and_skips_refine_mention(tmp_path, monkeypatch):
+    from charon.shade.shade_orchestrator import create_contract
+
+    fake_engine = _fake_engine_class(monkeypatch)
+    monkeypatch.setattr('charon.agents.agent_lifecycle.set_status', lambda a, s: None)
+    state_dir = tmp_path / 'state'
+    state_dir.mkdir()
+    contract = create_contract(
+        state_dir, parent_task_id='', parent_agent_id='AG-ROOT', shade_agent_id='AG-SHADE',
+        conversation_id='conv-1', project=str(tmp_path), goal='test goal',
+    )
+    budget = mint_budget('AG-ROOT', preset='standard')
+    ctx = ToolContext(project_root=tmp_path, state_dir=state_dir, agent_id='AG-ROOT')
+
+    _run_shade(state_dir, 'AG-SHADE', contract['id'], 'test goal', [], [], ctx, 1, budget, False)
+
+    prompt = fake_engine.last_system_prompt
+    assert 'ephemeral worker agent' in prompt
+    assert 'Refine' not in prompt
 
 
 # ---------------------------------------------------------------------------

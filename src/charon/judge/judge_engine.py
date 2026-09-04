@@ -392,6 +392,28 @@ class AestheticJudge(JudgeAdapter):
             )
 
 
+def score_text(text: str, *, rubric: str, context: str = '', provider=None, model=None) -> JudgeVerdict:
+    """One-shot LLM-judge scoring of a standalone piece of text.
+
+    AestheticJudge.evaluate() judges *files in a working directory* as part
+    of an iterate-and-checkpoint loop; this is the same underlying LLM-judge
+    call (_call_llm_judge, same JSON verdict format) for the simpler case of
+    scoring one piece of output directly — e.g. whether an rlm() call's
+    result is worth promoting into durable memory — with no loop, no scope,
+    no working directory.
+    """
+    prompt = (
+        f'{rubric}\n\n'
+        + (f'Context:\n{context}\n\n' if context else '')
+        + f'Text to score:\n{text}\n\n'
+        'Respond with a JSON object: {"score": <0-10>, "feedback": "<one or two sentences>"}'
+    )
+    try:
+        return _call_llm_judge(prompt, provider, model)
+    except Exception as e:
+        return JudgeVerdict(score=0.0, feedback=f'LLM judge error: {e}', error='llm_failed')
+
+
 class CompositeJudge(JudgeAdapter):
     """Weighted combination of multiple judges."""
 
