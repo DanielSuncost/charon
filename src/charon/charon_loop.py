@@ -21,7 +21,7 @@ from charon.shade import shade_orchestrator as SHADE_ORCH
 from charon.agents import agent_policy as AGENT_POLICY
 from charon.agents import goal_runtime as GOAL_RUNTIME
 from charon.infra import config
-from charon.infra.fileio import read_json_or_quarantine, write_json_atomic
+from charon.infra.queue_io import load_queue_atomic, merge_queue_atomic
 
 try:
     from charon.infra.diagnostics import record as _diag
@@ -84,13 +84,11 @@ def trace_event(trace_file: Path | None, event: str, **data):
 
 
 def load_queue(queue_file: Path):
-    # Unreadable-but-existing queue.json is quarantined (renamed to
-    # queue.json.corrupt-<n>) so a later save_queue cannot destroy it.
-    return read_json_or_quarantine(queue_file, [], component='charon_loop')
+    return load_queue_atomic(queue_file)
 
 
 def save_queue(queue_file: Path, queue):
-    write_json_atomic(queue_file, queue)
+    merge_queue_atomic(queue_file, queue)
 
 
 def _sync_task_to_db(state_dir: Path, task: dict) -> None:
@@ -822,11 +820,23 @@ def process_task(task: dict, state_dir: Path, queue: list[dict], trace_file: Pat
             trace_event(trace_file, 'process_task_error', task_id=task.get('id'), error=f'agent is stopped: {owner_agent_id}')
             return False, {'status': 'task_failed', 'error': f'agent is stopped: {owner_agent_id}'}
 
-        if _should_delegate_to_shade(task, agent):
+        explicit_route = (
+            'model_route' in task or 'routing_decision' in task
+        )
+        if not explicit_route and _should_delegate_to_shade(task, agent):
             trace_event(trace_file, 'process_task_delegate_to_shade', task_id=task.get('id'), owner_agent_id=owner_agent_id)
             return _tick_shade_contract(task, state_dir, queue, parent_agent=agent)
 
-        trace_event(trace_file, 'process_task_local_execution', task_id=task.get('id'), owner_agent_id=owner_agent_id)
+        trace_event(
+            trace_file,
+            (
+                'process_task_routed_execution'
+                if explicit_route
+                else 'process_task_local_execution'
+            ),
+            task_id=task.get('id'),
+            owner_agent_id=owner_agent_id,
+        )
         ok, result = AGENT_RUNTIME.run_task_tick(
             state_dir,
             task,
@@ -897,7 +907,7 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
     # heartbeat's tick_operations. Best-effort — must never block startup.
     try:
         from charon.libris.libris_durable import register as _register_libris_durable
-        _register_libris_durable()
+        _register_libris_durable(state_dir)
     except Exception as e:
         _diag('charon_loop', 'durable-kind registration failed; durable operations will not resume until re-registered', error=e)
 
@@ -968,8 +978,9 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
 
             # Judge-loop driver: advance running optimization loops one step
             try:
+                from charon.infra import config as _cfg
                 from charon.judge.judge_loop_driver import tick_judge_loops
-                for ev in tick_judge_loops(state_dir, max_loops=1):
+                for ev in tick_judge_loops(state_dir, max_loops=_cfg.judge_loop_tick_batch()):
                     if ev.get('action') in ('skipped',):
                         continue
                     log_event(log_file, 'judge_loop_tick', **ev)
@@ -990,6 +1001,21 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
                     trace_event(trace_file, 'orchestration_tick', cycle=cycles, **ev)
             except Exception as e:
                 _diag('charon_loop', 'orchestration tick failed; durable operations not advanced', error=e)
+
+            # Directed graph runtime: advance each runnable graph by one node
+            # call. Graph workflows are additive to the step runtime above and
+            # may dispatch ordinary queue-backed agent tasks.
+            try:
+                from charon.orchestration.graph_executors import register_builtin_executors
+                from charon.orchestration.graph_runtime import tick_runs as _tick_graph_runs
+                register_builtin_executors()
+                for ev in _tick_graph_runs(state_dir, max_runs=8):
+                    if ev.get('action') in ('skipped', 'deferred'):
+                        continue
+                    log_event(log_file, 'graph_orchestration_tick', **ev)
+                    trace_event(trace_file, 'graph_orchestration_tick', cycle=cycles, **ev)
+            except Exception as e:
+                _diag('charon_loop', 'graph orchestration tick failed; graph runs not advanced', error=e)
 
         if stop_file.exists():
             log_event(log_file, 'loop_stop_file_detected', stop_file=str(stop_file))

@@ -217,6 +217,51 @@ def set_acceptance_criteria(state_dir: Path, *, project: str, goal_id: str, crit
                               field='acceptance_criteria', value=criteria)
 
 
+def add_goal_tokens_used(state_dir: Path, *, project: str, goal_id: str, tokens: int) -> dict | None:
+    """Roll a completed task's token cost into its goal's running total.
+
+    `tokens_used` was initialized on goal creation and never touched again —
+    accounting that exists on paper but isn't real. Call this once per task
+    attempt (success or failure both cost tokens) so a goal's declared
+    `token_budget` means something. Returns the updated goal, or None if the
+    goal wasn't found.
+    """
+    if tokens <= 0:
+        return None
+    from charon.agents.goal_runtime import (
+        _safe_id, _project_path, _read_json, _write_json, _default_project_doc, _now_iso,
+    )
+    project_id = _safe_id(project or 'default-project', 'project')
+    ppath = _project_path(state_dir, project_id)
+    proj = _read_json(ppath, _default_project_doc(project_id))
+
+    found = None
+    for g in (proj.get('goals') or []):
+        if isinstance(g, dict) and g.get('goal_id') == goal_id:
+            g['tokens_used'] = int(g.get('tokens_used') or 0) + int(tokens)
+            g['updated_at'] = _now_iso()
+            found = g
+            break
+
+    if found:
+        proj['updated_at'] = _now_iso()
+        _write_json(ppath, proj)
+        try:
+            from charon.agents.goal_runtime import _use_store, _get_db, _db_project_upsert
+            if _use_store():
+                _db_project_upsert(_get_db(state_dir), project_id, proj)
+        except Exception as e:
+            _diag('autonomous', 'goal token-usage mirror to SQLite failed; store diverges from JSON', error=e, goal_id=goal_id)
+
+    return found
+
+
+def _goal_budget_exhausted(goal: dict) -> bool:
+    budget = int(goal.get('token_budget') or 0)
+    used = int(goal.get('tokens_used') or 0)
+    return budget > 0 and used >= budget
+
+
 # ── Goal queries ────────────────────────────────────────────────────
 
 def get_goals_by_status(state_dir: Path, *, project: str, status: str) -> list[dict]:
@@ -309,6 +354,17 @@ def self_assign_next_task(
 
     # Priority 2: Executing goals with pending plan steps
     next_goal = get_next_confirmed_goal(state_dir, project=project)
+    if next_goal and _goal_budget_exhausted(next_goal):
+        # tokens_used is now a real, incrementing number (see
+        # add_goal_tokens_used) rather than a field nobody reads — so this is
+        # the enforcement half of that: a goal with a declared token_budget
+        # stops self-assigning new work once it's spent, instead of silently
+        # continuing past its own stated limit.
+        _update_goal_status(
+            state_dir, project=project, goal_id=next_goal.get('goal_id'),
+            new_status='blocked', extra={'block_reason': 'token_budget_exhausted'},
+        )
+        next_goal = None
     if next_goal:
         plan = next_goal.get('plan') or []
         pending_steps = [s for s in plan if isinstance(s, dict) and s.get('status') == 'pending']

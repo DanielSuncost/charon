@@ -48,6 +48,23 @@ AGENT_REPOS: dict[str, dict] = {
         'commands_file': None,
         'docs': ['README.md'],
     },
+    'prime-agent': {
+        'git_url': 'git@github.com:PrimeIntellect-ai/prime-agent.git',
+        'lang': 'typescript',
+        # Shares its docs/ layout with earendil-works/pi (pi-mono above), so the
+        # tools dir is a guess by convention, not a confirmed path — the generic
+        # scanner degrades to an empty list rather than erroring if it's wrong.
+        'tools_dir': 'packages/coding-agent/src/tools',
+        'skills_dirs': [],
+        'commands_file': None,
+        'docs': [
+            'README.md',
+            'packages/coding-agent/docs/architecture.md',
+            'packages/coding-agent/docs/rlm.md',
+            'packages/coding-agent/docs/skills.md',
+            'packages/coding-agent/docs/long-running-agents.md',
+        ],
+    },
 }
 
 

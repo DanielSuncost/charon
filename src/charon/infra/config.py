@@ -47,6 +47,44 @@ def debug_trace() -> bool:
     return os.environ.get('CHARON_DEBUG_TRACE', '0') == '1'
 
 
+def performance_timing() -> bool:
+    """CHARON_TIMING (default '0'): persist per-turn hot-path timings under
+    ``<state-dir>/performance/turns.jsonl`` when enabled."""
+    return os.environ.get('CHARON_TIMING', '0') == '1'
+
+
+def max_parallel_tools() -> int:
+    """CHARON_MAX_PARALLEL_TOOLS (default 4): maximum shared tool calls that
+    may execute concurrently within one model-emitted batch."""
+    return max(1, min(16, _get_int('CHARON_MAX_PARALLEL_TOOLS', 4)))
+
+
+def stream_coalesce_ms() -> int:
+    """CHARON_STREAM_COALESCE_MS (default 20): maximum text-delta buffering
+    window on the Python-to-Rust protocol. Zero disables coalescing."""
+    return max(0, min(100, _get_int('CHARON_STREAM_COALESCE_MS', 20)))
+
+
+def adaptive_tools() -> bool:
+    """CHARON_ADAPTIVE_TOOLS (default '1'): expose a compact core tool set
+    and activate domain tools by intent or ToolCatalog. Set to '0' to send the
+    complete registry on every model request for compatibility."""
+    return os.environ.get('CHARON_ADAPTIVE_TOOLS', '1') != '0'
+
+
+def codex_websocket() -> bool:
+    """CHARON_CODEX_WEBSOCKET (default '1'): prefer the reusable Codex
+    Responses WebSocket v2 transport, with transparent SSE fallback before any
+    semantic output. Set to '0' to force SSE."""
+    return os.environ.get('CHARON_CODEX_WEBSOCKET', '1') != '0'
+
+
+def codex_websocket_first_event_timeout() -> float:
+    """CHARON_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT (default 60 seconds)."""
+    raw = os.environ.get('CHARON_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT', '60')
+    return max(1.0, float(raw or '60'))
+
+
 def state_dir() -> Path | None:
     """CHARON_STATE_DIR (no default): state directory override.
 
@@ -78,6 +116,19 @@ def loop_sleep() -> float:
 def max_cycles() -> int:
     """CHARON_MAX_CYCLES (default 0): stop after N cycles; 0 = run forever."""
     return _get_int('CHARON_MAX_CYCLES', 0)
+
+
+def judge_loop_tick_batch() -> int:
+    """CHARON_JUDGE_LOOP_TICK_BATCH (default 3): how many active judge loops
+    (including Refine's self-refinement loops) advance one step per daemon
+    heartbeat. Was hardcoded to 1, which round-robins N active loops down to a
+    combined throughput of one step per heartbeat total regardless of N — a
+    harness-imposed throughput ceiling, not a model or provider limit. Each
+    unit does at most an implementer call plus a judge call, both sequential
+    within the tick, so raising this trades main-queue tick latency for
+    judge-loop fairness; tune down if the primary task queue feels sluggish
+    with several loops running."""
+    return max(1, min(20, _get_int('CHARON_JUDGE_LOOP_TICK_BATCH', 3)))
 
 
 def stale_in_progress_sec() -> int:
@@ -155,6 +206,20 @@ def skip_approval() -> bool:
     """CHARON_SKIP_APPROVAL (default '0'): '1'/'true'/'yes' disables all tool
     approval checks."""
     return os.environ.get('CHARON_SKIP_APPROVAL', '0') in ('1', 'true', 'yes')
+
+
+def research_source_approval_override() -> str | None:
+    """Optional override for background research-source approvals.
+
+    ``CHARON_RESEARCH_SOURCE_APPROVAL`` accepts:
+      - ``auto``: read-only source/network access proceeds without a prompt.
+      - ``ask``: read-only source/network access uses the normal approval gate.
+
+    Invalid or empty values are ignored so the persisted policy remains in
+    control.
+    """
+    value = os.environ.get('CHARON_RESEARCH_SOURCE_APPROVAL', '').strip().lower()
+    return value if value in ('auto', 'ask') else None
 
 
 # ── Browser / tools ──────────────────────────────────────────────────────────

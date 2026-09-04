@@ -18,8 +18,12 @@ Dangerous patterns cover:
 """
 from __future__ import annotations
 
+import json
 import re
 import threading
+from pathlib import Path
+from typing import Any
+
 from charon.infra import config
 
 
@@ -58,8 +62,18 @@ DANGEROUS_PATTERNS = [
 # Tools that modify the filesystem
 WRITE_TOOLS = {'Write', 'Edit', 'Git'}
 
-# Tools that access the network
-NETWORK_TOOLS = {'Http', 'Web'}
+# Tools that access the network. Some of these were historically treated as
+# safe even though they perform HTTP/browser I/O; keeping one complete registry
+# makes the approval policy consistent.
+NETWORK_TOOLS = {'Http', 'Web', 'Paper', 'SourceDiscovery', 'Browser'}
+
+RESEARCH_SOURCE_APPROVAL_VALUES = {'auto', 'ask'}
+DEFAULT_APPROVAL_CONFIG = {
+    'research_sources': 'auto',
+}
+APPROVAL_CONFIG_FILENAME = 'approval_config.json'
+
+_config_lock = threading.Lock()
 
 
 # ── Detection ───────────────────────────────────────────────────────
@@ -117,7 +131,121 @@ def classify_tool_risk(tool_name: str, params: dict) -> tuple[str, str]:
     if tool_name == 'SpawnShade':
         return 'write', 'spawn shade worker'
 
+    if tool_name == 'PyKernel':
+        action = str(params.get('action', 'run')).strip().lower()
+        if action == 'run':
+            return 'dangerous', 'persistent code execution kernel (arbitrary Python, can spawn shades)'
+        return 'safe', ''
+
+    if tool_name == 'Refine':
+        action = str(params.get('action', '')).strip().lower()
+        if action == 'propose':
+            skill = str(params.get('skill', '')).strip()
+            return 'write', f'judged self-refinement of skill: {skill}'
+        return 'safe', ''
+
     return 'safe', ''
+
+
+def is_read_only_research_source_call(tool_name: str, params: dict) -> bool:
+    """Return whether a call only reads/discovers research sources.
+
+    This is deliberately action-aware. In particular, a GET is a source read
+    while an HTTP POST is not, and browser navigation/inspection is distinct
+    from clicking or typing into a page.
+    """
+    if tool_name in {'Paper', 'SourceDiscovery', 'Web'}:
+        return True
+
+    if tool_name == 'Http':
+        return str(params.get('method') or 'GET').strip().upper() in {'GET', 'HEAD'}
+
+    if tool_name == 'Browser':
+        action = str(params.get('action') or '').strip().lower()
+        return action in {
+            'navigate', 'screenshot', 'scroll', 'go_back', 'wait',
+            'get_state', 'assert_text', 'assert_selector',
+        }
+
+    if tool_name == 'X':
+        action = str(params.get('action') or '').strip().lower()
+        return action in {
+            'login_status', 'fetch_post', 'fetch_bookmarks',
+            'fetch_new_bookmarks', 'triage_new_bookmarks',
+        }
+
+    return False
+
+
+# ── Persisted policy ────────────────────────────────────────────────
+
+def _approval_config_path(state_dir: Path | str) -> Path:
+    return Path(state_dir) / APPROVAL_CONFIG_FILENAME
+
+
+def load_approval_config(state_dir: Path | str | None) -> dict[str, Any]:
+    """Load approval configuration, filling safe defaults."""
+    loaded: dict[str, Any] = {}
+    if state_dir is not None:
+        path = _approval_config_path(state_dir)
+        with _config_lock:
+            try:
+                value = json.loads(path.read_text()) if path.exists() else {}
+                if isinstance(value, dict):
+                    loaded = value
+            except (OSError, json.JSONDecodeError, TypeError):
+                loaded = {}
+
+    result = dict(DEFAULT_APPROVAL_CONFIG)
+    configured = str(loaded.get('research_sources') or '').strip().lower()
+    if configured in RESEARCH_SOURCE_APPROVAL_VALUES:
+        result['research_sources'] = configured
+    return result
+
+
+def save_approval_config(state_dir: Path | str, approval_config: dict[str, Any]) -> dict[str, Any]:
+    """Validate and atomically persist approval configuration."""
+    policy = str(approval_config.get('research_sources') or '').strip().lower()
+    if policy not in RESEARCH_SOURCE_APPROVAL_VALUES:
+        raise ValueError('research source approval policy must be "auto" or "ask"')
+
+    normalized = {'research_sources': policy}
+    path = _approval_config_path(state_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f'.{path.name}.tmp')
+    with _config_lock:
+        tmp.write_text(json.dumps(normalized, indent=2) + '\n')
+        tmp.replace(path)
+    return normalized
+
+
+def configured_research_source_approval_policy(state_dir: Path | str | None) -> str:
+    """Return the persisted research-source policy without env overrides."""
+    return str(load_approval_config(state_dir)['research_sources'])
+
+
+def get_research_source_approval_policy(state_dir: Path | str | None = None) -> str:
+    """Return the effective policy, with the environment taking precedence."""
+    return (
+        config.research_source_approval_override()
+        or configured_research_source_approval_policy(state_dir)
+    )
+
+
+def set_research_source_approval_policy(
+    state_dir: Path | str,
+    policy: str,
+) -> dict[str, Any]:
+    """Persist ``auto`` or ``ask`` and return configured/effective values."""
+    normalized = save_approval_config(
+        state_dir,
+        {'research_sources': str(policy).strip().lower()},
+    )
+    return {
+        **normalized,
+        'effective_research_sources': get_research_source_approval_policy(state_dir),
+        'env_override': config.research_source_approval_override(),
+    }
 
 
 # ── Approval state ──────────────────────────────────────────────────
@@ -139,6 +267,8 @@ def needs_approval(
     *,
     session_id: str = 'default',
     approval_mode: str = 'normal',
+    state_dir: Path | str | None = None,
+    operation_domain: str = '',
 ) -> tuple[bool, str, str]:
     """Check if a tool call needs user approval.
 
@@ -155,6 +285,18 @@ def needs_approval(
     risk, reason = classify_tool_risk(tool_name, params)
 
     if risk == 'safe':
+        return False, risk, reason
+
+    # Background Libris/research agents are expected to gather evidence
+    # autonomously. Only read-only source access is covered; dangerous commands,
+    # HTTP mutations, and interactive browser actions continue through the
+    # ordinary approval policy.
+    if (
+        str(operation_domain).strip().lower() == 'research'
+        and risk == 'network'
+        and is_read_only_research_source_call(tool_name, params)
+        and get_research_source_approval_policy(state_dir) == 'auto'
+    ):
         return False, risk, reason
 
     if risk == 'dangerous':
@@ -215,11 +357,18 @@ def clear_session_approvals(session_id: str) -> None:
         _session_approved.pop(session_id, None)
 
 
-def get_approval_status(session_id: str = 'default') -> dict:
+def get_approval_status(
+    session_id: str = 'default',
+    *,
+    state_dir: Path | str | None = None,
+) -> dict:
     """Get current approval status for display."""
     with _lock:
         return {
             'skip_all': is_approval_skipped(),
             'session_approved': sorted(_session_approved.get(session_id, set())),
             'permanent_approved': sorted(_permanent_approved),
+            'research_sources': get_research_source_approval_policy(state_dir),
+            'configured_research_sources': configured_research_source_approval_policy(state_dir),
+            'research_sources_env_override': config.research_source_approval_override(),
         }

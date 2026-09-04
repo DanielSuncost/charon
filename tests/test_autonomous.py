@@ -8,6 +8,7 @@ from charon.agents.autonomous import (
     start_executing, complete_goal, fail_goal,
     set_goal_plan, set_acceptance_criteria,
     get_goals_by_status, get_proposed_goals, self_assign_next_task,
+    add_goal_tokens_used,
 )
 
 
@@ -195,6 +196,56 @@ def test_self_assign_respects_time_budget(tmp_path):
     task = self_assign_next_task(state_dir, agent_id='AG-001',
                                  project='/tmp/p', config=config)
     assert task is None  # budget exhausted
+
+
+# ── Token accounting ────────────────────────────────────────────────
+
+def test_add_goal_tokens_used_increments(tmp_path):
+    state_dir = tmp_path / 'state'
+    goal = propose_goal(state_dir, agent_id='AG-001', project='/tmp/p', title='Track cost')
+    updated = add_goal_tokens_used(state_dir, project='/tmp/p', goal_id=goal['goal_id'], tokens=500)
+    assert updated['tokens_used'] == 500
+    updated2 = add_goal_tokens_used(state_dir, project='/tmp/p', goal_id=goal['goal_id'], tokens=250)
+    assert updated2['tokens_used'] == 750
+
+
+def test_add_goal_tokens_used_ignores_nonpositive(tmp_path):
+    state_dir = tmp_path / 'state'
+    goal = propose_goal(state_dir, agent_id='AG-001', project='/tmp/p', title='No-op')
+    assert add_goal_tokens_used(state_dir, project='/tmp/p', goal_id=goal['goal_id'], tokens=0) is None
+
+
+def test_add_goal_tokens_used_unknown_goal_returns_none(tmp_path):
+    state_dir = tmp_path / 'state'
+    assert add_goal_tokens_used(state_dir, project='/tmp/p', goal_id='nope', tokens=10) is None
+
+
+def test_self_assign_respects_token_budget(tmp_path):
+    state_dir = tmp_path / 'state'
+    goal = propose_goal(state_dir, agent_id='AG-001', project='/tmp/p',
+                        title='Spendy', token_budget=1000)
+    confirm_goal(state_dir, project='/tmp/p', goal_id=goal['goal_id'])
+    add_goal_tokens_used(state_dir, project='/tmp/p', goal_id=goal['goal_id'], tokens=1000)
+
+    config = {'enabled': True}
+    task = self_assign_next_task(state_dir, agent_id='AG-001', project='/tmp/p', config=config)
+    assert task is None  # budget exhausted — no further work self-assigned
+
+    blocked = get_goals_by_status(state_dir, project='/tmp/p', status='blocked')
+    assert len(blocked) == 1
+    assert blocked[0]['block_reason'] == 'token_budget_exhausted'
+
+
+def test_self_assign_allows_work_under_token_budget(tmp_path):
+    state_dir = tmp_path / 'state'
+    goal = propose_goal(state_dir, agent_id='AG-001', project='/tmp/p',
+                        title='Under budget', token_budget=1000)
+    confirm_goal(state_dir, project='/tmp/p', goal_id=goal['goal_id'])
+    add_goal_tokens_used(state_dir, project='/tmp/p', goal_id=goal['goal_id'], tokens=500)
+
+    config = {'enabled': True}
+    task = self_assign_next_task(state_dir, agent_id='AG-001', project='/tmp/p', config=config)
+    assert task is not None
 
 
 # ── Query helpers ───────────────────────────────────────────────────
