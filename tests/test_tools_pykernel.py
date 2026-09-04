@@ -82,6 +82,13 @@ def test_pykernel_bridge_exposes_spawn_shade(tmp_path):
     assert 'Out: True' in r.content
 
 
+def test_pykernel_bridge_exposes_rlm(tmp_path):
+    ctx = _ctx(tmp_path)
+    r = pk_mod.execute_pykernel({'code': 'callable(charon.rlm)'}, ctx)
+    assert not r.is_error
+    assert 'Out: True' in r.content
+
+
 def test_pykernel_timeout_soft_interrupts_and_preserves_state(tmp_path):
     ctx = _ctx(tmp_path)
     r = pk_mod.execute_pykernel(

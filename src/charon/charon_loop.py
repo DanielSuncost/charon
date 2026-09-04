@@ -911,6 +911,18 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
     except Exception as e:
         _diag('charon_loop', 'durable-kind registration failed; durable operations will not resume until re-registered', error=e)
 
+    # A shade's phase loop runs in a background thread inside whatever
+    # process spawned it; if that process gets hard-killed (e.g. PyKernel's
+    # own hard-kill path after a failed soft interrupt), the contract is
+    # left stuck at status='running' forever with nothing watching it.
+    # Reconcile those on startup, same shape as the automation scheduler's
+    # own stale-run recovery below.
+    try:
+        from charon.shade.shade_orchestrator import reconcile_stale_shade_contracts
+        reconcile_stale_shade_contracts(state_dir)
+    except Exception as e:
+        _diag('charon_loop', 'stale shade contract reconcile failed on startup', error=e)
+
     # Start fleet sync and memory threads (optional — graceful if fleet not configured)
     try:
         from charon.fleet.fleet_sync import start_fleet_sync

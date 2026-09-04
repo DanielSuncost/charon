@@ -2,7 +2,7 @@
 import time
 
 from charon.agents.topology_budget import (
-    PRESETS, effective_budget, mint_budget, try_reserve, current_state,
+    PRESETS, effective_budget, mint_budget, try_reserve, current_state, record_usage,
 )
 
 
@@ -109,6 +109,45 @@ def test_try_reserve_rejects_when_time_budget_exhausted(tmp_path):
     ok, reason = try_reserve(tmp_path, budget, parent_agent_id='AG-1', depth=1)
     assert not ok
     assert 'time budget' in reason
+
+
+def test_record_usage_accumulates(tmp_path):
+    budget = mint_budget('root-1', preset='standard')
+    record_usage(tmp_path, budget, 100)
+    record_usage(tmp_path, budget, 50)
+    state = current_state(tmp_path, 'root-1')
+    assert state['total_tokens_used'] == 150
+
+
+def test_record_usage_ignores_non_positive_amounts(tmp_path):
+    budget = mint_budget('root-1', preset='standard')
+    record_usage(tmp_path, budget, 0)
+    record_usage(tmp_path, budget, -10)
+    state = current_state(tmp_path, 'root-1')
+    assert state['total_tokens_used'] == 0
+
+
+def test_try_reserve_rejects_once_token_budget_exhausted(tmp_path):
+    budget = mint_budget('root-1', max_depth=0, max_breadth_per_level=0, max_total_agents=0, token_budget=100)
+    record_usage(tmp_path, budget, 100)
+    ok, reason = try_reserve(tmp_path, budget, parent_agent_id='AG-1', depth=1)
+    assert not ok
+    assert 'token budget' in reason
+
+
+def test_try_reserve_allows_when_under_token_budget(tmp_path):
+    budget = mint_budget('root-1', max_depth=0, max_breadth_per_level=0, max_total_agents=0, token_budget=100)
+    record_usage(tmp_path, budget, 40)
+    ok, reason = try_reserve(tmp_path, budget, parent_agent_id='AG-1', depth=1)
+    assert ok
+    assert reason == ''
+
+
+def test_record_usage_fails_open_on_unwritable_state_dir(tmp_path):
+    bogus_state_dir = tmp_path / 'not_a_dir'
+    bogus_state_dir.write_text('a file, not a directory')
+    budget = mint_budget('root-1', preset='standard')
+    record_usage(bogus_state_dir, budget, 100)  # must not raise
 
 
 def test_try_reserve_fails_open_on_unwritable_state_dir(tmp_path):

@@ -109,10 +109,12 @@ def _load(path: Path) -> dict[str, Any]:
             if isinstance(data, dict):
                 data.setdefault('total_agents', 0)
                 data.setdefault('children_by_node', {})
+                data.setdefault('total_tokens_used', 0)
+                data.setdefault('reactivations_by_node', {})
                 return data
     except Exception as e:
         _diag('topology_budget', 'topology state read failed; starting fresh', error=e, path=str(path))
-    return {'total_agents': 0, 'children_by_node': {}}
+    return {'total_agents': 0, 'children_by_node': {}, 'total_tokens_used': 0, 'reactivations_by_node': {}}
 
 
 def _save(path: Path, state: dict[str, Any]) -> None:
@@ -172,12 +174,117 @@ def try_reserve(
                 f'{total} already spawned, {count} more requested)'
             )
 
+        token_budget = int(budget.get('token_budget') or 0)
+        tokens_used = int(state.get('total_tokens_used', 0))
+        if token_budget > 0 and tokens_used >= token_budget:
+            return False, (
+                f'topology token budget exhausted (token_budget={token_budget}, '
+                f'{tokens_used} used so far by this delegation tree)'
+            )
+
         children_by_node[parent_agent_id] = existing_children + count
         state['total_agents'] = total + count
         _save(path, state)
         return True, ''
     except Exception as e:
         _diag('topology_budget', 'reservation failed open; allowing spawn without accounting', error=e, root_id=root_id)
+        return True, ''
+    finally:
+        if lock_file is not None:
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            lock_file.close()
+
+
+def record_usage(state_dir: Path, budget: dict[str, Any], tokens: int) -> None:
+    """Add `tokens` to this tree's running total-tokens-used counter.
+
+    Called after a call's real token cost is known (a turn's usage isn't
+    knowable in advance, so this is a post-hoc accumulation, not a
+    reservation) — try_reserve()'s token_budget check then gates further
+    spawning once the tree's cumulative usage reaches the budget. Best
+    effort: like try_reserve, failure to persist is logged and swallowed
+    rather than raised, so a bookkeeping problem never blocks real work.
+    """
+    if tokens <= 0:
+        return
+    root_id = str(budget.get('root_id') or 'root')
+    path = _state_path(Path(state_dir), root_id)
+    lock_file = None
+    try:
+        if _HAS_FCNTL:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            lock_file = open(path.with_suffix('.lock'), 'w')
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+
+        state = _load(path)
+        state['total_tokens_used'] = int(state.get('total_tokens_used', 0)) + int(tokens)
+        _save(path, state)
+    except Exception as e:
+        _diag('topology_budget', 'usage recording failed; token accounting may undercount', error=e, root_id=root_id)
+    finally:
+        if lock_file is not None:
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            lock_file.close()
+
+
+def try_reserve_reactivation(
+    state_dir: Path,
+    budget: dict[str, Any],
+    *,
+    shade_id: str,
+    max_reactivations: int = 20,
+) -> tuple[bool, str]:
+    """Re-check a retained shade's reactivation against time/token budget and
+    a reactivation-count cap — WITHOUT incrementing children_by_node/
+    total_agents, since a reactivation is the same tree node, already
+    counted once at its original spawn. Skipping this check entirely (as a
+    naive reactivation path would) is the first concrete way this whole
+    governance layer could be bypassed: a retained shade could otherwise be
+    reactivated an unbounded number of times with no re-check of anything.
+
+    Returns (ok, reason), same shape as try_reserve().
+    """
+    time_budget_min = int(budget.get('time_budget_minutes') or 0)
+    started_at = float(budget.get('started_at') or 0)
+    if time_budget_min > 0 and started_at and (time.time() - started_at) > time_budget_min * 60:
+        return False, f'topology time budget exhausted ({time_budget_min}m since this delegation tree started)'
+
+    shade_id = shade_id or 'root'
+    root_id = str(budget.get('root_id') or 'root')
+    path = _state_path(Path(state_dir), root_id)
+    lock_file = None
+    try:
+        if _HAS_FCNTL:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            lock_file = open(path.with_suffix('.lock'), 'w')
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+
+        state = _load(path)
+
+        token_budget = int(budget.get('token_budget') or 0)
+        tokens_used = int(state.get('total_tokens_used', 0))
+        if token_budget > 0 and tokens_used >= token_budget:
+            return False, (
+                f'topology token budget exhausted (token_budget={token_budget}, '
+                f'{tokens_used} used so far by this delegation tree)'
+            )
+
+        reactivations = state.setdefault('reactivations_by_node', {})
+        count = int(reactivations.get(shade_id, 0))
+        if max_reactivations > 0 and count >= max_reactivations:
+            return False, f'max reactivations reached for this shade (max_reactivations={max_reactivations})'
+
+        reactivations[shade_id] = count + 1
+        _save(path, state)
+        return True, ''
+    except Exception as e:
+        _diag('topology_budget', 'reactivation check failed open; allowing reactivation without accounting', error=e, root_id=root_id)
         return True, ''
     finally:
         if lock_file is not None:

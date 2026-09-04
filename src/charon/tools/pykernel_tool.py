@@ -13,6 +13,19 @@ The kernel also exposes `charon.spawn_shade(...)` inside its namespace, which
 re-enters the real SpawnShade tool and returns immediately with a handle —
 fire-and-forget, matching how shade dispatch already works everywhere else.
 
+For a real recursive call — spawn a sub-agent and block for its actual
+result, like calling a function — use `charon.rlm(objective, ...)` instead.
+It polls the child's contract from inside this same kernel call, so
+PyKernel's existing timeout/soft-interrupt handling doubles as rlm()'s
+timeout handling with no new machinery: a child that runs long enough to
+hit the timeout just interrupts the wait (state preserved, same as any
+other long-running kernel call), not the child itself.
+
+`SpawnShade`'s `retain=True` keeps a shade addressable after its work ends
+(idle, not stopped) instead of self-terminating. Call it again later with
+`charon.rlm(objective, child_agent_id=<its id>)` — it resumes with its full
+prior conversation rather than starting fresh.
+
 Not a sandbox. Code runs as a subprocess with the daemon's own OS permissions,
 the same trust model as Bash and ExecuteCode.
 """
@@ -46,7 +59,12 @@ PYKERNEL_TOOL_DEF = {
         'instead of re-reading them through tool results every turn, and for looped or '
         'stateful processing. Inside the kernel, charon.spawn_shade(goal, scope=[...]) '
         'spawns a real shade agent and returns immediately with a handle — it does not '
-        'wait for the shade to finish. Not sandboxed: same trust level as Bash.'
+        'wait for the shade to finish. charon.rlm(objective, ...) is the blocking version: '
+        'it spawns a shade and waits for its actual result, like a recursive function call. '
+        'rlm() prints its contract_id before waiting — if a long-running rlm() call gets '
+        'interrupted by this tool\'s own timeout, read that printed contract_id from stdout '
+        'and pass it back in as contract_id= on a follow-up PyKernel call to keep waiting on '
+        'the same child instead of spawning a duplicate. Not sandboxed: same trust level as Bash.'
     ),
     'input_schema': {
         'type': 'object',

@@ -367,6 +367,43 @@ def mark_phase_failed(state_dir: Path, contract_id: str, phase_id: str, *, task_
     return _update_contract(state_dir, contract)
 
 
+def reconcile_stale_shade_contracts(state_dir: Path, *, stale_after_seconds: int = 300) -> list[str]:
+    """Mark contracts stuck at status='running' as failed once they've gone
+    quiet for longer than stale_after_seconds.
+
+    A shade's phase loop runs in a background thread inside whatever
+    process spawned it — the main daemon, or (for PyKernel-issued spawns,
+    including charon.rlm()) the kernel worker subprocess. If that process
+    is hard-killed, the thread dies with it and the contract is left at
+    'running' forever, since nothing else was watching it. Call at daemon
+    startup, mirroring automation_runtime.reconcile_stale_automation_runs's
+    same shape of repair for the same class of problem.
+    """
+    recovered: list[str] = []
+    now = datetime.now(timezone.utc).timestamp()
+    for contract in load_contracts(state_dir):
+        if contract.get('status') != 'running':
+            continue
+        updated_at = str(contract.get('updated_at') or '')
+        try:
+            updated_ts = datetime.fromisoformat(updated_at.replace('Z', '+00:00')).timestamp()
+        except Exception:
+            updated_ts = 0.0
+        if updated_ts <= 0 or (now - updated_ts) < stale_after_seconds:
+            continue
+        contract_id = str(contract.get('id') or '')
+        contract['status'] = 'failed'
+        contract['last_error'] = f'reconciled: no progress for over {stale_after_seconds}s (likely an orphaned worker process)'
+        contract['completed_at'] = _now_iso()
+        _update_contract(state_dir, contract)
+        append_phase_event(
+            state_dir, contract_id=contract_id, phase_id='-',
+            event_type='contract_reconciled_stale', payload={'stale_after_seconds': stale_after_seconds},
+        )
+        recovered.append(contract_id)
+    return recovered
+
+
 def build_phase_instruction(contract: dict, phase: dict) -> str:
     lines = [
         f"[SHADE_CONTRACT {contract.get('id')}]",

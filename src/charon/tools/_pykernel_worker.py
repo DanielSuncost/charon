@@ -34,12 +34,50 @@ import traceback
 import types
 
 
+def _trace_rlm_node(state_dir, *, node_id, parent_id, root_task_id, objective,
+                     depth, budget, status, output_ref) -> None:
+    """Append one record to this tree's rlm-node trace log (best-effort).
+
+    Shape matches docs/contracts/rlm-node.schema.json. One JSONL file per
+    root_task_id under state_dir/rlm/ — a durable trace of every rlm() call
+    for debugging/replay, satisfying the RLM design's "trace graph" goal
+    without a new FSM: it just wraps the existing shade-contract lifecycle
+    (output_ref is the shade's contract_id).
+    """
+    if not state_dir:
+        return
+    try:
+        from pathlib import Path
+        path = Path(state_dir) / 'rlm' / f'{root_task_id}.jsonl'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            'schema_version': '1.0',
+            'id': node_id,
+            'parent_id': parent_id,
+            'root_task_id': root_task_id,
+            'objective': objective,
+            'depth': depth,
+            'budget': budget,
+            'usage': {},
+            'status': status,
+            'output_ref': output_ref,
+        }
+        with open(path, 'a') as f:
+            f.write(json.dumps(record) + '\n')
+    except Exception:
+        pass  # tracing is best-effort observability, never load-bearing
+
+
 def _bridge_module(project_root: str, state_dir: str, agent_id: str) -> types.ModuleType:
     """Build the `charon` object exposed inside kernel globals.
 
-    Deliberately thin: spawn_shade re-enters Charon's own SpawnShade tool
-    function rather than reimplementing shade-spawning, so kernel-issued
-    spawns and normal tool-call spawns stay behind one implementation.
+    Deliberately thin: spawn_shade and rlm both re-enter Charon's own
+    SpawnShade tool function rather than reimplementing shade-spawning, so
+    kernel-issued spawns and normal tool-call spawns stay behind one
+    implementation. rlm() additionally polls shade_orchestrator.get_contract
+    (read-only) to turn that fire-and-forget spawn into a blocking call —
+    see rlm()'s own docstring for why polling, not a synchronous
+    reimplementation of the shade's phase loop, is the safe way to do that.
     """
     mod = types.ModuleType('charon')
 
@@ -74,7 +112,103 @@ def _bridge_module(project_root: str, state_dir: str, agent_id: str) -> types.Mo
             raise RuntimeError(result.content)
         return dict(result.details or {})
 
+    def rlm(objective: str, *, child_agent_id=None, scope=None, constraints=None,
+            expected_outputs=None, contract_id=None, poll_interval: float = 0.5) -> dict:
+        """Call a sub-agent and block for its result, like a function call.
+
+        Unlike spawn_shade (fire-and-forget), this waits for the child to
+        finish and returns its actual output — the real recursive-call
+        primitive: call a sub-agent the way you'd call a function.
+
+        PyKernel clamps a single `run` call to at most 300s, so a child
+        whose work takes longer WILL make this call hit that ceiling and
+        get cut short by a soft interrupt before it can return. Because of
+        that, the contract id is printed to stdout immediately after the
+        child is spawned, before the wait begins — a raised interrupt loses
+        this function's local variables, but not what was already printed.
+        Read that line and pass it back in via contract_id= on a follow-up
+        rlm() call to keep waiting on the same child, instead of spawning a
+        duplicate.
+
+        child_agent_id: call an existing retained (idle) shade instead of
+        spawning a fresh one. Errors — never silently spawns a fresh shade
+        under that id — if it isn't found, isn't a shade, or isn't idle.
+        """
+        import time as _time
+        from pathlib import Path
+
+        from charon.tools import ToolContext
+        from charon.tools.shade_tool import execute_spawn_shade
+        from charon.shade.shade_orchestrator import get_contract
+
+        ctx = ToolContext(
+            project_root=Path(project_root),
+            agent_id=agent_id,
+            state_dir=Path(state_dir) if state_dir else None,
+        )
+
+        if contract_id:
+            cid = contract_id
+        elif child_agent_id:
+            from charon.tools.shade_tool import execute_reactivate_shade
+            from charon.agents.topology_budget import effective_budget
+
+            budget = effective_budget(ctx)
+            depth = int(getattr(ctx, 'topology_depth', 0) or 0) + 1
+            try:
+                handle = execute_reactivate_shade(
+                    ctx.state_dir, child_agent_id, objective, ctx, depth=depth, budget=budget,
+                )
+            except KeyError:
+                raise RuntimeError(f'{child_agent_id!r} has no retained lifecycle (never spawned with retain=True, or already stopped).') from None
+            except Exception as e:
+                raise RuntimeError(f'cannot reactivate {child_agent_id!r}: {e}') from e
+            cid = handle['contract_id']
+        else:
+            result = execute_spawn_shade(
+                {
+                    'goal': objective,
+                    'scope': list(scope or []),
+                    'constraints': list(constraints or []),
+                    'expected_outputs': list(expected_outputs or []),
+                },
+                ctx,
+            )
+            if result.is_error:
+                raise RuntimeError(result.content)
+            cid = dict(result.details or {}).get('contract_id')
+            if not cid:
+                raise RuntimeError('spawn succeeded but returned no contract_id')
+
+        # Printed before the wait begins — see the docstring above.
+        print(json.dumps({'rlm_contract_id': cid}), flush=True)
+
+        terminal = {'completed', 'failed'}
+        while True:
+            contract = get_contract(ctx.state_dir, cid)
+            if not contract:
+                raise RuntimeError(f'contract {cid} not found')
+            if contract.get('status') in terminal:
+                break
+            _time.sleep(poll_interval)
+
+        phases = contract.get('phases') or []
+        succeeded = contract.get('status') == 'completed'
+        output = phases[-1].get('result_summary') if phases else None
+        meta = contract.get('metadata') or {}
+        _trace_rlm_node(
+            ctx.state_dir, node_id=cid, parent_id=agent_id, root_task_id=agent_id,
+            objective=objective, depth=meta.get('topology_depth'),
+            budget=meta.get('topology_budget'), status=contract.get('status'), output_ref=cid,
+        )
+        return {
+            'status': contract.get('status'),
+            'output': output if succeeded else contract.get('last_error'),
+            'contract_id': cid,
+        }
+
     mod.spawn_shade = spawn_shade
+    mod.rlm = rlm
     return mod
 
 

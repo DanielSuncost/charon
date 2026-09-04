@@ -77,6 +77,15 @@ SHADE_TOOL_DEF = {
                     'shade spawned by another shade inherits its tree\'s existing budget instead.'
                 ),
             },
+            'retain': {
+                'type': 'boolean',
+                'description': (
+                    'If true, the shade goes idle instead of stopping once its contract finishes, '
+                    'and stays addressable — call it again via charon.rlm(child_agent_id=...) in '
+                    'PyKernel with a follow-up instruction, and it resumes with its prior context. '
+                    'Default: false (self-terminates as usual).'
+                ),
+            },
         },
         'required': ['goal'],
     },
@@ -95,6 +104,7 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
     phase_specs = params.get('phase_specs', [])
     contract_type = str(params.get('contract_type', '')).strip()
     metadata = params.get('metadata') or {}
+    retain = bool(params.get('retain', False))
     state_dir = ctx.state_dir or Path('.charon_state')
 
     try:
@@ -145,6 +155,13 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
 
     shade_id = shade_agent['id']
 
+    if retain:
+        try:
+            from charon.agents.shade_lifecycle import initialize as init_shade_lifecycle
+            init_shade_lifecycle(state_dir, shade_id)
+        except Exception as e:
+            return ToolResult(content=f'Shade agent created ({shade_id}) but retained lifecycle init failed: {e}', is_error=True)
+
     # 2. Create contract
     try:
         from charon.shade.shade_orchestrator import create_contract
@@ -170,7 +187,7 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
     # 3. Launch shade in background thread
     thread = threading.Thread(
         target=_run_shade,
-        args=(state_dir, shade_id, contract_id, goal, scope, constraints, ctx, depth, budget),
+        args=(state_dir, shade_id, contract_id, goal, scope, constraints, ctx, depth, budget, retain),
         daemon=True,
     )
     thread.start()
@@ -205,6 +222,8 @@ def _run_shade(
     parent_ctx: ToolContext,
     depth: int = 0,
     budget: dict | None = None,
+    retain: bool = False,
+    resume: bool = False,
 ):
     """Run a shade agent in a background thread."""
     import asyncio
@@ -236,15 +255,28 @@ def _run_shade(
             f'- If you encounter an error you cannot resolve, explain what went wrong.\n'
         )
 
+        # A retained shade's agent_id activates the lossless-context store
+        # (ConversationEngine gates it on state_dir + agent_id both being
+        # set) — needed so a later reactivation has a conversation to load.
+        # A plain, non-retained shade keeps agent_id='' exactly as before:
+        # zero behavior change to the existing fire-and-forget path.
         engine = ConversationEngine(
             provider=provider,
             model=model,
             project_root=parent_ctx.project_root,
+            agent_id=shade_id if retain else '',
             agent_name=f'shade-{shade_id}',
             system_prompt=system_prompt,
             state_dir=state_dir,
             max_tokens=16384,
         )
+        if resume:
+            # Reactivating a retained, idle shade: reload its prior
+            # conversation (the live ConversationEngine/thread from its
+            # first run are long gone — this is a brand-new object) and
+            # repair any tool call left unpaired by going idle mid-phase.
+            engine.load_from_store()
+            engine.messages = ConversationEngine._repair_orphaned_tool_calls(engine.messages)
         # Enforce the contract's file scope on Read/Write/Edit (not just advise
         # it via the prompt). Empty scope means "entire project" (no restriction).
         engine.scope = list(scope) if scope else None
@@ -338,6 +370,14 @@ def _run_shade(
                 response, events = asyncio.run(
                     engine.submit_and_collect(instruction)
                 )
+                if budget:
+                    turn_tokens = 0
+                    for event in events:
+                        if event.type == 'message_end':
+                            turn_tokens += int((event.data.get('usage') or {}).get('total_tokens', 0) or 0)
+                    if turn_tokens:
+                        from charon.agents.topology_budget import record_usage
+                        record_usage(state_dir, budget, turn_tokens)
                 summary = response[:500] if response else 'Completed (no output)'
                 mark_phase_completed(
                     state_dir, contract_id, phase_id,
@@ -420,12 +460,20 @@ def _run_shade(
             _emit_libris_phase('done', 'idle', 'Shade contract completed.')
             _emit_libris_comm('shade_contract_completed', 'Shade finished all contract phases.')
 
-        # Mark agent as stopped
-        try:
-            from charon.agents.agent_lifecycle import set_status
-            set_status(shade_id, 'stopped')
-        except Exception as exc:
-            _diag('shade_tool', 'shade agent status not set to stopped; agent may appear running forever', error=exc, contract_id=contract_id)
+        # Retained shades go idle and stay addressable (charon.rlm(
+        # child_agent_id=...) can reactivate them); everyone else stops.
+        if retain:
+            try:
+                from charon.agents.shade_lifecycle import mark_idle
+                mark_idle(state_dir, shade_id)
+            except Exception as exc:
+                _diag('shade_tool', 'retained shade failed to go idle; it may appear running forever', error=exc, contract_id=contract_id)
+        else:
+            try:
+                from charon.agents.agent_lifecycle import set_status
+                set_status(shade_id, 'stopped')
+            except Exception as exc:
+                _diag('shade_tool', 'shade agent status not set to stopped; agent may appear running forever', error=exc, contract_id=contract_id)
 
     except Exception as e:
         # Log error
@@ -435,3 +483,52 @@ def _run_shade(
             err_path.write_text(f'{time.strftime("%Y-%m-%d %H:%M:%S")} Shade error: {e}\n')
         except Exception as exc:
             _diag('shade_tool', 'shade error.log write failed; shade crash has no persisted record', error=exc, contract_id=contract_id)
+
+
+def execute_reactivate_shade(
+    state_dir: Path, shade_id: str, objective: str, ctx: ToolContext, *, depth: int, budget: dict,
+) -> dict:
+    """Reactivate a retained, idle shade with a new instruction.
+
+    This is the engine behind charon.rlm(child_agent_id=...) — never called
+    as a standalone tool. Mirrors execute_spawn_shade's shape (create a
+    contract, launch a background thread, return a handle) but resumes an
+    existing agent_id's conversation instead of starting fresh.
+
+    Never silently falls back to spawning a new shade: raises KeyError if
+    shade_id has no retained lifecycle at all, TransitionRejected
+    (charon.orchestration.fsm) if it exists but isn't currently idle, and
+    RuntimeError if topology governance refuses the reactivation.
+    """
+    from charon.agents.topology_budget import try_reserve_reactivation
+    ok, reason = try_reserve_reactivation(state_dir, budget, shade_id=shade_id)
+    if not ok:
+        raise RuntimeError(f'cannot reactivate {shade_id} — {reason}')
+
+    # The sole gate, per shade_lifecycle's own contract: dispatch's success
+    # (or the KeyError/TransitionRejected it raises), never a prior read.
+    from charon.agents.shade_lifecycle import try_reactivate
+    try_reactivate(state_dir, shade_id)
+
+    from charon.shade.shade_orchestrator import create_contract
+    contract = create_contract(
+        state_dir,
+        parent_task_id='',
+        parent_agent_id=ctx.agent_id,
+        shade_agent_id=shade_id,
+        conversation_id=f'shade-conv-{shade_id}',
+        project=str(ctx.project_root),
+        goal=objective,
+        phase_specs=[{'name': 'resume', 'objective': objective}],
+        metadata={'topology_depth': depth, 'topology_budget': budget, 'reactivation': True},
+    )
+    contract_id = contract['id']
+
+    thread = threading.Thread(
+        target=_run_shade,
+        args=(state_dir, shade_id, contract_id, objective, [], [], ctx, depth, budget, True, True),
+        daemon=True,
+    )
+    thread.start()
+
+    return {'shade_id': shade_id, 'contract_id': contract_id, 'status': 'running'}

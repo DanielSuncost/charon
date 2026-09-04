@@ -121,3 +121,46 @@ def test_spawn_batch_records_depth_and_budget_on_batch(tmp_path, monkeypatch):
     batch = batch_orchestrator.get_batch(ctx.state_dir, bid)
     assert batch['topology_depth'] == 1
     assert batch['topology_budget']['root_id'] == 'AG-ROOT'
+
+
+def test_run_shade_records_token_usage_against_topology_budget(tmp_path, monkeypatch):
+    """_run_shade must roll each phase's real token cost into the tree's
+    topology budget (topology_budget.record_usage), the same way agent_runtime
+    rolls turn usage into a goal's tokens_used."""
+    from charon.tools import shade_tool
+    from charon.shade.shade_orchestrator import create_contract
+    from charon.agents.topology_budget import mint_budget, current_state
+
+    state_dir = tmp_path / 'state'
+    state_dir.mkdir()
+
+    monkeypatch.setattr(
+        'charon.providers.model_registry.get_shade_provider_and_model',
+        lambda *a, **k: ('fake-provider', 'fake-model', {}),
+    )
+
+    class _FakeEvent:
+        def __init__(self, type_, data):
+            self.type = type_
+            self.data = data
+
+    class _FakeEngine:
+        def __init__(self, **kwargs):
+            pass
+
+        async def submit_and_collect(self, instruction):
+            return 'ok', [_FakeEvent('message_end', {'usage': {'total_tokens': 77}})]
+
+    monkeypatch.setattr('charon.conversation.conversation_engine.ConversationEngine', _FakeEngine)
+
+    contract = create_contract(
+        state_dir, parent_task_id='', parent_agent_id='AG-ROOT', shade_agent_id='AG-SHADE',
+        conversation_id='conv-1', project=str(tmp_path), goal='test goal',
+    )
+    budget = mint_budget('AG-ROOT', preset='standard')
+    ctx = ToolContext(project_root=tmp_path, state_dir=state_dir, agent_id='AG-ROOT')
+
+    shade_tool._run_shade(state_dir, 'AG-SHADE', contract['id'], 'test goal', [], [], ctx, 1, budget)
+
+    state = current_state(state_dir, 'AG-ROOT')
+    assert state['total_tokens_used'] >= 77
