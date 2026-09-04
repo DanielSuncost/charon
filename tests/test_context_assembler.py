@@ -226,6 +226,42 @@ class TestAssembler:
         assert result.messages[1].role == 'tool_result'
         assert result.messages[1].tool_call_id == 'tc-1'
 
+    def test_budget_boundary_expands_to_parallel_tool_call(self, db):
+        calls = [
+            ToolCall(id=f'tc-{index}', name='Read', arguments={'path': f'{index}.txt'})
+            for index in range(3)
+        ]
+        ContextStore.persist_message(
+            db, 'agent-1',
+            Message(role='assistant', content='', tool_calls=calls),
+        )
+        for index in range(3):
+            ContextStore.persist_message(
+                db, 'agent-1',
+                Message(
+                    role='tool_result',
+                    content=f'result-{index} ' + 'x' * 400,
+                    tool_call_id=f'tc-{index}',
+                    tool_name='Read',
+                ),
+            )
+        ContextStore.persist_message(
+            db, 'agent-1', Message(role='user', content='continue'),
+        )
+
+        assembler = ContextAssembler(fresh_tail_count=2)
+        result = assembler.assemble(db, 'agent-1', token_budget=1)
+
+        assert result.messages[0].role == 'assistant'
+        assert [tc.id for tc in result.messages[0].tool_calls] == [
+            'tc-0', 'tc-1', 'tc-2',
+        ]
+        assert [
+            message.tool_call_id
+            for message in result.messages[1:4]
+        ] == ['tc-0', 'tc-1', 'tc-2']
+        assert result.messages[-1].role == 'user'
+
     def test_stats_reported(self, db):
         ContextStore.persist_message(
             db, 'agent-1', Message(role='user', content='hello'))

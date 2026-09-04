@@ -3,7 +3,11 @@ import base64
 import json
 import time
 
-from charon.providers.httpx_codex import HttpxCodexProvider
+from charon.providers import Message, ToolCall
+from charon.providers.httpx_codex import (
+    HttpxCodexProvider,
+    _convert_messages_to_input,
+)
 
 
 def _jwt_with_exp(exp: int, account_id: str = 'acct-test') -> str:
@@ -147,3 +151,49 @@ def test_codex_plain_non_jwt_key_not_treated_as_expiring():
     # A non-JWT bearer key has no exp claim to check — no refresh churn.
     provider = HttpxCodexProvider(api_key='plain-access-token')
     assert not provider._token_expires_soon()
+
+
+def test_codex_payload_never_emits_an_orphan_or_duplicate_tool_output():
+    items = _convert_messages_to_input([
+        Message(role='user', content='compacted summary'),
+        Message(
+            role='tool_result',
+            content='orphan',
+            tool_call_id='call-orphan',
+            tool_name='Read',
+        ),
+        Message(
+            role='assistant',
+            content='',
+            tool_calls=[
+                ToolCall(
+                    id='call-valid',
+                    name='Read',
+                    arguments={'path': 'file.txt'},
+                ),
+            ],
+        ),
+        Message(
+            role='tool_result',
+            content='valid',
+            tool_call_id='call-valid',
+            tool_name='Read',
+        ),
+        Message(
+            role='tool_result',
+            content='duplicate',
+            tool_call_id='call-valid',
+            tool_name='Read',
+        ),
+    ])
+
+    calls = {
+        item['call_id'] for item in items if item['type'] == 'function_call'
+    }
+    outputs = [
+        item['call_id']
+        for item in items
+        if item['type'] == 'function_call_output'
+    ]
+    assert calls == {'fc_call-valid'}
+    assert outputs == ['fc_call-valid']

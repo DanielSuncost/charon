@@ -6,8 +6,12 @@ Provider and ModelInfo instances.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
+import ipaddress
 import json
 import os
+import urllib.parse
 from pathlib import Path
 
 from charon.providers import ModelInfo, get_provider
@@ -112,6 +116,41 @@ DEFAULT_MODELS = {
     'local': 'qwen3-30b-a3b',
 }
 
+ROUTE_PROVIDER_ALIASES = {
+    'anthropic': ('anthropic', 'anthropic'),
+    'claude-code': ('anthropic', 'claude-code'),
+    'openai': ('openai', 'openai'),
+    'codex': ('openai', 'codex'),
+    'openai-codex': ('openai', 'codex'),
+    'local': ('local', 'local'),
+    'lmstudio': ('local', 'lmstudio'),
+    'ollama': ('local', 'ollama'),
+    'api': ('openai', 'api'),
+    'openai-compatible': ('openai', 'api'),
+    'opencode': ('openai', 'api'),
+}
+_CREDENTIAL_CACHE_SALT = os.urandom(32)
+
+
+class ProviderRouteError(ValueError):
+    """An explicit model route cannot be honored safely."""
+
+
+def _route_credential_domain(provider_raw: str) -> str:
+    if provider_raw in {'anthropic', 'claude-code'}:
+        return 'anthropic'
+    if provider_raw in {'local', 'lmstudio', 'ollama'}:
+        return 'local'
+    return provider_raw
+
+
+def _credential_fingerprint(secret: str) -> str:
+    return hmac.new(
+        _CREDENTIAL_CACHE_SALT,
+        str(secret or '').encode('utf-8'),
+        hashlib.sha256,
+    ).hexdigest()
+
 
 def _read_json(path: Path, default=None):
     if not path.exists():
@@ -124,7 +163,11 @@ def _read_json(path: Path, default=None):
         return default or {}
 
 
-def resolve_provider_config(state_dir: Path, session_id: str | None = None) -> dict:
+def resolve_provider_config(
+    state_dir: Path,
+    session_id: str | None = None,
+    route_override: dict | None = None,
+) -> dict:
     """Read onboarding + optional session override auth config and return a unified config dict.
 
     Returns:
@@ -138,6 +181,13 @@ def resolve_provider_config(state_dir: Path, session_id: str | None = None) -> d
             'ready': bool,          # True if we have enough to make LLM calls
         }
     """
+    if route_override is not None:
+        return resolve_route_override(
+            state_dir,
+            route_override,
+            session_id=session_id,
+        )
+
     state_dir = Path(state_dir)
     onboarding = _read_json(state_dir / 'onboarding.json')
     session_override = load_session_provider_config(state_dir, session_id)
@@ -168,7 +218,7 @@ def resolve_provider_config(state_dir: Path, session_id: str | None = None) -> d
     api_key = _resolve_api_key(provider_name, provider_raw, effective, auth_store)
     base_url = _detect_base_url(effective) if provider_name == 'local' else None
     context_window = CONTEXT_WINDOWS.get(model_id, DEFAULT_CONTEXT_WINDOW)
-    supports_thinking = provider_name == 'anthropic'
+    supports_thinking = provider_name in ('anthropic', 'codex')
 
     # For API/opencode providers, we might need a custom base URL
     if provider_raw in ('api', 'opencode') and not base_url:
@@ -293,6 +343,315 @@ def _resolve_api_key(
         return config.local_api_key()
 
     return ''
+
+
+def _validate_route_base_url(value: str, provider: str) -> str:
+    text = str(value or '').strip().rstrip('/')
+    error = (
+        f"routed provider {provider!r} requires a credential-free http(s) "
+        'base_url without query or fragment'
+    )
+    try:
+        parsed = urllib.parse.urlsplit(text)
+        _port = parsed.port
+    except ValueError as exc:
+        raise ProviderRouteError(error) from exc
+    if (
+        parsed.scheme not in ('http', 'https')
+        or not parsed.netloc
+        or not parsed.hostname
+        or any(char.isspace() for char in text)
+        or parsed.username is not None
+        or parsed.password is not None
+        or '?' in text
+        or '#' in text
+    ):
+        raise ProviderRouteError(error)
+    if parsed.scheme == 'http':
+        hostname = str(parsed.hostname or '').lower()
+        try:
+            loopback = hostname == 'localhost' or ipaddress.ip_address(
+                hostname
+            ).is_loopback
+        except ValueError:
+            loopback = hostname == 'localhost'
+        if not loopback:
+            raise ProviderRouteError(
+                f"routed provider {provider!r} requires TLS for "
+                'non-loopback base_url'
+            )
+    return text
+
+
+def resolve_route_override(
+    state_dir: Path,
+    route_override: dict,
+    *,
+    session_id: str | None = None,
+) -> dict:
+    """Validate an explicit routing decision and resolve its credentials.
+
+    Unlike ordinary onboarding resolution, this path never substitutes a
+    different provider or model and never returns ``ready=False``.
+    """
+    if not isinstance(route_override, dict):
+        raise ProviderRouteError('model route must be an object')
+    if route_override.get('resolver'):
+        raise ProviderRouteError(
+            'model route resolver metadata requires agent execution'
+        )
+    if 'api_key' in route_override:
+        raise ProviderRouteError(
+            'model routes must not contain api_key; configure credentials '
+            'through provider auth'
+        )
+
+    provider_alias = str(
+        route_override.get('provider')
+        or route_override.get('provider_name')
+        or ''
+    ).strip().lower()
+    if provider_alias not in ROUTE_PROVIDER_ALIASES:
+        supported = ', '.join(sorted(ROUTE_PROVIDER_ALIASES))
+        raise ProviderRouteError(
+            f"unsupported routed provider {provider_alias or '(missing)'!r}; "
+            f"expected one of: {supported}"
+        )
+    provider_name, provider_raw = ROUTE_PROVIDER_ALIASES[provider_alias]
+
+    model_id = str(
+        route_override.get('model_id') or route_override.get('model') or ''
+    ).strip()
+    if not model_id:
+        raise ProviderRouteError(
+            f"routed provider {provider_alias!r} requires model_id"
+        )
+
+    context_value = route_override.get('context_window')
+    if context_value is None:
+        context_window = CONTEXT_WINDOWS.get(model_id, DEFAULT_CONTEXT_WINDOW)
+    elif isinstance(context_value, int) and not isinstance(context_value, bool):
+        context_window = context_value
+    elif isinstance(context_value, str):
+        context_text = context_value.strip()
+        if not context_text or any(
+            char < '0' or char > '9'
+            for char in context_text
+        ):
+            raise ProviderRouteError(
+                'routed context_window must be a positive integer'
+            )
+        context_window = int(context_text)
+    else:
+        raise ProviderRouteError(
+            'routed context_window must be a positive integer'
+        )
+    if context_window < 1 or context_window > 10_000_000:
+        raise ProviderRouteError(
+            'routed context_window must be between 1 and 10000000'
+        )
+
+    state_dir = Path(state_dir)
+    onboarding = _read_json(state_dir / 'onboarding.json')
+    session_override = load_session_provider_config(state_dir, session_id)
+    auth_store = _read_json(state_dir / 'auth' / 'auth.json')
+    effective = dict(onboarding)
+    if session_override:
+        effective.update({
+            key: value for key, value in session_override.items()
+            if value is not None
+        })
+
+    credential_config = dict(effective)
+    configured_alias = str(credential_config.get('provider') or '').strip().lower()
+    configured = ROUTE_PROVIDER_ALIASES.get(configured_alias)
+    if (
+        configured is None
+        or _route_credential_domain(configured[1])
+        != _route_credential_domain(provider_raw)
+    ):
+        credential_config.pop('api_key', None)
+    if provider_raw == 'codex':
+        # The Codex endpoint requires a ChatGPT OAuth token. A regular
+        # OPENAI_API_KEY is not a credential for this provider.
+        codex_auth = (
+            auth_store.get('providers', {})
+            .get('openai-codex', {})
+        )
+        codex_tokens = codex_auth.get('tokens', {})
+        api_key = str(
+            codex_tokens.get('access_token')
+            or codex_auth.get('api_key')
+            or (
+                credential_config.get('api_key')
+                if configured and configured[1] == 'codex'
+                else ''
+            )
+            or ''
+        ).strip()
+    else:
+        api_key = _resolve_api_key(
+            provider_name,
+            provider_raw,
+            credential_config,
+            auth_store,
+        )
+
+    explicit_base = str(
+        route_override.get('base_url')
+        or route_override.get('provider_base_url')
+        or ''
+    ).strip()
+    if provider_name == 'anthropic':
+        fixed_base = 'https://api.anthropic.com/v1/messages'
+        if (
+            explicit_base
+            and _validate_route_base_url(explicit_base, provider_alias)
+            != fixed_base
+        ):
+            raise ProviderRouteError(
+                f"routed provider {provider_alias!r} cannot honor base_url "
+                f"{explicit_base!r}"
+            )
+        base_url = fixed_base
+    elif provider_raw == 'codex':
+        fixed_base = 'https://chatgpt.com/backend-api/codex/responses'
+        if (
+            explicit_base
+            and _validate_route_base_url(explicit_base, provider_alias)
+            != fixed_base
+        ):
+            raise ProviderRouteError(
+                f"routed provider {provider_alias!r} cannot honor base_url "
+                f"{explicit_base!r}"
+            )
+        base_url = fixed_base
+    elif provider_raw == 'openai':
+        fixed_base = 'https://api.openai.com/v1'
+        if (
+            explicit_base
+            and _validate_route_base_url(explicit_base, provider_alias)
+            != fixed_base
+        ):
+            raise ProviderRouteError(
+                f"routed provider {provider_alias!r} cannot honor base_url "
+                f"{explicit_base!r}"
+            )
+        base_url = fixed_base
+    elif provider_raw == 'api' and explicit_base:
+        base_url = _validate_route_base_url(explicit_base, provider_alias)
+    elif provider_raw == 'api':
+        raise ProviderRouteError(
+            f"routed provider {provider_alias!r} requires base_url"
+        )
+    elif provider_name == 'local':
+        configured_base = (
+            config.local_base_url()
+            or config.lmstudio_base_url()
+            or (
+                str(effective.get('provider_base_url') or '').strip()
+                if configured is not None
+                and _route_credential_domain(configured[1]) == 'local'
+                else ''
+            )
+            or (
+                'http://127.0.0.1:11434/v1'
+                if (
+                    configured_alias == 'ollama'
+                    or (
+                        configured not in {
+                            ('local', 'local'),
+                            ('local', 'lmstudio'),
+                            ('local', 'ollama'),
+                        }
+                        and provider_alias == 'ollama'
+                    )
+                )
+                else config.DEFAULT_LOCAL_BASE_URL
+            )
+        )
+        configured_base = _validate_route_base_url(
+            configured_base,
+            provider_alias,
+        )
+        if (
+            explicit_base
+            and _validate_route_base_url(explicit_base, provider_alias)
+            != configured_base
+        ):
+            raise ProviderRouteError(
+                f"routed provider {provider_alias!r} base_url is not the "
+                'configured local endpoint'
+            )
+        base_url = configured_base
+    else:
+        base_url = 'https://api.openai.com/v1'
+
+    if provider_raw == 'api':
+        configured_route = ROUTE_PROVIDER_ALIASES.get(configured_alias)
+        configured_base_raw = str(
+            effective.get('provider_base_url')
+            or config.local_base_url()
+            or config.lmstudio_base_url()
+            or ''
+        ).strip()
+        if (
+            configured_route is None
+            or configured_route[1] != 'api'
+            or not configured_base_raw
+            or _validate_route_base_url(
+                configured_base_raw,
+                configured_alias,
+            )
+            != base_url
+        ):
+            raise ProviderRouteError(
+                f"routed provider {provider_alias!r} must match a configured "
+                'custom endpoint before credentials can be used'
+            )
+        configured_auth = (
+            auth_store.get('providers', {}).get(configured_alias, {})
+        )
+        configured_tokens = configured_auth.get('tokens', {})
+        api_key = str(
+            configured_tokens.get('access_token')
+            or configured_auth.get('api_key')
+            or effective.get('api_key')
+            or ''
+        ).strip()
+
+    if provider_name != 'local' and not api_key:
+        raise ProviderRouteError(
+            f"routed provider {provider_alias!r} is unavailable: "
+            'missing credentials'
+        )
+    if provider_name == 'local' and not api_key:
+        api_key = 'not-needed'
+
+    supports_thinking = provider_name == 'anthropic' or provider_raw == 'codex'
+    selected_endpoint = {
+        'candidate_id': str(route_override.get('candidate_id') or ''),
+        'provider': provider_alias,
+        'model_id': model_id,
+        'context_window': context_window,
+        'base_url': base_url,
+    }
+    return {
+        'provider_name': provider_name,
+        'provider_raw': provider_raw,
+        'route_provider': provider_alias,
+        'model_id': model_id,
+        'api_key': api_key,
+        'base_url': base_url,
+        'context_window': context_window,
+        'supports_thinking': supports_thinking,
+        'ready': True,
+        'session_id': session_id or '',
+        'session_override': bool(session_override),
+        'route_override': True,
+        'selected_endpoint': selected_endpoint,
+        'credential_fingerprint': _credential_fingerprint(api_key),
+    }
 
 
 def _get_refresh_token(state_dir: Path, provider_raw: str) -> str | None:
@@ -428,22 +787,30 @@ def _refresh_token(provider_raw: str, refresh_token: str) -> str | None:
     return None
 
 
-def create_provider_and_model(state_dir: Path, session_id: str | None = None) -> tuple[Provider, ModelInfo, bool]:
+def create_provider_and_model(
+    state_dir: Path,
+    session_id: str | None = None,
+    route_override: dict | None = None,
+) -> tuple[Provider, ModelInfo, bool]:
     """Create a Provider and ModelInfo from the current config.
 
     Returns (provider, model_info, ready).
     ready=False means heuristic mode (no LLM available).
     """
-    config = resolve_provider_config(state_dir, session_id=session_id)
-
-    model = ModelInfo(
-        provider=config['provider_name'],
-        model_id=config['model_id'],
-        context_window=config['context_window'],
-        supports_thinking=config['supports_thinking'],
+    provider_config = resolve_provider_config(
+        state_dir,
+        session_id=session_id,
+        route_override=route_override,
     )
 
-    if not config['ready']:
+    model = ModelInfo(
+        provider=provider_config.get('route_provider') or provider_config['provider_name'],
+        model_id=provider_config['model_id'],
+        context_window=provider_config['context_window'],
+        supports_thinking=provider_config['supports_thinking'],
+    )
+
+    if not provider_config['ready']:
         # Return a local provider as fallback (may or may not be running)
         try:
             provider = get_provider('local')
@@ -453,47 +820,121 @@ def create_provider_and_model(state_dir: Path, session_id: str | None = None) ->
             provider = HttpxOpenAIProvider()
         return provider, model, False
 
-    provider_name = config['provider_name']
+    provider_name = provider_config['provider_name']
 
     if provider_name == 'anthropic':
         # CRITICAL: share a single Anthropic provider instance
         # OAuth refresh tokens are single-use — multiple instances
         # would race and invalidate each other's tokens
-        if not hasattr(create_provider_and_model, '_anthropic_provider'):
+        if provider_config.get('route_override'):
             from charon.providers.httpx_anthropic import HttpxAnthropicProvider
-            raw = config.get('provider_raw', 'claude-code')
+            raw = provider_config.get('provider_raw', 'claude-code')
+            refresh_token = _get_refresh_token(state_dir, raw)
+            auth_store = str(state_dir / 'auth' / 'auth.json')
+            cache = getattr(
+                create_provider_and_model,
+                '_routed_anthropic_providers',
+                {},
+            )
+            cache_key = (
+                raw,
+                provider_config['api_key'],
+                refresh_token or '',
+                auth_store,
+            )
+            provider = cache.get(cache_key)
+            if provider is None:
+                provider = HttpxAnthropicProvider(
+                    api_key=provider_config['api_key'],
+                    refresh_token=refresh_token,
+                    auth_store_path=auth_store,
+                )
+                cache[cache_key] = provider
+                create_provider_and_model._routed_anthropic_providers = cache
+        elif not hasattr(create_provider_and_model, '_anthropic_provider'):
+            from charon.providers.httpx_anthropic import HttpxAnthropicProvider
+            raw = provider_config.get('provider_raw', 'claude-code')
             refresh_token = _get_refresh_token(state_dir, raw)
             auth_store = str(state_dir / 'auth' / 'auth.json')
             create_provider_and_model._anthropic_provider = HttpxAnthropicProvider(
-                api_key=config['api_key'],
+                api_key=provider_config['api_key'],
                 refresh_token=refresh_token,
                 auth_store_path=auth_store,
             )
-        provider = create_provider_and_model._anthropic_provider
+        if not provider_config.get('route_override'):
+            provider = create_provider_and_model._anthropic_provider
     elif provider_name == 'local':
         from charon.providers.httpx_openai import HttpxOpenAIProvider
         provider = HttpxOpenAIProvider(
-            base_url=config.get('base_url') or 'http://127.0.0.1:1234/v1',
-            api_key=config['api_key'],
+            base_url=provider_config.get('base_url') or 'http://127.0.0.1:1234/v1',
+            api_key=provider_config['api_key'],
         )
-    elif provider_name == 'openai' and config.get('provider_raw') == 'codex':
+    elif provider_name == 'openai' and provider_config.get('provider_raw') == 'codex':
         # Codex OAuth uses chatgpt.com/backend-api/codex/responses (not api.openai.com)
         from charon.providers.httpx_codex import HttpxCodexProvider
-        raw = config.get('provider_raw', 'codex')
+        raw = provider_config.get('provider_raw', 'codex')
         refresh_token = _get_refresh_token(state_dir, raw)
         auth_store = str(state_dir / 'auth' / 'auth.json')
         provider = HttpxCodexProvider(
-            api_key=config['api_key'],
+            api_key=provider_config['api_key'],
             refresh_token=refresh_token,
             auth_store_path=auth_store,
         )
     else:
         # OpenAI or any OpenAI-compatible
         from charon.providers.httpx_openai import HttpxOpenAIProvider
-        base_url = config.get('base_url') or 'https://api.openai.com/v1'
+        base_url = provider_config.get('base_url') or 'https://api.openai.com/v1'
         provider = HttpxOpenAIProvider(
             base_url=base_url,
-            api_key=config['api_key'],
+            api_key=provider_config['api_key'],
         )
 
+    if provider_config.get('route_override'):
+        provider._charon_endpoint = dict(provider_config['selected_endpoint'])
     return provider, model, True
+
+
+def describe_provider_endpoint(provider: Provider, model: ModelInfo) -> dict:
+    """Return the non-secret endpoint that will actually receive a request."""
+    routed = getattr(provider, '_charon_endpoint', None)
+    if isinstance(routed, dict):
+        endpoint = dict(routed)
+    else:
+        provider_type = type(provider).__name__
+        model_provider = str(model.provider or '').strip().lower()
+        base_url = str(getattr(provider, '_base_url', '') or '').rstrip('/')
+        if provider_type == 'HttpxCodexProvider':
+            provider_alias = 'codex'
+            base_url = 'https://chatgpt.com/backend-api/codex/responses'
+        elif provider_type in {'AnthropicProvider', 'HttpxAnthropicProvider'}:
+            provider_alias = 'anthropic'
+            base_url = 'https://api.anthropic.com/v1/messages'
+        elif provider_type == 'HttpxOpenAIProvider':
+            if model_provider in {'local', 'lmstudio', 'ollama'}:
+                provider_alias = model_provider
+            elif base_url == 'https://api.openai.com/v1':
+                provider_alias = 'openai'
+            else:
+                provider_alias = 'api'
+        elif model_provider in ROUTE_PROVIDER_ALIASES:
+            provider_alias = model_provider
+        else:
+            provider_alias = model_provider
+        endpoint = {
+            'candidate_id': '',
+            'provider': provider_alias,
+            'model_id': str(model.model_id or ''),
+            'context_window': int(model.context_window),
+            'base_url': base_url,
+        }
+    endpoint['model_id'] = str(model.model_id)
+    endpoint['context_window'] = int(model.context_window)
+    endpoint.setdefault('provider', str(model.provider or ''))
+    endpoint.setdefault('base_url', str(getattr(provider, '_base_url', '') or ''))
+    endpoint.pop('api_key', None)
+    return endpoint
+
+
+def credential_fingerprint_for_provider(provider: Provider) -> str:
+    """Return a process-local, non-reversible provider credential identity."""
+    return _credential_fingerprint(str(getattr(provider, '_api_key', '') or ''))

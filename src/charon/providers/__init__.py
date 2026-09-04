@@ -34,6 +34,13 @@ class StreamDelta:
     text: str = ''
     tool_call: ToolCall | None = None
     error: str | None = None
+    # Providers report machine-readable failure metadata so the conversation
+    # engine can own retries in one place.  The text remains for display and
+    # backwards compatibility with custom providers.
+    status_code: int | None = None
+    error_code: str | None = None
+    retryable: bool = False
+    retry_after_seconds: float | None = None
 
 
 @dataclass

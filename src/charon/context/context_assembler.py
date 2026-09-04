@@ -153,6 +153,54 @@ class _ResolvedItem:
     summary_kind: str = ''
 
 
+def _expand_start_to_tool_exchange(
+    resolved: list[_ResolvedItem],
+    start: int,
+) -> int:
+    """Move a suffix boundary left to include its parallel tool-call record.
+
+    Context selection keeps a suffix of the active window.  If that suffix
+    starts on the second or later item of a tool exchange, walk over the
+    preceding results and include the assistant message that declared them.
+    A summary is a hard boundary: legacy orphaned results on the other side are
+    left for the engine's protocol sanitizer to discard.
+    """
+    if start <= 0 or start >= len(resolved):
+        return max(0, min(start, len(resolved)))
+    first = resolved[start]
+    if not first.is_message or first.message.role != 'tool_result':
+        return start
+
+    result_ids: set[str] = set()
+    cursor = start
+    while cursor < len(resolved):
+        item = resolved[cursor]
+        if not item.is_message or item.message.role != 'tool_result':
+            break
+        result_id = item.message.tool_call_id
+        if result_id:
+            result_ids.add(result_id)
+        cursor += 1
+
+    cursor = start - 1
+    while cursor >= 0:
+        item = resolved[cursor]
+        if not item.is_message:
+            return start
+        role = item.message.role
+        if role == 'tool_result':
+            result_id = item.message.tool_call_id
+            if result_id:
+                result_ids.add(result_id)
+            cursor -= 1
+            continue
+        if role != 'assistant' or not item.message.tool_calls:
+            return start
+        call_ids = {tc.id for tc in item.message.tool_calls if tc.id}
+        return cursor if result_ids and result_ids.issubset(call_ids) else start
+    return start
+
+
 # ── Assembler ───────────────────────────────────────────────────────
 
 class ContextAssembler:
@@ -212,12 +260,10 @@ class ContextAssembler:
 
         # Fill remaining budget from evictable, dropping oldest
         remaining = max(0, token_budget - tail_tokens)
-        selected: list[_ResolvedItem] = []
+        selected_start = 0
         evictable_total = sum(r.tokens for r in evictable)
 
-        if evictable_total <= remaining:
-            selected = evictable
-        else:
+        if evictable_total > remaining:
             # Keep newest evictable items that fit
             kept: list[_ResolvedItem] = []
             accum = 0
@@ -228,10 +274,12 @@ class ContextAssembler:
                 else:
                     break
             kept.reverse()
-            selected = kept
+            selected_start = tail_start - len(kept)
 
         # Combine and extract messages
-        all_items = selected + fresh_tail
+        selected_start = _expand_start_to_tool_exchange(
+            resolved, selected_start)
+        all_items = resolved[selected_start:]
         messages = [r.message for r in all_items]
         estimated_tokens = sum(r.tokens for r in all_items)
 

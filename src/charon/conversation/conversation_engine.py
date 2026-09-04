@@ -13,8 +13,10 @@ The engine is async and yields events for the UI to consume.
 from __future__ import annotations
 
 import asyncio
+import functools
+import hashlib
 import json
-import queue
+import random
 import re
 import threading
 import time
@@ -25,8 +27,16 @@ from typing import Any, AsyncIterator
 from charon.providers import (
     Message, ModelInfo, Provider, ToolCall, Usage, get_provider,
 )
-from charon.tools import ALL_TOOL_DEFS, ToolContext, execute_tool
+from charon.tools import ALL_TOOL_DEFS, ToolContext, ToolResult, execute_tool
+from charon.tools.tool_catalog import CORE_TOOL_NAMES
 from charon.memory.execution_memory import record_tool_event
+from charon.infra import config
+from charon.infra.performance import TurnTimer, persist_turn_metrics
+from charon.conversation.tool_scheduler import (
+    ToolExecutionOutcome,
+    execution_batches,
+    synthetic_tool_result,
+)
 
 try:
     from charon.infra.diagnostics import record as _diag
@@ -46,6 +56,37 @@ except ImportError:
 
 # Tools that open a browser
 _BROWSER_TOOLS = {'Browser', 'X'}
+
+_DOMAIN_TOOL_NAMES = {
+    'research': {
+        'Search', 'Web', 'Paper', 'SourceDiscovery', 'Research', 'Browser', 'X',
+    },
+    'memory': {'Recall', 'Timeline', 'UserModel', 'ProjectKnowledge'},
+    'automation': {'Cron', 'Http'},
+    'orchestration': {'SpawnShade', 'SpawnBatch', 'SpawnJudgeLoop'},
+    'fleet': {'FleetStatus', 'FleetSend', 'FleetHistory', 'FleetOnboard'},
+    'skills': {'Skills'},
+    'code': {'ExecuteCode'},
+}
+
+_DOMAIN_INTENT_PATTERNS = {
+    'research': re.compile(
+        r'\b(research|web|internet|website|browser|paper|source|citation|'
+        r'latest|news|x\.com|twitter|bookmark|libris)\b', re.I,
+    ),
+    'memory': re.compile(
+        r'\b(recall|remember|memory|timeline|user model|project knowledge|preference)\b', re.I,
+    ),
+    'automation': re.compile(
+        r'\b(cron|schedule|recurring|monitor|every (?:hour|day|week)|automation)\b', re.I,
+    ),
+    'orchestration': re.compile(
+        r'\b(spawn|shade|batch|judge loop|delegate|parallel agents?)\b', re.I,
+    ),
+    'fleet': re.compile(r'\b(fleet|remote agent|onboard node)\b', re.I),
+    'skills': re.compile(r'\b(skill|plugin|capability pack)\b', re.I),
+    'code': re.compile(r'\b(execute code|python calculation|data analysis)\b', re.I),
+}
 
 # Lossless context management (graceful fallback if unavailable)
 
@@ -72,6 +113,30 @@ def _sanitize_assistant_text(text: str) -> str:
     text = text.replace('<think>', '').replace('</think>', '')
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
+
+
+def _normalize_thinking_level(value: str | None) -> str:
+    val = str(value or '').strip().lower()
+    aliases = {
+        '': 'off',
+        'none': 'off',
+        '0': 'off',
+        'min': 'minimal',
+        'med': 'medium',
+        'max': 'high',
+    }
+    val = aliases.get(val, val)
+    return val if val in {'off', 'minimal', 'low', 'medium', 'high', 'xhigh'} else 'off'
+
+
+def _load_default_thinking_level(state_dir: Path | None) -> str:
+    if not state_dir:
+        return 'off'
+    try:
+        data = json.loads((Path(state_dir) / 'onboarding.json').read_text(encoding='utf-8'))
+        return _normalize_thinking_level(data.get('reasoning_effort') or data.get('thinking_level'))
+    except Exception:
+        return 'off'
 try:
     from charon.context.context_store import ContextStore
     from charon.context.context_compactor import ContextCompactor, CompactionConfig
@@ -127,13 +192,14 @@ Available tools:
 Guidelines:
 - Use Bash for file operations like ls, grep, find
 - Use Read to examine files before editing. You must use this tool instead of cat or sed.
-- Use Edit for precise changes (oldText must match exactly)
+- Use Edit for precise changes. Pass Read's file version as baseHash and group independent hunks in one edits array when practical
 - Use Write only for new files or complete rewrites
 - When summarizing your actions, output plain text directly - do NOT use cat or bash to display what you did
 - Be concise in your responses
 - Show file paths clearly when working with files
 - When you need the full file, continue with offset until complete
 - Always check that required parameters are provided before making tool calls
+- Use ToolCatalog to discover and enable specialized capabilities that are not currently exposed
 - For x.com workflows, prefer the X tool over generic Browser/Web when possible.
 - If the user asks to check x.com bookmarks for anything new, use X action=triage_new_bookmarks.
 - If the user asks what new bookmarks have been investigated, use X action=list_investigations with new_only=true.
@@ -364,6 +430,7 @@ class ConversationEngine:
         max_turns: int = 50,
         max_tool_calls_per_turn: int = 25,
         max_tokens: int = 32768,
+        thinking_level: str | None = None,
         auto_compact: bool = True,
         compact_threshold: float = 0.7,
     ):
@@ -386,15 +453,21 @@ class ConversationEngine:
         self.parent_agent_id = parent_agent_id
         self.scope: list[str] | None = None  # set for shade agents
         self.frozen: list[str] | None = None  # paths that must not be modified
+        self.topology_depth: int = 0  # depth in the delegation tree (0 = root agent)
+        self.topology_budget: dict[str, Any] | None = None  # set for shades: governs further spawning
         self.max_turns = max_turns
         self.max_tool_calls_per_turn = max_tool_calls_per_turn
         self.max_tokens = max_tokens
+        self.thinking_level = _normalize_thinking_level(thinking_level) if thinking_level is not None else _load_default_thinking_level(self.state_dir)
         self.auto_compact = auto_compact
         self.compact_threshold = compact_threshold
 
         self.messages: list[Message] = []
         self._aborted = False
         self._awaiting_browser_prompt = False
+        self._running = False
+        self._turn_cancel_event = threading.Event()
+        self._background_writes: set[asyncio.Future] = set()
 
         # ── Lossless context management ──────────────────────────────
         self._lossless_enabled = False
@@ -419,15 +492,38 @@ class ConversationEngine:
         # Load built-in + dynamic tools
         try:
             from charon.tools.dynamic_loader import get_all_tool_defs
-            self.tools = get_all_tool_defs(
+            available_tools = get_all_tool_defs(
                 state_dir=self.state_dir,
                 project_root=self.project_root,
             )
         except Exception as e:
             _diag('conversation_engine', 'dynamic tool loading failed; using built-in tool defs only', error=e)
-            self.tools = ALL_TOOL_DEFS
+            available_tools = list(ALL_TOOL_DEFS)
+        self._available_tools = list(available_tools)
+        self._tool_lock = threading.RLock()
+        if config.adaptive_tools():
+            initial_names = set(CORE_TOOL_NAMES)
+            domain_text = ' '.join((
+                self.operation_domain,
+                self.operation_role,
+                self.runtime_role,
+                self.agent_name,
+            ))
+            for domain, pattern in _DOMAIN_INTENT_PATTERNS.items():
+                if pattern.search(domain_text):
+                    initial_names.update(_DOMAIN_TOOL_NAMES[domain])
+            self.tools = [
+                tool for tool in self._available_tools
+                if tool.get('name') in initial_names
+            ]
+        else:
+            self.tools = list(self._available_tools)
         self._steering_queue: list[str] = []
         self._follow_up_queue: list[str] = []
+
+        self._project_context = project_context
+        self._generated_system_prompt = not bool(system_prompt)
+        self._custom_system_prompt_base = system_prompt
 
         # Build system prompt
         if system_prompt:
@@ -439,6 +535,17 @@ class ConversationEngine:
                 tools=self.tools,
                 project_context=project_context,
             )
+        self._refresh_generated_system_prompt()
+
+        configure_session = getattr(self.provider, 'configure_session', None)
+        if callable(configure_session):
+            cache_material = (
+                f'{self.agent_id}\0{self.model.model_id}\0{self.project_root}'
+            ).encode('utf-8')
+            prompt_cache_key = (
+                'charon-' + hashlib.sha256(cache_material).hexdigest()[:32]
+            )
+            configure_session(self.agent_id, prompt_cache_key)
 
     def update_system_prompt(self, system_prompt: str):
         """Update the system prompt for the next LLM call.
@@ -449,10 +556,68 @@ class ConversationEngine:
         stays fresh.
         """
         self.system_prompt = system_prompt
+        self._generated_system_prompt = False
+        self._custom_system_prompt_base = system_prompt
+        self._refresh_generated_system_prompt()
+
+    def _refresh_generated_system_prompt(self) -> None:
+        if not self._generated_system_prompt:
+            return
+        self.system_prompt = build_system_prompt(
+            cwd=str(self.project_root),
+            agent_name=self.agent_name,
+            tools=self.tools,
+            project_context=self._project_context,
+        )
+
+    def _enable_tools(self, names: list[str]) -> list[str]:
+        """Enable exact tool names and return newly activated names."""
+        requested = {str(name).strip().lower() for name in names if str(name).strip()}
+        if not requested:
+            return []
+        with self._tool_lock:
+            active = {str(tool.get('name') or '') for tool in self.tools}
+            enabled: list[str] = []
+            for tool in self._available_tools:
+                name = str(tool.get('name') or '')
+                if name.lower() in requested and name not in active:
+                    active.add(name)
+                    enabled.append(name)
+            if enabled:
+                # Preserve registry order so provider payloads and cache prefixes
+                # remain deterministic across runs.
+                self.tools = [
+                    tool for tool in self._available_tools
+                    if str(tool.get('name') or '') in active
+                ]
+                self._refresh_generated_system_prompt()
+            return enabled
+
+    def _activate_tools_for_text(self, text: str) -> list[str]:
+        if not config.adaptive_tools():
+            return []
+        # An explicit caller override such as ``engine.tools = []`` is a hard
+        # capability boundary (used by benchmark/sandbox runtimes). Adaptive
+        # activation is available only while ToolCatalog remains exposed.
+        if not any(tool.get('name') == 'ToolCatalog' for tool in self.tools):
+            return []
+        names: set[str] = set()
+        for domain, pattern in _DOMAIN_INTENT_PATTERNS.items():
+            if pattern.search(text):
+                names.update(_DOMAIN_TOOL_NAMES[domain])
+
+        # Dynamic tools can opt into intent activation through their name.
+        lowered = text.lower()
+        for tool in self._available_tools:
+            name = str(tool.get('name') or '')
+            if name and name.lower() in lowered:
+                names.add(name)
+        return self._enable_tools(sorted(names))
 
     def abort(self):
         """Signal the engine to stop after current operation."""
         self._aborted = True
+        self._turn_cancel_event.set()
 
     def steer(self, message: str):
         """Queue a steering message to interrupt the agent mid-run.
@@ -463,6 +628,8 @@ class ConversationEngine:
         """
         if message and message.strip():
             self._steering_queue.append(message.strip())
+            if self._running:
+                self._turn_cancel_event.set()
 
     def follow_up(self, message: str):
         """Queue a follow-up message for after the agent finishes.
@@ -482,6 +649,8 @@ class ConversationEngine:
         """Clear conversation history and queues."""
         self.messages = []
         self._aborted = False
+        self._running = False
+        self._turn_cancel_event.clear()
         self._steering_queue.clear()
         self._follow_up_queue.clear()
         if self._lossless_enabled and self._ctx_db and self.agent_id:
@@ -554,22 +723,46 @@ class ConversationEngine:
 
     @staticmethod
     def _repair_orphaned_tool_calls(messages: list) -> list:
-        """Patch orphaned tool calls that have no matching tool result.
+        """Return an API-safe tool-call transcript.
 
-        This happens when the process crashes between persisting an assistant
-        message with tool_calls and persisting the tool results.  The LLM API
-        requires every function_call to have a matching function_call_output,
-        so we inject a synthetic error result for any orphan.
+        Compaction or budget trimming can leave either half of a tool exchange:
+
+        * a function call without an output (for example after a crash), or
+        * a function output without its call (for example when a parallel tool
+          batch was split at a compaction boundary).
+
+        Model APIs require call/output pairs.  Drop outputs whose call is not
+        present before them, de-duplicate outputs, and inject a synthetic error
+        output for calls that have no result.  Raw messages remain available in
+        the lossless store; this only sanitizes the active model context.
         """
-        # Collect all tool_call_ids that have results
+        seen_calls: set[str] = set()
         answered: set[str] = set()
-        for m in messages:
-            if getattr(m, 'role', None) == 'tool_result' and getattr(m, 'tool_call_id', None):
-                answered.add(m.tool_call_id)
+        filtered: list = []
 
-        # Find orphaned tool_calls and inject synthetic results after them
-        repaired: list = []
+        # First remove outputs that cannot legally be sent.  Validate in
+        # sequence so a result that precedes its call is treated as orphaned.
         for m in messages:
+            role = getattr(m, 'role', None)
+            if role == 'assistant':
+                filtered.append(m)
+                for tc in getattr(m, 'tool_calls', None) or []:
+                    tc_id = getattr(tc, 'id', None)
+                    if tc_id:
+                        seen_calls.add(tc_id)
+                continue
+            if role == 'tool_result':
+                result_id = getattr(m, 'tool_call_id', None)
+                if not result_id or result_id not in seen_calls or result_id in answered:
+                    continue
+                answered.add(result_id)
+            filtered.append(m)
+
+        # Then patch calls whose process ended before their tool result was
+        # persisted.  Inserting directly after the assistant call is valid for
+        # both sequential and parallel tool batches.
+        repaired: list = []
+        for m in filtered:
             repaired.append(m)
             if getattr(m, 'role', None) == 'assistant' and getattr(m, 'tool_calls', None):
                 for tc in m.tool_calls:
@@ -596,7 +789,7 @@ class ConversationEngine:
         if not (self._lossless_enabled and self._ctx_db and self._ctx_assembler
                 and self.agent_id):
             repaired = self._repair_orphaned_tool_calls(self.messages)
-            if len(repaired) != len(self.messages):
+            if repaired != self.messages:
                 self.messages = repaired  # persist the fix
             return repaired
 
@@ -642,7 +835,267 @@ class ConversationEngine:
             operation_role=self.operation_role,
             runtime_role=self.runtime_role,
             parent_agent_id=self.parent_agent_id,
+            cancel_event=self._turn_cancel_event,
+            metadata=self._tool_catalog_metadata(),
+            topology_depth=self.topology_depth,
+            topology_budget=self.topology_budget,
         )
+
+    def _tool_catalog_metadata(self) -> dict[str, Any]:
+        with self._tool_lock:
+            return {
+                'tool_catalog': {
+                    'available': list(self._available_tools),
+                    'active_names': [
+                        str(tool.get('name') or '') for tool in self.tools
+                    ],
+                    'enable': self._enable_tools,
+                },
+            }
+
+    def _make_tool_context(self, on_output=None) -> ToolContext:
+        return ToolContext(
+            project_root=self.project_root,
+            agent_id=self.agent_id,
+            state_dir=self.state_dir,
+            scope=self.scope,
+            frozen=self.frozen,
+            on_tool_output=on_output,
+            operation_id=self.operation_id,
+            operation_domain=self.operation_domain,
+            work_unit_id=self.work_unit_id,
+            operation_role=self.operation_role,
+            runtime_role=self.runtime_role,
+            parent_agent_id=self.parent_agent_id,
+            cancel_event=self._turn_cancel_event,
+            metadata=self._tool_catalog_metadata(),
+            topology_depth=self.topology_depth,
+            topology_budget=self.topology_budget,
+        )
+
+    async def _execute_tool_batch(
+        self,
+        calls: list[ToolCall],
+    ) -> AsyncIterator[EngineEvent]:
+        """Execute one shared batch (or one exclusive call) with live events.
+
+        The final private event carries outcomes in provider order. Callers must
+        persist those results before sending another provider request.
+        """
+        loop = asyncio.get_running_loop()
+        event_queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+        semaphore = asyncio.Semaphore(config.max_parallel_tools())
+        accumulated: dict[str, list[str]] = {call.id: [] for call in calls}
+
+        async def run_one(call: ToolCall) -> ToolExecutionOutcome:
+            async with semaphore:
+                if self._aborted:
+                    return ToolExecutionOutcome(
+                        call=call,
+                        result=None,
+                        skipped_reason='run aborted before tool started',
+                    )
+                if self._turn_cancel_event.is_set() and self._steering_queue:
+                    return ToolExecutionOutcome(
+                        call=call,
+                        result=None,
+                        skipped_reason='steering message interrupted pending tool',
+                    )
+
+                await event_queue.put(('start', call))
+                started = time.monotonic()
+
+                def on_output(tool_name: str, chunk: str) -> None:
+                    if tool_name != call.name or not chunk:
+                        return
+                    loop.call_soon_threadsafe(
+                        event_queue.put_nowait,
+                        ('output', (call, chunk)),
+                    )
+
+                tool_ctx = self._make_tool_context(on_output=on_output)
+                try:
+                    result = await asyncio.to_thread(
+                        execute_tool,
+                        call.name,
+                        call.arguments,
+                        tool_ctx,
+                    )
+                except Exception as exc:
+                    result = ToolResult(
+                        content=f'Tool execution error: {exc}',
+                        is_error=True,
+                    )
+                outcome = ToolExecutionOutcome(
+                    call=call,
+                    result=result,
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    started=True,
+                )
+                await event_queue.put(('complete', outcome))
+                return outcome
+
+        tasks = [asyncio.create_task(run_one(call)) for call in calls]
+        while True:
+            if all(task.done() for task in tasks) and event_queue.empty():
+                break
+            try:
+                kind, payload = await asyncio.wait_for(
+                    event_queue.get(),
+                    timeout=0.05,
+                )
+            except asyncio.TimeoutError:
+                continue
+
+            if kind == 'start':
+                call = payload
+                yield _evt(
+                    'tool_execution_start',
+                    tool_call_id=call.id,
+                    tool_name=call.name,
+                    arguments=call.arguments,
+                )
+            elif kind == 'output':
+                call, chunk = payload
+                parts = accumulated.setdefault(call.id, [])
+                parts.append(chunk)
+                yield _evt(
+                    'tool_execution_output',
+                    tool_call_id=call.id,
+                    tool_name=call.name,
+                    content=''.join(parts),
+                    chunk=chunk,
+                )
+            elif kind == 'complete':
+                outcome = payload
+                result = outcome.result or synthetic_tool_result(
+                    outcome.skipped_reason
+                )
+                yield _evt(
+                    'tool_execution_end',
+                    tool_call_id=outcome.call.id,
+                    tool_name=outcome.call.name,
+                    content=result.content,
+                    is_error=result.is_error,
+                    truncated=result.truncated,
+                    duration_ms=outcome.duration_ms,
+                )
+
+        outcomes = await asyncio.gather(*tasks)
+        yield _evt('_tool_batch_complete', outcomes=outcomes)
+
+    async def _stream_provider_interruptibly(
+        self,
+        *,
+        messages: list[Message],
+        system_prompt: str,
+        can_interrupt,
+    ) -> AsyncIterator[Any]:
+        """Pump a provider stream through a queue so abort/steer is prompt.
+
+        Awaiting the next HTTP chunk directly can otherwise hold the engine for
+        the provider's full read timeout. Cancelling the producer closes the
+        async generator and its response stream.
+        """
+        queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+
+        async def produce() -> None:
+            try:
+                async for delta in self.provider.stream(
+                    messages=messages,
+                    model=self.model,
+                    system_prompt=system_prompt,
+                    tools=self.tools if self.tools else None,
+                    thinking_level=self.thinking_level,
+                    max_tokens=self.max_tokens,
+                ):
+                    await queue.put(('delta', delta))
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                await queue.put(('exception', exc))
+            finally:
+                await queue.put(('done', None))
+
+        producer = asyncio.create_task(produce())
+        try:
+            while True:
+                should_cancel = self._aborted or (
+                    self._turn_cancel_event.is_set()
+                    and bool(self._steering_queue)
+                    and can_interrupt()
+                )
+                if should_cancel:
+                    producer.cancel()
+                    await asyncio.gather(producer, return_exceptions=True)
+                    return
+                try:
+                    kind, payload = await asyncio.wait_for(
+                        queue.get(), timeout=0.05,
+                    )
+                except asyncio.TimeoutError:
+                    continue
+                if kind == 'delta':
+                    yield payload
+                elif kind == 'exception':
+                    raise payload
+                else:
+                    return
+        finally:
+            if not producer.done():
+                producer.cancel()
+                await asyncio.gather(producer, return_exceptions=True)
+
+    async def _interruptible_retry_wait(self, seconds: float) -> bool:
+        """Wait for retry backoff; return False when abort/steer interrupts."""
+        deadline = time.monotonic() + max(0.0, seconds)
+        while time.monotonic() < deadline:
+            if self._aborted or self._turn_cancel_event.is_set():
+                return False
+            await asyncio.sleep(min(0.1, deadline - time.monotonic()))
+        return True
+
+    def _record_tool_event_off_path(
+        self,
+        call: ToolCall,
+        result: ToolResult,
+        duration_ms: int,
+    ) -> None:
+        """Queue derived execution-memory bookkeeping without delaying tools."""
+        if not (self.state_dir and self.agent_id):
+            return
+        loop = asyncio.get_running_loop()
+        future = loop.run_in_executor(
+            None,
+            functools.partial(
+                record_tool_event,
+                self.state_dir,
+                session_id=self.agent_id,
+                agent_id=self.agent_id,
+                provider=self.provider_name,
+                tool_name=call.name,
+                params=call.arguments,
+                result_content=result.content,
+                is_error=result.is_error,
+                project_root=str(self.project_root),
+                duration_ms=duration_ms,
+            ),
+        )
+        self._background_writes.add(future)
+
+        def completed(done: asyncio.Future) -> None:
+            self._background_writes.discard(done)
+            try:
+                done.result()
+            except Exception as exc:
+                _diag(
+                    'conversation_engine',
+                    'tool event recording failed; execution memory misses this tool call',
+                    error=exc,
+                    tool=call.name,
+                )
+
+        future.add_done_callback(completed)
 
     # ── Browser visibility helpers ────────────────────────────────────────────
 
@@ -725,6 +1178,54 @@ class ConversationEngine:
         yield _evt('done')
 
     async def submit(self, user_message: str) -> AsyncIterator[EngineEvent]:
+        """Run one submission with lifecycle cleanup and hot-path metrics."""
+        self._aborted = False
+        self._running = True
+        self._turn_cancel_event.clear()
+        self._activate_tools_for_text(user_message)
+        timer = TurnTimer()
+        counts = {'turns': 0, 'tool_calls': 0}
+        marked: set[str] = set()
+
+        def mark_once(name: str) -> None:
+            if name not in marked:
+                marked.add(name)
+                timer.mark(name)
+
+        try:
+            async for event in self._submit_impl(user_message):
+                if event.type == 'turn_start':
+                    counts['turns'] += 1
+                    mark_once('provider_start')
+                elif event.type in {'text_delta', 'thinking_delta', 'tool_call', 'error'}:
+                    mark_once('first_output')
+                    if event.type == 'tool_call':
+                        counts['tool_calls'] += 1
+                elif event.type == 'tool_execution_start':
+                    mark_once('first_tool_start')
+                elif event.type == 'tool_execution_end':
+                    timer.mark('last_tool_end')
+                elif event.type == 'done':
+                    timer.mark('completed')
+                    provider_metrics = dict(
+                        getattr(self.provider, 'last_request_metrics', {}) or {}
+                    )
+                    timer.set(
+                        provider=self.provider_name,
+                        model=self.model.model_id,
+                        agent_id=self.agent_id,
+                        **counts,
+                        **provider_metrics,
+                    )
+                    metrics = timer.snapshot()
+                    persist_turn_metrics(self.state_dir, metrics)
+                    yield _evt('performance', **metrics)
+                yield event
+        finally:
+            self._running = False
+            self._turn_cancel_event.clear()
+
+    async def _submit_impl(self, user_message: str) -> AsyncIterator[EngineEvent]:
         """Submit a user message and run the agent loop.
 
         Yields events as the agent processes:
@@ -738,8 +1239,6 @@ class ConversationEngine:
         - error: something went wrong
         - done: agent finished processing
         """
-        self._aborted = False
-
         # ── Slash command: /browser ───────────────────────────────────────────
         stripped = user_message.strip()
         if stripped.lower().startswith('/browser'):
@@ -829,14 +1328,13 @@ class ConversationEngine:
             error_msg = None
             stop_reason = 'end_turn'
             usage_data = {}
+            error_delta = None
 
             try:
-                async for delta in self.provider.stream(
+                async for delta in self._stream_provider_interruptibly(
                     messages=context_messages,
-                    model=self.model,
                     system_prompt=active_system_prompt,
-                    tools=self.tools if self.tools else None,
-                    max_tokens=self.max_tokens,
+                    can_interrupt=lambda calls=tool_calls: not calls,
                 ):
                     if self._aborted:
                         break
@@ -862,8 +1360,20 @@ class ConversationEngine:
                             _diag('conversation_engine', 'stream done-info parse failed; usage and stop_reason lost for this turn', error=exc)
                     elif delta.type == 'error':
                         error_msg = delta.error
+                        error_delta = delta
                         stop_reason = 'error'
                         yield _evt('error', error=delta.error, turn=turn)
+
+                    # A user should be able to interrupt a long prose/reasoning
+                    # stream, not only a tool chain. Once a complete tool call
+                    # has started arriving we let it finish and use the
+                    # existing post-tool steering checkpoint instead.
+                    if self._steering_queue and not tool_calls:
+                        stop_reason = 'steer'
+                        break
+
+                if self._steering_queue and not tool_calls and not error_msg:
+                    stop_reason = 'steer'
 
             except Exception as e:
                 error_msg = str(e)
@@ -873,18 +1383,36 @@ class ConversationEngine:
             # Auto-retry on transient errors (like pi-agent)
             # Only if no text was streamed yet (clean retry)
             if error_msg and not assistant_text and not tool_calls:
-                _retryable = any(k in (error_msg or '') for k in (
-                    '502', '503', '429', 'Bad Gateway', 'overloaded',
-                    'rate limit', 'chunked read', 'connection',
-                    'Token refreshed', 'service unavailable',
-                ))
+                # Built-in providers set retryable explicitly. Keep a narrow
+                # compatibility fallback for third-party providers that only
+                # populate the legacy error string.
+                _retryable = bool(getattr(error_delta, 'retryable', False))
+                if (
+                    error_delta is None
+                    or (
+                        getattr(error_delta, 'status_code', None) is None
+                        and not getattr(error_delta, 'error_code', None)
+                    )
+                ):
+                    lowered = (error_msg or '').lower()
+                    _retryable = any(k in lowered for k in (
+                        '502', '503', '429', 'bad gateway', 'overloaded',
+                        'rate limit', 'chunked read', 'connection',
+                        'service unavailable',
+                    ))
                 retry_count = getattr(self, '_turn_retry_count', 0)
                 if _retryable and retry_count < 2:
                     self._turn_retry_count = retry_count + 1
-                    wait = (retry_count + 1) * 3
+                    retry_after = getattr(error_delta, 'retry_after_seconds', None)
+                    if retry_after is not None:
+                        wait = min(30.0, max(0.0, float(retry_after)))
+                    else:
+                        base = min(8.0, 1.0 * (2 ** retry_count))
+                        wait = round(base + random.uniform(0.0, min(0.5, base * 0.25)), 2)
                     yield _evt('retry', attempt=retry_count + 1, max_attempts=2, wait_seconds=wait)
-                    await asyncio.sleep(wait)
-                    continue  # retry this turn
+                    if await self._interruptible_retry_wait(wait):
+                        continue  # retry this turn
+                    stop_reason = 'steer' if self._steering_queue else 'abort'
                 self._turn_retry_count = 0
             else:
                 self._turn_retry_count = 0
@@ -922,6 +1450,19 @@ class ConversationEngine:
             # If no tool calls, agent wants to stop — check follow-up queue
             if not tool_calls:
                 yield _evt('turn_end', turn=turn, stop_reason=stop_reason)
+                # Steering has priority over deferred follow-ups and must also
+                # be delivered when it arrived during a text-only response.
+                if self._steering_queue:
+                    steer_text = self._steering_queue.pop(0)
+                    steer_msg = Message(
+                        role='user', content=steer_text, timestamp=time.time(),
+                    )
+                    self.messages.append(steer_msg)
+                    self._persist_message(steer_msg)
+                    self._turn_cancel_event.clear()
+                    yield _evt('steer_delivered', content=steer_text,
+                               remaining=len(self._steering_queue), skipped_tools=0)
+                    continue
                 # Check follow-up queue
                 if self._follow_up_queue:
                     follow_up_text = self._follow_up_queue.pop(0)
@@ -936,110 +1477,112 @@ class ConversationEngine:
                     continue  # Loop back for another LLM turn
                 break
 
-            # Execute tool calls
-            tool_count = 0
+            # Execute tool calls. Shared/read-only calls run concurrently while
+            # exclusive calls form ordering barriers.
+            batches, limited_calls = execution_batches(
+                tool_calls,
+                limit=self.max_tool_calls_per_turn,
+            )
+            completed_ids: set[str] = set()
+            started_count = 0
             steered = False
-            for tc in tool_calls:
-                if self._aborted or tool_count >= self.max_tool_calls_per_turn:
+
+            for batch in batches:
+                if self._aborted:
                     break
-                tool_count += 1
+                outcomes: list[ToolExecutionOutcome] = []
+                async for batch_event in self._execute_tool_batch(batch):
+                    if batch_event.type == '_tool_batch_complete':
+                        outcomes = batch_event.data.get('outcomes', [])
+                    else:
+                        if batch_event.type == 'tool_execution_start':
+                            started_count += 1
+                        yield batch_event
 
-                yield _evt('tool_execution_start',
-                           tool_call_id=tc.id, tool_name=tc.name,
-                           arguments=tc.arguments)
+                # Persist completed outputs in provider order, independent of
+                # which shared tool happened to finish first.
+                for outcome in outcomes:
+                    result = outcome.result
+                    if result is None:
+                        continue
+                    tc = outcome.call
+                    completed_ids.add(tc.id)
+                    tool_msg = Message(
+                        role='tool_result',
+                        content=result.content,
+                        tool_call_id=tc.id,
+                        tool_name=tc.name,
+                        is_error=result.is_error,
+                        timestamp=time.time(),
+                    )
+                    self.messages.append(tool_msg)
+                    self._persist_message(tool_msg)
+                    self._record_tool_event_off_path(
+                        tc,
+                        result,
+                        outcome.duration_ms,
+                    )
 
-                output_q: queue.Queue[str] = queue.Queue()
-                tool_ctx = ToolContext(
-                    project_root=self.project_root,
-                    agent_id=self.agent_id,
-                    state_dir=self.state_dir,
-                    scope=self.scope,
-                    on_tool_output=lambda tool_name, chunk, _q=output_q, _tc=tc: _q.put(chunk) if tool_name == _tc.name else None,
-                    operation_id=self.operation_id,
-                    operation_domain=self.operation_domain,
-                    work_unit_id=self.work_unit_id,
-                    operation_role=self.operation_role,
-                    runtime_role=self.runtime_role,
-                    parent_agent_id=self.parent_agent_id,
-                )
+                if self._steering_queue:
+                    steered = True
+                    break
 
-                _tool_t0 = time.time()
-                result_box: dict[str, Any] = {}
-                err_box: dict[str, Exception] = {}
-
-                def _run_tool(tc=tc, tool_ctx=tool_ctx, result_box=result_box, err_box=err_box) -> None:
-                    try:
-                        result_box['result'] = execute_tool(tc.name, tc.arguments, tool_ctx)
-                    except Exception as e:
-                        err_box['error'] = e
-
-                tool_thread = threading.Thread(target=_run_tool, daemon=True)
-                tool_thread.start()
-                streamed_tool_parts: list[str] = []
-                while tool_thread.is_alive() or not output_q.empty():
-                    while True:
-                        try:
-                            chunk = output_q.get_nowait()
-                        except queue.Empty:
-                            break
-                        streamed_tool_parts.append(chunk)
-                        yield _evt('tool_execution_output',
-                                   tool_call_id=tc.id, tool_name=tc.name,
-                                   content=''.join(streamed_tool_parts), chunk=chunk)
-                    if tool_thread.is_alive():
-                        await asyncio.sleep(0.05)
-                tool_thread.join(timeout=0.1)
-                if 'error' in err_box:
-                    raise err_box['error']
-                result = result_box['result']
-                _tool_dt = int((time.time() - _tool_t0) * 1000)
-
-                # Record tool result as message
+            # Every emitted call must receive exactly one result, including
+            # limit, abort, and steering skips. This keeps all provider payloads
+            # protocol-valid without relying on a later repair pass.
+            limited_ids = {call.id for call in limited_calls}
+            skipped_calls = [
+                call for call in tool_calls if call.id not in completed_ids
+            ]
+            for tc in skipped_calls:
+                if tc.id in limited_ids:
+                    reason = (
+                        f'tool-call limit {self.max_tool_calls_per_turn} reached'
+                    )
+                elif self._aborted:
+                    reason = 'run aborted before tool completed'
+                elif self._steering_queue:
+                    reason = 'steering message interrupted pending tool'
+                else:
+                    reason = 'tool was not executed'
+                result = synthetic_tool_result(reason)
                 tool_msg = Message(
                     role='tool_result',
                     content=result.content,
                     tool_call_id=tc.id,
                     tool_name=tc.name,
-                    is_error=result.is_error,
+                    is_error=True,
                     timestamp=time.time(),
                 )
                 self.messages.append(tool_msg)
                 self._persist_message(tool_msg)
-                if self.state_dir and self.agent_id:
-                    try:
-                        record_tool_event(
-                            self.state_dir,
-                            session_id=self.agent_id,
-                            agent_id=self.agent_id,
-                            provider=self.provider_name,
-                            tool_name=tc.name,
-                            params=tc.arguments,
-                            result_content=result.content,
-                            is_error=result.is_error,
-                            project_root=str(self.project_root),
-                            duration_ms=_tool_dt,
-                        )
-                    except Exception as exc:
-                        _diag('conversation_engine', 'tool event recording failed; execution memory misses this tool call', error=exc, tool=tc.name)
+                completed_ids.add(tc.id)
+                yield _evt(
+                    'tool_execution_end',
+                    tool_call_id=tc.id,
+                    tool_name=tc.name,
+                    content=result.content,
+                    is_error=True,
+                    truncated=False,
+                    synthetic=True,
+                    duration_ms=0,
+                )
 
-                yield _evt('tool_execution_end',
-                           tool_call_id=tc.id, tool_name=tc.name,
-                           content=result.content, is_error=result.is_error,
-                           truncated=result.truncated)
-
-                # Check steering queue after each tool — interrupt if present
-                if self._steering_queue:
-                    steer_text = self._steering_queue.pop(0)
-                    steer_msg = Message(
-                        role='user', content=steer_text, timestamp=time.time(),
-                    )
-                    self.messages.append(steer_msg)
-                    self._persist_message(steer_msg)
-                    yield _evt('steer_delivered', content=steer_text,
-                               remaining=len(self._steering_queue),
-                               skipped_tools=len(tool_calls) - tool_count)
-                    steered = True
-                    break  # Skip remaining tool calls
+            if self._steering_queue:
+                steer_text = self._steering_queue.pop(0)
+                steer_msg = Message(
+                    role='user', content=steer_text, timestamp=time.time(),
+                )
+                self.messages.append(steer_msg)
+                self._persist_message(steer_msg)
+                self._turn_cancel_event.clear()
+                yield _evt(
+                    'steer_delivered',
+                    content=steer_text,
+                    remaining=len(self._steering_queue),
+                    skipped_tools=max(0, len(tool_calls) - started_count),
+                )
+                steered = True
 
             yield _evt('turn_end', turn=turn,
                        stop_reason='steer' if steered else 'tool_use')

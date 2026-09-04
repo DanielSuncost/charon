@@ -8,6 +8,8 @@ Each line is a message: {role, content, tool_calls, thinking, timestamp}
 from __future__ import annotations
 
 import json
+import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -34,15 +36,120 @@ def save_message(state_dir: Path, agent_id: str, message: dict) -> None:
     path = _conv_path(state_dir, agent_id)
     with path.open('a') as f:
         f.write(json.dumps(message, ensure_ascii=False) + '\n')
+    try:
+        with _sync_lock:
+            _sync_cursors.pop(str(path), None)
+    except NameError:
+        pass
 
 
 def save_conversation(state_dir: Path, agent_id: str, messages: list[dict]) -> None:
-    """Save the entire conversation (overwrite)."""
+    """Atomically replace the entire conversation (shutdown/repair path)."""
     path = _conv_path(state_dir, agent_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open('w') as f:
+    tmp = path.with_name(
+        f'.{path.name}.{os.getpid()}.{threading.get_ident()}.tmp'
+    )
+    with tmp.open('w', encoding='utf-8') as f:
         for msg in messages:
             f.write(json.dumps(msg, ensure_ascii=False) + '\n')
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    try:
+        with _sync_lock:
+            _sync_cursors.pop(str(path), None)
+    except NameError:
+        pass
+
+
+_sync_lock = threading.RLock()
+_sync_cursors: dict[str, tuple[int, str, int, int]] = {}
+
+
+def _message_digest(message: dict | None) -> str:
+    if message is None:
+        return ''
+    return json.dumps(
+        message, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
+    )
+
+
+def sync_conversation_backup(
+    state_dir: Path,
+    agent_id: str,
+    messages: list[Any],
+) -> int:
+    """Append only the unseen conversation tail.
+
+    A prefix mismatch (external edit, compaction, or repaired transcript)
+    triggers one atomic rewrite. Normal turns are O(new messages), instead of
+    serializing and rewriting the complete history after every response.
+
+    Returns the number of appended messages, or ``len(messages)`` after a
+    repair rewrite.
+    """
+    serializable = [
+        dict(item) if isinstance(item, dict) else message_to_dict(item)
+        for item in messages
+    ]
+    path = _conv_path(Path(state_dir), agent_id)
+    key = str(path)
+
+    with _sync_lock:
+        cursor = _sync_cursors.get(key)
+        start = 0
+        if cursor is not None:
+            count, last_digest, expected_size, expected_mtime_ns = cursor
+            try:
+                stat = path.stat()
+                unchanged_on_disk = (
+                    stat.st_size == expected_size
+                    and stat.st_mtime_ns == expected_mtime_ns
+                )
+            except OSError:
+                unchanged_on_disk = False
+            if (
+                count <= len(serializable)
+                and (count == 0 or _message_digest(serializable[count - 1]) == last_digest)
+                and unchanged_on_disk
+            ):
+                start = count
+            else:
+                cursor = None
+
+        if cursor is None and path.exists():
+            existing = load_conversation(Path(state_dir), agent_id)
+            if (
+                len(existing) <= len(serializable)
+                and existing == serializable[:len(existing)]
+            ):
+                start = len(existing)
+            else:
+                save_conversation(Path(state_dir), agent_id, serializable)
+                stat = path.stat()
+                _sync_cursors[key] = (
+                    len(serializable),
+                    _message_digest(serializable[-1] if serializable else None),
+                    stat.st_size,
+                    stat.st_mtime_ns,
+                )
+                return len(serializable)
+
+        tail = serializable[start:]
+        if tail:
+            with path.open('a', encoding='utf-8') as handle:
+                for message in tail:
+                    handle.write(json.dumps(message, ensure_ascii=False) + '\n')
+                handle.flush()
+        stat = path.stat()
+        _sync_cursors[key] = (
+            len(serializable),
+            _message_digest(serializable[-1] if serializable else None),
+            stat.st_size,
+            stat.st_mtime_ns,
+        )
+        return len(tail)
 
 
 def load_conversation(state_dir: Path, agent_id: str) -> list[dict]:

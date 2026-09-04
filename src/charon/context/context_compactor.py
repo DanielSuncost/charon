@@ -416,7 +416,7 @@ class ContextCompactor:
         """Run a single incremental leaf pass."""
         tokens_before = ContextStore.get_context_token_count(db, agent_id)
         items = ContextStore.get_context_window(db, agent_id)
-        chunk = self._select_oldest_leaf_chunk(items)
+        chunk = self._select_oldest_leaf_chunk(db, items)
 
         if not chunk:
             return CompactionResult(
@@ -463,7 +463,7 @@ class ContextCompactor:
         # Phase 1: repeated leaf passes
         for _ in range(self.config.max_rounds):
             items = ContextStore.get_context_window(db, agent_id)
-            chunk = self._select_oldest_leaf_chunk(items)
+            chunk = self._select_oldest_leaf_chunk(db, items)
             if not chunk:
                 break
 
@@ -519,9 +519,9 @@ class ContextCompactor:
     # ── Private: leaf pass ──────────────────────────────────────────
 
     def _select_oldest_leaf_chunk(
-        self, items: list[ContextItem],
+        self, db, items: list[ContextItem],
     ) -> list[ContextItem] | None:
-        """Select the oldest contiguous message chunk outside the fresh tail."""
+        """Select an old message chunk without splitting a tool exchange."""
         # Identify message items
         msg_items = [i for i in items if i.item_type == 'message' and i.message_id]
         if len(msg_items) <= self.config.fresh_tail_count:
@@ -555,10 +555,77 @@ class ContextCompactor:
             if chunk_tokens >= self.config.leaf_chunk_tokens:
                 break
 
+        chunk = self._extend_parallel_tool_exchange(db, items, chunk)
+
         if len(chunk) < self.config.leaf_min_fanout:
             return None
 
         return chunk
+
+    @staticmethod
+    def _extend_parallel_tool_exchange(
+        db,
+        items: list[ContextItem],
+        chunk: list[ContextItem],
+    ) -> list[ContextItem]:
+        """Extend a chunk through all results of its final tool-call batch.
+
+        Token and fresh-tail cutoffs are message based, so either can land in
+        the middle of one assistant message followed by several parallel tool
+        results.  The call and every retained result are one protocol unit and
+        must be summarized together, even if that slightly exceeds the nominal
+        chunk size or enters the protected tail.
+        """
+        if not chunk:
+            return chunk
+
+        stored = ContextStore.get_messages_by_ids(
+            db, [item.message_id for item in chunk if item.message_id])
+        stored_by_id = {message.id: message for message in stored}
+        messages = [
+            stored_by_id[item.message_id]
+            for item in chunk
+            if item.message_id in stored_by_id
+        ]
+        pending_ids: set[str] | None = None
+        for message in messages:
+            if message.role == 'assistant' and message.tool_calls:
+                pending_ids = {tc.id for tc in message.tool_calls if tc.id}
+                continue
+            if (
+                pending_ids is not None
+                and message.role == 'tool_result'
+                and message.tool_call_id in pending_ids
+            ):
+                pending_ids.discard(message.tool_call_id)
+                continue
+            pending_ids = None
+
+        if not pending_ids:
+            return chunk
+
+        extended = list(chunk)
+        last_ordinal = chunk[-1].ordinal
+        for item in items:
+            if item.ordinal <= last_ordinal:
+                continue
+            if item.ordinal != last_ordinal + 1:
+                break
+            if item.item_type != 'message' or item.message_id is None:
+                break
+            message = ContextStore.get_message(db, item.message_id)
+            if (
+                message is None
+                or message.role != 'tool_result'
+                or message.tool_call_id not in pending_ids
+            ):
+                break
+            extended.append(item)
+            pending_ids.discard(message.tool_call_id)
+            last_ordinal = item.ordinal
+            if not pending_ids:
+                break
+        return extended
 
     async def _resolve_prior_summary(
         self, db, agent_id: str, chunk: list[ContextItem],

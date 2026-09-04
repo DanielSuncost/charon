@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import fcntl
 import json
+import os
+import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 try:
     from charon.infra.diagnostics import record as _diag
@@ -14,6 +18,8 @@ except Exception:  # diagnostics is best-effort and must never block import
 
 
 REGISTRY_VERSION = 1
+_REGISTRY_LOCKS: dict[str, threading.RLock] = {}
+_REGISTRY_LOCKS_GUARD = threading.Lock()
 
 
 def _now_iso() -> str:
@@ -51,7 +57,37 @@ def _read_json(path: Path, default: Any):
 
 def _write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding='utf-8')
+    temp = path.with_name(
+        f'.{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp'
+    )
+    try:
+        with temp.open('x', encoding='utf-8') as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+@contextmanager
+def _locked_registry(state_dir: Path) -> Iterator[None]:
+    """Serialize registry read-modify-write cycles across threads/processes."""
+    lock_path = Path(state_dir) / 'projects' / '.registry.lock'
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    key = str(lock_path.resolve())
+    with _REGISTRY_LOCKS_GUARD:
+        local_lock = _REGISTRY_LOCKS.setdefault(key, threading.RLock())
+    with local_lock:
+        with lock_path.open('a+', encoding='utf-8') as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _default_registry() -> dict[str, Any]:
@@ -74,11 +110,16 @@ def load_registry(state_dir: Path) -> dict[str, Any]:
     return reg
 
 
-def save_registry(state_dir: Path, registry: dict[str, Any]) -> None:
+def _save_registry_unlocked(state_dir: Path, registry: dict[str, Any]) -> None:
     registry = dict(registry or {})
     registry['version'] = REGISTRY_VERSION
     registry['updated_at'] = _now_iso()
     _write_json(_registry_path(state_dir), registry)
+
+
+def save_registry(state_dir: Path, registry: dict[str, Any]) -> None:
+    with _locked_registry(Path(state_dir)):
+        _save_registry_unlocked(Path(state_dir), registry)
 
 
 def derive_project_name(project_root: Path) -> str:
@@ -120,6 +161,27 @@ def ensure_project(
     summary: str | None = None,
     provisional: bool = True,
 ) -> dict[str, Any]:
+    state_dir = Path(state_dir)
+    with _locked_registry(state_dir):
+        return _ensure_project_unlocked(
+            state_dir,
+            project_root,
+            name=name,
+            kind=kind,
+            summary=summary,
+            provisional=provisional,
+        )
+
+
+def _ensure_project_unlocked(
+    state_dir: Path,
+    project_root: Path,
+    *,
+    name: str | None = None,
+    kind: str | None = None,
+    summary: str | None = None,
+    provisional: bool = True,
+) -> dict[str, Any]:
     root = _normalize_root(project_root)
     registry = load_registry(state_dir)
 
@@ -135,7 +197,7 @@ def ensure_project(
         linked = {root, *[str(x) for x in existing.get('roots') or [] if str(x).strip()]}
         existing['roots'] = sorted(linked)
         _write_json(_project_json_path(state_dir, existing['id']), existing)
-        save_registry(state_dir, registry)
+        _save_registry_unlocked(state_dir, registry)
         return existing
 
     # Rehydrate from existing project docs if possible
@@ -155,7 +217,7 @@ def ensure_project(
             for r in proj['roots']:
                 registry['root_map'][r] = proj['id']
             _write_json(_project_json_path(state_dir, proj['id']), proj)
-            save_registry(state_dir, registry)
+            _save_registry_unlocked(state_dir, registry)
             return proj
 
     proj_name = str(name or derive_project_name(Path(root))).strip() or 'project'
@@ -178,7 +240,7 @@ def ensure_project(
     registry.setdefault('projects', []).append(doc)
     registry.setdefault('root_map', {})[root] = project_id
     _write_json(_project_json_path(state_dir, project_id), doc)
-    save_registry(state_dir, registry)
+    _save_registry_unlocked(state_dir, registry)
     return doc
 
 

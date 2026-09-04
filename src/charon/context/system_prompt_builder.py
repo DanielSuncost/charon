@@ -476,7 +476,7 @@ def _build_fleet_context() -> str:
 
 def _build_tools(tools: list[dict] | None = None) -> str:
     """Layer 8: Available tools + guidelines."""
-    tool_defs = tools or ALL_TOOL_DEFS
+    tool_defs = ALL_TOOL_DEFS if tools is None else tools
     tool_list = '\n'.join(f"- {t['name']}: {t['description'][:80]}" for t in tool_defs)
 
     return f"""Available tools:
@@ -487,7 +487,8 @@ Guidelines:
 - Do NOT use Bash for GUI apps, monitors, servers, dev watchers, nohup flows, or background jobs. Use RunProcess for those.
 - After starting a managed process, use ProcessStatus / ProcessLogs / StopProcess to inspect and control it.
 - Use Read to examine files before editing. You must use this tool instead of cat or sed.
-- Use Edit for precise changes (oldText must match exactly)
+- Use Edit for precise changes; pass Read's file version as baseHash and combine independent hunks when practical
+- Use ToolCatalog to discover and enable specialized capabilities not currently exposed
 - Use Write only for new files or complete rewrites
 - When summarizing your actions, output plain text directly
 - Be concise in your responses

@@ -9,6 +9,8 @@ with a separate execute registry.
 """
 from __future__ import annotations
 
+import ast
+import difflib
 import json
 import os
 import signal
@@ -16,6 +18,7 @@ import subprocess
 import re
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -53,6 +56,9 @@ class ToolContext:
     runtime_role: str = ''
     parent_agent_id: str = ''
     metadata: dict[str, Any] | None = None
+    cancel_event: threading.Event | None = None
+    topology_depth: int = 0  # depth in the delegation tree (0 = root agent)
+    topology_budget: dict[str, Any] | None = None  # set for shades: governs further spawning
 
 
 _active_bash_lock = threading.Lock()
@@ -238,11 +244,13 @@ def _refresh_managed_processes(ctx: ToolContext) -> dict[str, Any]:
 READ_TOOL_DEF = {
     'name': 'Read',
     'description': (
-        'Read the contents of a file. Supports text files, PDFs, and images (jpg, png, gif, webp). '
-        'PDFs are converted to text automatically. '
+        'Read the contents of a file. Supports text files, PDFs, office documents '
+        '(xlsx, docx, pptx), and images (jpg, png, gif, webp). '
+        'PDFs and office documents are converted to text automatically. '
         'Output is truncated to 2000 lines or 50KB (whichever is hit first). '
-        'Use offset/limit for large files. '
-        'When you need the full file, continue with offset until complete.'
+        'Use offset/limit or ranges for large files; auto mode returns a symbol '
+        'outline for very large source files. Every text read returns a content '
+        'version that can be passed to Edit as baseHash.'
     ),
     'input_schema': {
         'type': 'object',
@@ -252,17 +260,115 @@ READ_TOOL_DEF = {
                 'description': 'Path to the file to read (relative or absolute)',
             },
             'offset': {
-                'type': 'number',
+                'type': 'integer',
                 'description': 'Line number to start reading from (1-indexed)',
             },
             'limit': {
-                'type': 'number',
+                'type': 'integer',
                 'description': 'Maximum number of lines to read',
+            },
+            'ranges': {
+                'type': 'array',
+                'description': 'Optional non-contiguous inclusive line ranges',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'start': {'type': 'integer', 'minimum': 1},
+                        'end': {'type': 'integer', 'minimum': 1},
+                    },
+                    'required': ['start', 'end'],
+                },
+            },
+            'mode': {
+                'type': 'string',
+                'enum': ['auto', 'full', 'outline'],
+                'description': 'auto (default), full text, or compact symbol outline',
+            },
+            'lineNumbers': {
+                'type': 'boolean',
+                'description': 'Prefix returned text lines with 1-indexed line numbers',
             },
         },
         'required': ['path'],
     },
 }
+
+
+_LARGE_TEXT_BYTES = 2 * 1024 * 1024
+_AUTO_OUTLINE_BYTES = 256 * 1024
+
+
+def _source_outline(text: str, suffix: str) -> str:
+    """Return a compact source/document outline with line locations."""
+    entries: list[tuple[int, str]] = []
+    if suffix == '.py':
+        try:
+            tree = ast.parse(text)
+            for node in ast.walk(tree):
+                if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                    kind = 'class' if isinstance(node, ast.ClassDef) else 'def'
+                    entries.append((node.lineno, f'{kind} {node.name}'))
+        except SyntaxError:
+            pass
+    if not entries:
+        patterns = (
+            re.compile(r'^\s*(?:export\s+)?(?:async\s+)?(?:class|def|function|interface|type|enum|struct|trait)\s+([\w$]+)'),
+            re.compile(r'^\s{0,3}(#{1,6})\s+(.+)$'),
+        )
+        for line_no, line in enumerate(text.splitlines(), 1):
+            for pattern in patterns:
+                match = pattern.match(line)
+                if match:
+                    label = match.group(2) if len(match.groups()) > 1 else line.strip()
+                    entries.append((line_no, label.strip()))
+                    break
+    entries.sort(key=lambda item: item[0])
+    if not entries:
+        return '(No symbols or headings detected.)'
+    return '\n'.join(f'{line_no:>6}  {label}' for line_no, label in entries[:1000])
+
+
+def _stream_source_outline(target: Path, ctx: ToolContext) -> tuple[str, int]:
+    """Outline a large file without retaining its complete contents."""
+    symbol = re.compile(
+        r'^\s*(?:export\s+)?(?:async\s+)?'
+        r'(?:class|def|function|interface|type|enum|struct|trait)\s+([\w$]+)'
+    )
+    heading = re.compile(r'^\s{0,3}(#{1,6})\s+(.+)$')
+    entries: list[str] = []
+    total_lines = 0
+    with target.open('r', encoding='utf-8', errors='replace') as handle:
+        for line_no, line in enumerate(handle, 1):
+            total_lines = line_no
+            if ctx.cancel_event and ctx.cancel_event.is_set():
+                raise InterruptedError('Read cancelled')
+            match = symbol.match(line)
+            label = match.group(1) if match else ''
+            if not label:
+                match = heading.match(line)
+                label = match.group(2).strip() if match else ''
+            if label and len(entries) < 1000:
+                entries.append(f'{line_no:>6}  {label}')
+    return ('\n'.join(entries) or '(No symbols or headings detected.)'), total_lines
+
+
+def _normalized_ranges(params: dict) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for item in params.get('ranges') or []:
+        try:
+            start = max(1, int(item.get('start', 1)))
+            end = max(start, int(item.get('end', start)))
+            ranges.append((start, end))
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return ranges
+
+
+def _number_lines(lines: list[str], start_numbers: list[int]) -> str:
+    return ''.join(
+        f'{line_no:>6}\t{line}'
+        for line_no, line in zip(start_numbers, lines, strict=True)
+    )
 
 
 def _read_pdf(target: Path, params: dict, ctx: ToolContext) -> ToolResult:
@@ -311,6 +417,34 @@ def _read_pdf(target: Path, params: dict, ctx: ToolContext) -> ToolResult:
     return ToolResult(content=result_text + meta, truncated=truncated)
 
 
+def _read_office(target: Path, params: dict, ctx: ToolContext) -> ToolResult:
+    """Extract text from XLSX/DOCX/PPTX (and reject legacy .xls/.doc/.ppt)."""
+    from charon.tools.office_read import OfficeExtractError, extract_office_text
+
+    try:
+        text = extract_office_text(target)
+    except OfficeExtractError as e:
+        return ToolResult(content=f'Error: {e}', is_error=True)
+
+    lines = text.splitlines(keepends=True)
+    total_lines = len(lines)
+
+    offset = max(0, int(params.get('offset', 1)) - 1)
+    limit = int(params.get('limit', 0)) or ctx.max_output_lines
+    selected = lines[offset:offset + limit]
+    result_text = ''.join(selected)
+    result_text, truncated = truncate_output(result_text, ctx.max_output_lines, ctx.max_output_bytes)
+
+    meta = f'\n[{target.suffix.lstrip(".").upper()}: {target.name}, {total_lines} lines total]'
+    if truncated or offset > 0 or (offset + limit) < total_lines:
+        shown_end = min(offset + len(selected), total_lines)
+        meta += f' [Showing lines {offset+1}-{shown_end}]'
+        if (offset + limit) < total_lines:
+            meta += f' Use offset={shown_end + 1} to continue.'
+
+    return ToolResult(content=result_text + meta, truncated=truncated)
+
+
 def execute_read(params: dict, ctx: ToolContext) -> ToolResult:
     path_str = params.get('path', '')
     if not path_str:
@@ -329,33 +463,106 @@ def execute_read(params: dict, ctx: ToolContext) -> ToolResult:
     if target.suffix.lower() == '.pdf':
         return _read_pdf(target, params, ctx)
 
+    # Office documents: XLSX/XLSM/DOCX/PPTX (legacy .xls/.doc/.ppt get a
+    # conversion hint instead of mojibake from read_text)
+    from charon.tools.office_read import LEGACY_SUFFIXES, OFFICE_SUFFIXES
+    if target.suffix.lower() in OFFICE_SUFFIXES | set(LEGACY_SUFFIXES):
+        return _read_office(target, params, ctx)
+
+    from charon.tools.file_snapshots import file_version
+
     try:
-        text = target.read_text(encoding='utf-8', errors='replace')
+        version = file_version(target)
+        size = target.stat().st_size
     except Exception as e:
         return ToolResult(content=f'Error reading file: {e}', is_error=True)
 
-    lines = text.splitlines(keepends=True)
-    total_lines = len(lines)
+    mode = str(params.get('mode') or 'auto').lower()
+    ranges = _normalized_ranges(params)
+    explicit_window = bool(ranges or 'offset' in params or 'limit' in params)
+    if mode == 'auto' and size >= _AUTO_OUTLINE_BYTES and not explicit_window:
+        mode = 'outline'
 
-    offset = int(params.get('offset', 1)) - 1  # convert to 0-indexed
-    limit = int(params.get('limit', 0)) or ctx.max_output_lines
+    try:
+        if mode == 'outline':
+            if size >= _LARGE_TEXT_BYTES:
+                result_text, outline_lines = _stream_source_outline(target, ctx)
+            else:
+                text = target.read_text(encoding='utf-8', errors='replace')
+                outline_lines = len(text.splitlines())
+                result_text = _source_outline(text, target.suffix.lower())
+            meta = f'\n[Outline of {target.name}; {outline_lines} lines]'
+            return ToolResult(
+                content=f'{result_text}{meta}\n[File version: {version}]',
+                details={'path': str(target), 'version': version, 'mode': 'outline'},
+            )
 
-    offset = max(0, offset)
-    selected = lines[offset:offset + limit]
-    result_text = ''.join(selected)
-    result_text, truncated = truncate_output(result_text, ctx.max_output_lines, ctx.max_output_bytes)
+        offset = max(0, int(params.get('offset', 1)) - 1)
+        limit = max(1, int(params.get('limit', 0)) or ctx.max_output_lines)
+        selected: list[str] = []
+        selected_numbers: list[int] = []
 
-    # Add metadata if truncated or offset
-    meta = ''
-    if truncated or offset > 0 or (offset + limit) < total_lines:
-        shown_start = offset + 1
-        shown_end = min(offset + len(selected), total_lines)
-        meta = f'\n[Showing lines {shown_start}-{shown_end} of {total_lines}]'
-        if truncated:
-            meta += f' (truncated to {ctx.max_output_bytes // 1000}KB limit)'
-        meta += f'. Use offset={shown_end + 1} to continue.'
+        if size < _LARGE_TEXT_BYTES:
+            text = target.read_text(encoding='utf-8', errors='replace')
+            lines = text.splitlines(keepends=True)
+            total_lines = len(lines)
+            if ranges:
+                for start, end in ranges:
+                    for index in range(start - 1, min(end, total_lines)):
+                        selected.append(lines[index])
+                        selected_numbers.append(index + 1)
+            else:
+                selected = lines[offset:offset + limit]
+                selected_numbers = list(range(offset + 1, offset + 1 + len(selected)))
+        else:
+            total_lines = 0
+            with target.open('r', encoding='utf-8', errors='replace') as handle:
+                for line_no, line in enumerate(handle, 1):
+                    total_lines = line_no
+                    if ctx.cancel_event and ctx.cancel_event.is_set():
+                        return ToolResult(content='Read cancelled.', is_error=True)
+                    wanted = (
+                        any(start <= line_no <= end for start, end in ranges)
+                        if ranges
+                        else offset < line_no <= offset + limit
+                    )
+                    if wanted:
+                        selected.append(line)
+                        selected_numbers.append(line_no)
 
-    return ToolResult(content=result_text + meta, truncated=truncated)
+        result_text = (
+            _number_lines(selected, selected_numbers)
+            if params.get('lineNumbers', False)
+            else ''.join(selected)
+        )
+        result_text, truncated = truncate_output(
+            result_text, ctx.max_output_lines, ctx.max_output_bytes,
+        )
+        if ranges:
+            range_label = ', '.join(f'{start}-{end}' for start, end in ranges)
+            meta = f'\n[Showing requested ranges {range_label} of {total_lines} lines]'
+        else:
+            shown_start = offset + 1
+            shown_end = min(offset + len(selected), total_lines)
+            meta = ''
+            if truncated or offset > 0 or (offset + limit) < total_lines:
+                meta = f'\n[Showing lines {shown_start}-{shown_end} of {total_lines}]'
+                if truncated:
+                    meta += f' (truncated to {ctx.max_output_bytes // 1000}KB limit)'
+                if shown_end < total_lines:
+                    meta += f'. Use offset={shown_end + 1} to continue.'
+        return ToolResult(
+            content=f'{result_text}{meta}\n[File version: {version}]',
+            truncated=truncated,
+            details={
+                'path': str(target),
+                'version': version,
+                'total_lines': total_lines,
+                'line_numbers': selected_numbers,
+            },
+        )
+    except Exception as e:
+        return ToolResult(content=f'Error reading file: {e}', is_error=True)
 
 
 # -- Write tool ---------------------------------------------------------------
@@ -395,12 +602,16 @@ def execute_write(params: dict, ctx: ToolContext) -> ToolResult:
         target = ctx.project_root / target
 
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding='utf-8')
+        from charon.tools.file_snapshots import atomic_write_text, file_version
+        atomic_write_text(target, content)
         byte_count = len(content.encode('utf-8'))
+        version = file_version(target)
         return ToolResult(
-            content=f'Successfully wrote {byte_count} bytes to {path_str}',
-            details={'path': str(target), 'bytes': byte_count},
+            content=(
+                f'Successfully wrote {byte_count} bytes to {path_str}\n'
+                f'[File version: {version}]'
+            ),
+            details={'path': str(target), 'bytes': byte_count, 'version': version},
         )
     except Exception as e:
         return ToolResult(content=f'Error writing file: {e}', is_error=True)
@@ -411,8 +622,9 @@ def execute_write(params: dict, ctx: ToolContext) -> ToolResult:
 EDIT_TOOL_DEF = {
     'name': 'Edit',
     'description': (
-        'Edit a file by replacing exact text. The oldText must match exactly '
-        '(including whitespace). Use this for precise, surgical edits.'
+        'Atomically edit one or more exact text blocks or inclusive line ranges. '
+        'Pass Read\'s baseHash to reject stale edits. All hunks are validated '
+        'before any content is written.'
     ),
     'input_schema': {
         'type': 'object',
@@ -429,21 +641,78 @@ EDIT_TOOL_DEF = {
                 'type': 'string',
                 'description': 'New text to replace the old text with',
             },
+            'baseHash': {
+                'type': 'string',
+                'description': 'Optional file version returned by Read',
+            },
+            'edits': {
+                'type': 'array',
+                'minItems': 1,
+                'description': 'Multiple atomic edits against the same original file',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'oldText': {'type': 'string'},
+                        'newText': {'type': 'string'},
+                        'startLine': {'type': 'integer', 'minimum': 1},
+                        'endLine': {'type': 'integer', 'minimum': 1},
+                    },
+                    'required': ['newText'],
+                    'anyOf': [
+                        {'required': ['oldText']},
+                        {'required': ['startLine', 'endLine']},
+                    ],
+                },
+            },
         },
-        'required': ['path', 'oldText', 'newText'],
+        'required': ['path'],
+        'anyOf': [
+            {'required': ['oldText', 'newText']},
+            {'required': ['edits']},
+        ],
     },
 }
 
 
+def _near_edit_match(content: str, old_text: str) -> str:
+    """Locate the closest same-sized line window for actionable failures."""
+    old_lines = old_text.splitlines() or [old_text]
+    lines = content.splitlines()
+    width = max(1, len(old_lines))
+    best_ratio = 0.0
+    best_line = 0
+    best_text = ''
+    for index in range(max(1, len(lines) - width + 1)):
+        candidate = '\n'.join(lines[index:index + width])
+        ratio = difflib.SequenceMatcher(None, old_text, candidate).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_line = index + 1
+            best_text = candidate
+    if best_ratio < 0.35 or not best_text:
+        return ''
+    preview = best_text[:300].replace('\n', '\\n')
+    return f' Closest match ({best_ratio:.0%}) starts at line {best_line}: "{preview}".'
+
+
 def execute_edit(params: dict, ctx: ToolContext) -> ToolResult:
     path_str = params.get('path', '')
-    old_text = params.get('oldText', '')
-    new_text = params.get('newText', '')
 
     if not path_str:
         return ToolResult(content='Error: path is required', is_error=True)
-    if not old_text:
-        return ToolResult(content='Error: oldText is required', is_error=True)
+
+    raw_edits = params.get('edits')
+    if raw_edits is None:
+        if not params.get('oldText'):
+            return ToolResult(content='Error: oldText is required', is_error=True)
+        if 'newText' not in params:
+            return ToolResult(content='Error: newText is required', is_error=True)
+        raw_edits = [{
+            'oldText': params.get('oldText'),
+            'newText': params.get('newText', ''),
+        }]
+    if not isinstance(raw_edits, list) or not raw_edits:
+        return ToolResult(content='Error: edits must be a non-empty array', is_error=True)
 
     target = Path(path_str)
     if not target.is_absolute():
@@ -453,28 +722,114 @@ def execute_edit(params: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(content=f'Error: file not found: {path_str}', is_error=True)
 
     try:
+        from charon.tools.file_snapshots import atomic_write_text, file_version
+        initial_version = file_version(target)
         content = target.read_text(encoding='utf-8')
     except Exception as e:
         return ToolResult(content=f'Error reading file: {e}', is_error=True)
 
-    count = content.count(old_text)
-    if count == 0:
-        # Show helpful context
-        preview = old_text[:100].replace('\n', '\\n')
+    base_hash = str(params.get('baseHash') or '')
+    if base_hash and base_hash != initial_version:
         return ToolResult(
-            content=f'Error: oldText not found in {path_str}. Text to find: "{preview}..."',
+            content=(
+                f'Error: stale edit for {path_str}. Expected version '
+                f'{base_hash}, current version is {initial_version}. Read the file again.'
+            ),
             is_error=True,
-        )
-    if count > 1:
-        return ToolResult(
-            content=f'Error: oldText found {count} times in {path_str}. Must match exactly once.',
-            is_error=True,
+            details={'expected_version': base_hash, 'current_version': initial_version},
         )
 
-    new_content = content.replace(old_text, new_text, 1)
+    line_starts = [0]
+    for line in content.splitlines(keepends=True):
+        line_starts.append(line_starts[-1] + len(line))
+    line_count = len(line_starts) - 1
+    spans: list[tuple[int, int, str, int]] = []
+    for edit_index, edit in enumerate(raw_edits, 1):
+        if not isinstance(edit, dict) or 'newText' not in edit:
+            return ToolResult(
+                content=f'Error: edit {edit_index} requires newText',
+                is_error=True,
+            )
+        replacement = str(edit.get('newText', ''))
+        old_text = edit.get('oldText')
+        if isinstance(old_text, str) and old_text:
+            count = content.count(old_text)
+            if count == 0:
+                preview = old_text[:100].replace('\n', '\\n')
+                return ToolResult(
+                    content=(
+                        f'Error: oldText not found in {path_str} for edit {edit_index}. '
+                        f'Text to find: "{preview}...".'
+                        f'{_near_edit_match(content, old_text)}'
+                    ),
+                    is_error=True,
+                )
+            if count > 1:
+                return ToolResult(
+                    content=(
+                        f'Error: oldText found {count} times in {path_str} '
+                        f'for edit {edit_index}. Must match exactly once.'
+                    ),
+                    is_error=True,
+                )
+            start = content.index(old_text)
+            end = start + len(old_text)
+        else:
+            try:
+                start_line = int(edit['startLine'])
+                end_line = int(edit['endLine'])
+            except (KeyError, TypeError, ValueError):
+                return ToolResult(
+                    content=f'Error: edit {edit_index} requires oldText or startLine/endLine',
+                    is_error=True,
+                )
+            if not (1 <= start_line <= end_line <= line_count):
+                return ToolResult(
+                    content=(
+                        f'Error: edit {edit_index} line range {start_line}-{end_line} '
+                        f'is outside 1-{line_count}'
+                    ),
+                    is_error=True,
+                )
+            start = line_starts[start_line - 1]
+            end = line_starts[end_line]
+        spans.append((start, end, replacement, edit_index))
+
+    ordered = sorted(spans, key=lambda span: (span[0], span[1]))
+    for previous, current in zip(ordered, ordered[1:], strict=False):
+        if current[0] < previous[1]:
+            return ToolResult(
+                content=(
+                    f'Error: edits {previous[3]} and {current[3]} overlap; '
+                    'no changes were written.'
+                ),
+                is_error=True,
+            )
+
+    new_content = content
+    for start, end, replacement, _ in reversed(ordered):
+        new_content = new_content[:start] + replacement + new_content[end:]
+
     try:
-        target.write_text(new_content, encoding='utf-8')
-        return ToolResult(content=f'Successfully edited {path_str}')
+        if file_version(target) != initial_version:
+            return ToolResult(
+                content=f'Error: {path_str} changed while preparing the edit. Read it again.',
+                is_error=True,
+            )
+        atomic_write_text(target, new_content)
+        final_version = file_version(target)
+        return ToolResult(
+            content=(
+                f'Successfully edited {path_str} ({len(ordered)} atomic edit(s))\n'
+                f'[File version: {final_version}]'
+            ),
+            details={
+                'path': str(target),
+                'edits': len(ordered),
+                'previous_version': initial_version,
+                'version': final_version,
+            },
+        )
     except Exception as e:
         return ToolResult(content=f'Error writing file: {e}', is_error=True)
 
@@ -665,7 +1020,9 @@ def execute_bash(params: dict, ctx: ToolContext) -> ToolResult:
             rc = popen.poll()
             if rc is not None:
                 break
-            if _active_bash_abort.is_set():
+            if _active_bash_abort.is_set() or (
+                ctx.cancel_event is not None and ctx.cancel_event.is_set()
+            ):
                 aborted = True
                 _kill_process_tree(popen)
                 break
@@ -1011,6 +1368,8 @@ from charon.tools.x_tool import X_TOOL_DEF, execute_x
 from charon.tools.cron_tool import CRON_TOOL_DEF, execute_cron
 from charon.tools.skills_tool import SKILLS_TOOL_DEF, execute_skills
 from charon.tools.execute_code_tool import EXECUTE_CODE_TOOL_DEF, execute_execute_code
+from charon.tools.pykernel_tool import PYKERNEL_TOOL_DEF, execute_pykernel
+from charon.tools.refine_tool import REFINE_TOOL_DEF, execute_refine
 from charon.tools.clarify_tool import CLARIFY_TOOL_DEF, execute_clarify
 
 # Optional tools may legitimately be missing (uninstalled extras) — that is an
@@ -1041,6 +1400,7 @@ except Exception as _e:
     _record_tool_import_failure('Browser', _e)
 from charon.tools.shade_tool import SHADE_TOOL_DEF, execute_spawn_shade
 from charon.tools.judge_loop_tool import JUDGE_LOOP_TOOL_DEF, execute_judge_loop
+from charon.tools.tool_catalog import TOOL_CATALOG_DEF, execute_tool_catalog
 
 # Recall tool — optional, only loads if sqlite-vec and sentence-transformers are installed
 try:
@@ -1070,13 +1430,14 @@ except Exception as _e:
     _record_tool_import_failure('Fleet', _e)
 
 ALL_TOOL_DEFS = [
-    READ_TOOL_DEF, BASH_TOOL_DEF, EDIT_TOOL_DEF, WRITE_TOOL_DEF,
+    READ_TOOL_DEF, BASH_TOOL_DEF, EDIT_TOOL_DEF, WRITE_TOOL_DEF, TOOL_CATALOG_DEF,
     RUN_PROCESS_TOOL_DEF, PROCESS_STATUS_TOOL_DEF, PROCESS_LOGS_TOOL_DEF, STOP_PROCESS_TOOL_DEF,
     USER_MODEL_TOOL_DEF, PROJECT_KNOWLEDGE_TOOL_DEF,
     HTTP_TOOL_DEF, GIT_TOOL_DEF,
     SHADE_TOOL_DEF, SPAWN_BATCH_TOOL_DEF, JUDGE_LOOP_TOOL_DEF,
     SEARCH_TOOL_DEF, WEB_TOOL_DEF, PAPER_TOOL_DEF, SOURCE_DISCOVERY_TOOL_DEF, RESEARCH_TOOL_DEF, X_TOOL_DEF,
     CRON_TOOL_DEF, SKILLS_TOOL_DEF, EXECUTE_CODE_TOOL_DEF, CLARIFY_TOOL_DEF,
+    PYKERNEL_TOOL_DEF, REFINE_TOOL_DEF,
 ] + ([BROWSER_TOOL_DEF] if _HAS_BROWSER else []) + ([RECALL_TOOL_DEF] if _HAS_RECALL else []) + ([TIMELINE_TOOL_DEF] if _HAS_TIMELINE else []) + (_FLEET_DEFS if _HAS_FLEET else [])
 
 TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
@@ -1084,6 +1445,7 @@ TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
     'Bash': execute_bash,
     'Edit': execute_edit,
     'Write': execute_write,
+    'ToolCatalog': execute_tool_catalog,
     'RunProcess': execute_run_process,
     'ProcessStatus': execute_process_status,
     'ProcessLogs': execute_process_logs,
@@ -1104,6 +1466,8 @@ TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
     'Cron': execute_cron,
     'Skills': execute_skills,
     'ExecuteCode': execute_execute_code,
+    'PyKernel': execute_pykernel,
+    'Refine': execute_refine,
     'Clarify': execute_clarify,
     **(({'Browser': execute_browser} if _HAS_BROWSER else {})),
     **(({'Recall': execute_recall} if _HAS_RECALL else {})),
@@ -1114,43 +1478,94 @@ TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
 
 # ── Interactive approval ──────────────────────────────────────────────
 
-import threading
+APPROVAL_TIMEOUT_SECONDS = 60.0
+
+
+@dataclass
+class _PendingApproval:
+    event: threading.Event
+    approved: bool | None = None
+
 
 _approval_lock = threading.Lock()
-_approval_pending: dict | None = None
-_approval_event = threading.Event()
-_approval_result: bool = False
-_approval_callback = None  # set by the backend to emit events to the TUI
+_approval_pending: dict[str, _PendingApproval] = {}
+_approval_callback: Callable[[dict[str, Any]], None] | None = None
 
 
-def set_approval_callback(callback):
-    """Set the function that sends approval requests to the TUI.
-    
-    Called by the backend on startup. The callback receives:
-    (tool_name, params_summary, risk, reason) and should emit
-    an approval_request event to the frontend.
+def set_approval_callback(callback: Callable[[dict[str, Any]], None] | None) -> None:
+    """Set the backend event sink for interactive approval lifecycle events.
+
+    The callback receives complete ``approval_request`` and
+    ``approval_resolved`` event dictionaries. Request/response correlation is
+    always performed with ``approval_id``.
     """
     global _approval_callback
-    _approval_callback = callback
+    with _approval_lock:
+        _approval_callback = callback
 
 
-def respond_to_approval(approved: bool):
-    """Called by the backend when the user responds to an approval prompt."""
-    global _approval_result
-    _approval_result = approved
-    _approval_event.set()
+def respond_to_approval(
+    approval_id: str | bool,
+    approved: bool | None = None,
+) -> bool:
+    """Resolve exactly one pending approval request.
 
-
-def _request_interactive_approval(tool_name: str, params: dict, risk: str, reason: str, session_id: str) -> bool:
-    """Request approval from the user via the TUI.
-    
-    Blocks until the user responds (y/n) or times out after 60 seconds.
+    The one-argument boolean form is retained for compatibility with an older
+    TUI, but is accepted only when exactly one request is pending. It can never
+    cross-release concurrent requests.
     """
-    global _approval_pending, _approval_result
+    if approved is None and isinstance(approval_id, bool):
+        approved = approval_id
+        with _approval_lock:
+            if len(_approval_pending) != 1:
+                return False
+            target_id = next(iter(_approval_pending))
+    else:
+        target_id = str(approval_id or '').strip()
+        approved = bool(approved)
 
-    if not _approval_callback:
-        # No TUI connected — auto-approve (CLI mode)
-        return True
+    if not target_id:
+        return False
+
+    with _approval_lock:
+        pending = _approval_pending.get(target_id)
+        if pending is None:
+            return False
+        pending.approved = bool(approved)
+        pending.event.set()
+    return True
+
+
+def _approval_event_sink() -> Callable[[dict[str, Any]], None] | None:
+    with _approval_lock:
+        return _approval_callback
+
+
+def _emit_approval_lifecycle(event: dict[str, Any]) -> bool:
+    callback = _approval_event_sink()
+    if callback is None:
+        return False
+    callback(event)
+    return True
+
+
+def _request_interactive_approval(
+    tool_name: str,
+    params: dict,
+    risk: str,
+    reason: str,
+    ctx: ToolContext,
+    *,
+    timeout_seconds: float = APPROVAL_TIMEOUT_SECONDS,
+) -> tuple[bool, str]:
+    """Request a targeted approval and wait only for that request's response.
+
+    Returns ``(approved, resolution)`` where resolution is ``approved``,
+    ``denied``, ``timeout``, or ``unavailable``.
+    """
+    # Without an interactive response channel, a gated action must fail closed.
+    if _approval_event_sink() is None:
+        return False, 'unavailable'
 
     # Build a concise params summary
     summary_parts = []
@@ -1164,18 +1579,61 @@ def _request_interactive_approval(tool_name: str, params: dict, risk: str, reaso
         summary_parts.append(f'action: {params["action"]}')
     params_summary = ', '.join(summary_parts) if summary_parts else str(params)[:100]
 
-    _approval_event.clear()
-    _approval_result = False
+    approval_id = f'approval-{uuid.uuid4().hex}'
+    pending = _PendingApproval(event=threading.Event())
+    with _approval_lock:
+        _approval_pending[approval_id] = pending
 
-    # Send request to TUI
-    _approval_callback(tool_name, params_summary, risk, reason)
+    request_event = {
+        'type': 'approval_request',
+        'approval_id': approval_id,
+        'tool': tool_name,
+        'params': params_summary,
+        'risk': risk,
+        'reason': reason,
+        'session_id': ctx.agent_id or 'default',
+        'agent_id': ctx.agent_id or '',
+        'operation_id': ctx.operation_id or '',
+        'operation_domain': ctx.operation_domain or '',
+        'work_unit_id': ctx.work_unit_id or '',
+        'operation_role': ctx.operation_role or '',
+        'runtime_role': ctx.runtime_role or '',
+        'timeout_seconds': max(0.0, float(timeout_seconds)),
+    }
 
-    # Block until user responds or timeout
-    responded = _approval_event.wait(timeout=60)
-    if not responded:
-        return False  # timeout = deny
+    try:
+        if not _emit_approval_lifecycle(request_event):
+            with _approval_lock:
+                _approval_pending.pop(approval_id, None)
+            return False, 'unavailable'
+    except Exception as exc:
+        with _approval_lock:
+            _approval_pending.pop(approval_id, None)
+        _diag('tools', 'approval request callback failed; gated tool call denied', error=exc, tool=tool_name)
+        return False, 'unavailable'
 
-    return _approval_result
+    responded = pending.event.wait(timeout=max(0.0, float(timeout_seconds)))
+    with _approval_lock:
+        current = _approval_pending.pop(approval_id, None)
+        approved = bool(current.approved) if current is not None else False
+
+    resolution = 'approved' if responded and approved else 'denied' if responded else 'timeout'
+    try:
+        _emit_approval_lifecycle({
+            'type': 'approval_resolved',
+            'approval_id': approval_id,
+            'approved': approved if responded else False,
+            'resolution': resolution,
+            'tool': tool_name,
+            'session_id': ctx.agent_id or 'default',
+            'agent_id': ctx.agent_id or '',
+            'operation_id': ctx.operation_id or '',
+            'work_unit_id': ctx.work_unit_id or '',
+        })
+    except Exception as exc:
+        _diag('tools', 'approval resolution callback failed; TUI may retain a stale prompt', error=exc, approval_id=approval_id)
+
+    return approved if responded else False, resolution
 
 
 def _check_scope(name: str, params: dict, ctx: ToolContext) -> str | None:
@@ -1253,29 +1711,53 @@ def execute_tool(name: str, params: dict, ctx: ToolContext) -> ToolResult:
     if scope_error:
         return ToolResult(content=scope_error, is_error=True)
 
-    # Approval check (skip for shade agents — they have scope enforcement instead)
-    if not ctx.scope:  # not a shade
-        try:
-            from charon.infra.tool_approval import needs_approval, approve_tool_for_session
-            session_id = ctx.agent_id or 'default'
-            needs, risk, reason = needs_approval(name, params, session_id=session_id)
-            if needs and session_id != 'default':
-                needs2, _, _ = needs_approval(name, params, session_id='default')
-                if not needs2:
-                    needs = False
-            if needs:
-                # Ask for interactive approval via the pending approval mechanism
-                approved = _request_interactive_approval(name, params, risk, reason, session_id)
-                if not approved:
-                    return ToolResult(
-                        content=f'Blocked: {reason} (user denied)',
-                        is_error=True,
-                    )
-                # User approved — remember for this session
-                approve_tool_for_session(session_id, name)
-                approve_tool_for_session('default', name)
-        except ImportError:
-            pass
+    # Scoped shades retain their existing non-dangerous fast path, but scope is
+    # not a substitute for gating destructive shell actions (Bash cannot be
+    # reliably path-scoped).
+    try:
+        from charon.infra.tool_approval import needs_approval, approve_tool_for_session
+        session_id = ctx.agent_id or 'default'
+        needs, risk, reason = needs_approval(
+            name,
+            params,
+            session_id=session_id,
+            state_dir=ctx.state_dir,
+            operation_domain=ctx.operation_domain,
+        )
+        if ctx.scope and risk != 'dangerous':
+            needs = False
+        if needs and session_id != 'default':
+            needs2, _, _ = needs_approval(
+                name,
+                params,
+                session_id='default',
+                state_dir=ctx.state_dir,
+                operation_domain=ctx.operation_domain,
+            )
+            if not needs2:
+                needs = False
+        if needs:
+            approved, resolution = _request_interactive_approval(
+                name,
+                params,
+                risk,
+                reason,
+                ctx,
+            )
+            if not approved:
+                suffix = {
+                    'timeout': 'approval timed out',
+                    'unavailable': 'approval unavailable',
+                }.get(resolution, 'user denied')
+                return ToolResult(
+                    content=f'Blocked: {reason} ({suffix})',
+                    is_error=True,
+                )
+            # User approved — remember for this session
+            approve_tool_for_session(session_id, name)
+            approve_tool_for_session('default', name)
+    except ImportError:
+        pass
 
     executor = TOOL_EXECUTORS.get(name)
     if executor:

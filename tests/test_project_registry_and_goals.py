@@ -1,4 +1,5 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 from charon.infra import project_registry
 from charon.agents import goal_runtime
@@ -17,6 +18,30 @@ def test_project_registry_reuses_same_root(tmp_path):
     assert p1['id'] == p2['id']
     reg = project_registry.load_registry(state_dir)
     assert reg['root_map'][str(project_root.resolve())] == p1['id']
+
+
+def test_project_registry_concurrent_ensure_reuses_one_id(tmp_path):
+    state_dir = tmp_path / 'state'
+    project_root = tmp_path / 'repo'
+    project_root.mkdir(parents=True)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        projects = list(pool.map(
+            lambda _index: project_registry.ensure_project(
+                state_dir,
+                project_root,
+            ),
+            range(24),
+        ))
+
+    project_ids = {project['id'] for project in projects}
+    registry = project_registry.load_registry(state_dir)
+    assert len(project_ids) == 1
+    assert registry['root_map'][str(project_root.resolve())] in project_ids
+    assert {
+        project['id'] for project in registry['projects']
+        if str(project_root.resolve()) in project.get('roots', [])
+    } == project_ids
 
 
 def test_goals_live_under_canonical_project_dir(tmp_path):

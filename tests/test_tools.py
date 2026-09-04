@@ -1,5 +1,7 @@
 """Tests for Charon agent tools."""
 
+import pytest
+
 from charon.tools import (
     execute_read, execute_write, execute_edit, execute_bash,
     execute_tool, ToolContext, truncate_output,
@@ -65,6 +67,46 @@ class TestReadTool:
         result = execute_read({'path': str(f)}, _ctx(tmp_path))
         assert not result.is_error
         assert 'absolute content' in result.content
+
+
+class TestReadOfficeDocs:
+    def test_read_xlsx(self, tmp_path):
+        openpyxl = pytest.importorskip('openpyxl')
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = 'Sales'
+        ws.append(['City', 'Revenue'])
+        ws.append(['Oslo', 1234.0])
+        wb.save(tmp_path / 'book.xlsx')
+        result = execute_read({'path': 'book.xlsx'}, _ctx(tmp_path))
+        assert not result.is_error
+        assert 'Sheet: Sales' in result.content
+        assert 'Oslo\t1234' in result.content
+
+    def test_read_docx(self, tmp_path):
+        docx = pytest.importorskip('docx')
+        d = docx.Document()
+        d.add_paragraph('Hello docx paragraph.')
+        d.save(tmp_path / 'doc.docx')
+        result = execute_read({'path': 'doc.docx'}, _ctx(tmp_path))
+        assert not result.is_error
+        assert 'Hello docx paragraph.' in result.content
+
+    def test_read_pptx(self, tmp_path):
+        pptx = pytest.importorskip('pptx')
+        p = pptx.Presentation()
+        slide = p.slides.add_slide(p.slide_layouts[1])
+        slide.shapes.title.text = 'Deck title'
+        p.save(tmp_path / 'deck.pptx')
+        result = execute_read({'path': 'deck.pptx'}, _ctx(tmp_path))
+        assert not result.is_error
+        assert 'Deck title' in result.content
+
+    def test_legacy_format_rejected(self, tmp_path):
+        (tmp_path / 'old.xls').write_bytes(b'\xd0\xcf\x11\xe0junk')
+        result = execute_read({'path': 'old.xls'}, _ctx(tmp_path))
+        assert result.is_error
+        assert 'Legacy format' in result.content
 
 
 class TestWriteTool:

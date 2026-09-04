@@ -17,6 +17,8 @@ from typing import Any, AsyncIterator
 import httpx
 
 from charon.providers import Message, ModelInfo, StreamDelta, ToolCall
+from charon.providers.http_client import AsyncClientPool
+from charon.providers.http_errors import exception_error, http_error
 
 try:
     from charon.infra.diagnostics import record as _diag
@@ -43,6 +45,11 @@ class HttpxAnthropicProvider:
         self._token_expires: float = time.time() + 28800 - 300 if self._api_key else 0
         # Path to save updated tokens (so refresh tokens aren't lost)
         self._auth_store_path = auth_store_path
+        self._clients = AsyncClientPool(timeout=self._timeout)
+        self.last_request_metrics: dict[str, Any] = {}
+
+    async def aclose(self) -> None:
+        await self._clients.aclose()
 
     def _save_tokens(self):
         """Persist updated tokens after refresh. Critical because refresh tokens are single-use.
@@ -138,24 +145,24 @@ class HttpxAnthropicProvider:
     async def _do_refresh(self):
         """Actually call Anthropic's token endpoint to refresh."""
         try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(ANTHROPIC_TOKEN_URL, json={
-                    'grant_type': 'refresh_token',
-                    'client_id': ANTHROPIC_CLIENT_ID,
-                    'refresh_token': self._refresh_token,
-                }, headers={'Accept': 'application/json'}, timeout=30.0)
+            client, _ = await self._clients.get()
+            resp = await client.post(ANTHROPIC_TOKEN_URL, json={
+                'grant_type': 'refresh_token',
+                'client_id': ANTHROPIC_CLIENT_ID,
+                'refresh_token': self._refresh_token,
+            }, headers={'Accept': 'application/json'}, timeout=30.0)
 
-                if resp.status_code == 200:
-                    data = resp.json()
-                    self._api_key = data.get('access_token', self._api_key)
-                    if data.get('refresh_token'):
-                        self._refresh_token = data['refresh_token']
-                    expires_in = data.get('expires_in', 3600)
-                    self._token_expires = time.time() + expires_in - 300
-                    self._save_tokens()
-                else:
-                    _diag('httpx_anthropic', 'OAuth token refresh rejected',
-                          status=resp.status_code, body=resp.text[:200])
+            if resp.status_code == 200:
+                data = resp.json()
+                self._api_key = data.get('access_token', self._api_key)
+                if data.get('refresh_token'):
+                    self._refresh_token = data['refresh_token']
+                expires_in = data.get('expires_in', 3600)
+                self._token_expires = time.time() + expires_in - 300
+                self._save_tokens()
+            else:
+                _diag('httpx_anthropic', 'OAuth token refresh rejected',
+                      status=resp.status_code, body=resp.text[:200])
         except Exception as e:
             _diag('httpx_anthropic', 'OAuth token refresh raised', error=e)
 
@@ -222,7 +229,13 @@ class HttpxAnthropicProvider:
             headers['x-api-key'] = self._api_key
 
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            client, reused = await self._clients.get()
+            self.last_request_metrics = {
+                'request_json_bytes': len(json.dumps(body, separators=(',', ':')).encode('utf-8')),
+                'transport_reused': reused,
+                'transport': 'http',
+            }
+            if client is not None:
                 async with client.stream('POST', ANTHROPIC_API_URL, json=body, headers=headers) as response:
                     if response.status_code != 200:
                         error_body = await response.aread()
@@ -237,14 +250,24 @@ class HttpxAnthropicProvider:
                             # Token rejected — re-read from disk (another process may have refreshed)
                             self._token_expires = 0
                             await self._refresh_if_needed()
-                            yield StreamDelta(type='error', error='Token refreshed, retrying...')
+                            yield StreamDelta(
+                                type='error',
+                                error='Token refreshed; request can be retried.',
+                                error_code='token_refreshed',
+                                retryable=True,
+                            )
                             return
-                        elif response.status_code in (502, 503, 429):
+                        else:
                             if '<html' in error_text.lower():
                                 import re
                                 title_match = re.search(r'<title>(.*?)</title>', error_text, re.IGNORECASE)
                                 error_text = title_match.group(1) if title_match else f'HTTP {response.status_code}'
-                            yield StreamDelta(type='error', error=f'Anthropic HTTP {response.status_code}: {error_text[:200]}')
+                            yield http_error(
+                                error_text[:200],
+                                status_code=response.status_code,
+                                headers=response.headers,
+                                prefix='Anthropic HTTP',
+                            )
                         return
 
                     current_tool: dict[str, Any] | None = None
@@ -321,11 +344,15 @@ class HttpxAnthropicProvider:
                     }))
 
         except httpx.ConnectError as e:
-            yield StreamDelta(type='error', error=f'Connection failed to Anthropic API: {e}')
-        except httpx.TimeoutException:
-            yield StreamDelta(type='error', error=f'Request timed out after {self._timeout}s')
+            delta = exception_error(e, prefix='Anthropic')
+            delta.error = f'Connection failed to Anthropic API: {e}'
+            yield delta
+        except httpx.TimeoutException as e:
+            delta = exception_error(e, prefix='Anthropic')
+            delta.error = f'Request timed out after {self._timeout}s'
+            yield delta
         except Exception as e:
-            yield StreamDelta(type='error', error=f'Anthropic error: {e}')
+            yield exception_error(e, prefix='Anthropic')
 
 
 def _convert_messages(messages: list[Message]) -> list[dict]:

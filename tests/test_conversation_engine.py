@@ -293,6 +293,64 @@ class TestEngineToolUse:
         assert engine.messages[3].role == 'assistant'
 
 
+class TestToolProtocolRepair:
+    def test_orphan_outputs_are_dropped_and_missing_outputs_are_filled(self):
+        calls = [
+            ToolCall(id='tc-answered', name='Read', arguments={'path': 'a'}),
+            ToolCall(id='tc-missing', name='Read', arguments={'path': 'b'}),
+        ]
+        messages = [
+            Message(role='user', content='summary replacing an earlier call'),
+            Message(
+                role='tool_result',
+                content='orphaned by compaction',
+                tool_call_id='tc-orphan',
+                tool_name='Read',
+            ),
+            Message(role='assistant', content='', tool_calls=calls),
+            Message(
+                role='tool_result',
+                content='valid result',
+                tool_call_id='tc-answered',
+                tool_name='Read',
+            ),
+            Message(
+                role='tool_result',
+                content='duplicate result',
+                tool_call_id='tc-answered',
+                tool_name='Read',
+            ),
+        ]
+
+        repaired = ConversationEngine._repair_orphaned_tool_calls(messages)
+        results = [m for m in repaired if m.role == 'tool_result']
+
+        assert {m.tool_call_id for m in results} == {
+            'tc-answered', 'tc-missing',
+        }
+        assert not any(m.tool_call_id == 'tc-orphan' for m in results)
+        assert sum(m.tool_call_id == 'tc-answered' for m in results) == 1
+        synthetic = next(m for m in results if m.tool_call_id == 'tc-missing')
+        assert synthetic.is_error is True
+        assert 'interrupted' in synthetic.content
+
+    def test_compacted_orphan_only_context_remains_usable(self):
+        messages = [
+            Message(role='user', content='<summary>earlier tool batch</summary>'),
+            Message(
+                role='tool_result',
+                content='result whose call was summarized',
+                tool_call_id='tc-orphan',
+                tool_name='Read',
+            ),
+            Message(role='user', content='continue'),
+        ]
+
+        repaired = ConversationEngine._repair_orphaned_tool_calls(messages)
+
+        assert [message.role for message in repaired] == ['user', 'user']
+
+
 # ============================================================================
 # Engine - abort
 # ============================================================================

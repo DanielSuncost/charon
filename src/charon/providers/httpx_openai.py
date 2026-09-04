@@ -80,6 +80,8 @@ def _drain_think_buffer(text_buffer: str, in_think_block: bool) -> tuple[list[St
 import httpx  # noqa: E402 — deliberate layout: pure helpers above, deps below
 
 from charon.providers import Message, ModelInfo, StreamDelta, ToolCall  # noqa: E402
+from charon.providers.http_client import AsyncClientPool  # noqa: E402
+from charon.providers.http_errors import exception_error, http_error  # noqa: E402
 
 
 class HttpxOpenAIProvider:
@@ -97,6 +99,11 @@ class HttpxOpenAIProvider:
         # Optional httpx handler for tests; when set, requests are served by
         # an in-process MockTransport instead of a real network connection.
         self._mock_handler = None
+        self._clients = AsyncClientPool(timeout=self._timeout)
+        self.last_request_metrics: dict[str, Any] = {}
+
+    async def aclose(self) -> None:
+        await self._clients.aclose()
 
     async def stream(
         self,
@@ -126,6 +133,10 @@ class HttpxOpenAIProvider:
             if openai_tools:
                 body['tools'] = openai_tools
 
+        if thinking_level != 'off':
+            effort_map = {'minimal': 'low', 'low': 'low', 'medium': 'medium', 'high': 'high', 'xhigh': 'high'}
+            body['reasoning_effort'] = effort_map.get(str(thinking_level).strip().lower(), 'medium')
+
         headers = {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {self._api_key}',
@@ -133,13 +144,20 @@ class HttpxOpenAIProvider:
 
         url = f'{self._base_url}/chat/completions'
 
-        client_kwargs: dict[str, Any] = {'timeout': self._timeout}
-        if self._mock_handler is not None:
-            client_kwargs['transport'] = httpx.MockTransport(self._mock_handler)
+        transport = (
+            httpx.MockTransport(self._mock_handler)
+            if self._mock_handler is not None
+            else None
+        )
 
         try:
-            async with httpx.AsyncClient(**client_kwargs) as client:
-                async with client.stream(
+            client, reused = await self._clients.get(transport=transport)
+            self.last_request_metrics = {
+                'request_json_bytes': len(json.dumps(body, separators=(',', ':')).encode('utf-8')),
+                'transport_reused': reused,
+                'transport': 'http2' if getattr(client, 'http2', False) else 'http',
+            }
+            async with client.stream(
                     'POST', url,
                     json=body,
                     headers=headers,
@@ -156,9 +174,10 @@ class HttpxOpenAIProvider:
                                 import re
                                 title_match = re.search(r'<title>(.*?)</title>', error_text, re.IGNORECASE)
                                 error_text = title_match.group(1) if title_match else f'HTTP {response.status_code}'
-                        yield StreamDelta(
-                            type='error',
-                            error=f'HTTP {response.status_code}: {error_text[:200]}',
+                        yield http_error(
+                            error_text[:200],
+                            status_code=response.status_code,
+                            headers=response.headers,
                         )
                         return
 
@@ -272,17 +291,15 @@ class HttpxOpenAIProvider:
                     )
 
         except httpx.ConnectError as e:
-            yield StreamDelta(
-                type='error',
-                error=f'Connection failed to {self._base_url}: {e}. Is LM Studio / Ollama running?',
-            )
-        except httpx.TimeoutException:
-            yield StreamDelta(
-                type='error',
-                error=f'Request timed out after {self._timeout}s',
-            )
+            delta = exception_error(e, prefix='Connection')
+            delta.error = f'Connection failed to {self._base_url}: {e}. Is LM Studio / Ollama running?'
+            yield delta
+        except httpx.TimeoutException as e:
+            delta = exception_error(e, prefix='Request')
+            delta.error = f'Request timed out after {self._timeout}s'
+            yield delta
         except Exception as e:
-            yield StreamDelta(type='error', error=f'Provider error: {e}')
+            yield exception_error(e)
 
 
 def _convert_messages(messages: list[Message]) -> list[dict[str, Any]]:

@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Callable
 
 from charon.conversation.conversation_participants import ConversationParticipantSpec, get_conversation_adapter
+from charon.infra.queue_io import (
+    enqueue_unique_atomic,
+    load_queue_atomic,
+    merge_queue_atomic,
+)
 
 import uuid
 from datetime import datetime, timezone
@@ -57,21 +62,15 @@ def _queue_path(state_dir: Path) -> Path:
 
 
 def _load_queue(state_dir: Path) -> list[dict]:
-    path = _queue_path(state_dir)
-    if not path.exists():
-        return []
     try:
-        data = json.loads(path.read_text(encoding='utf-8'))
-        return data if isinstance(data, list) else []
+        return load_queue_atomic(_queue_path(state_dir))
     except Exception as e:
         _diag('conversation_runtime', 'queue.json unreadable or corrupt; treating queue as empty', error=e)
         return []
 
 
 def _save_queue(state_dir: Path, queue: list[dict]) -> None:
-    path = _queue_path(state_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(queue, indent=2, ensure_ascii=False), encoding='utf-8')
+    merge_queue_atomic(_queue_path(state_dir), queue)
 
 
 def load_queue(state_dir: Path) -> list[dict]:
@@ -83,10 +82,12 @@ def save_queue(state_dir: Path, queue: list[dict]) -> None:
 
 
 def _enqueue_task(state_dir: Path, task: dict) -> dict:
-    queue = _load_queue(state_dir)
-    queue.append(task)
-    _save_queue(state_dir, queue)
-    if _use_store():
+    task, created = enqueue_unique_atomic(
+        _queue_path(state_dir),
+        task,
+        correlation_id=str(task.get('correlation_id') or task.get('id') or ''),
+    )
+    if created and _use_store():
         try:
             _db_task_insert(_get_db(state_dir), dict(task))
         except Exception as e:
@@ -108,6 +109,8 @@ def enqueue_agent_task(
     interval_minutes: float | None = None,
     not_before: str | None = None,
     max_attempts: int = 3,
+    model_route: dict | None = None,
+    routing_decision: dict | None = None,
 ) -> dict:
     now = _utc_now_iso()
     instruction_text = str(instruction or '').strip()
@@ -144,6 +147,10 @@ def enqueue_agent_task(
         task['interval_minutes'] = float(interval_minutes)
     if not_before:
         task['not_before'] = str(not_before)
+    if model_route:
+        task['model_route'] = dict(model_route)
+    if routing_decision:
+        task['routing_decision'] = dict(routing_decision)
     return _enqueue_task(state_dir, task)
 
 

@@ -267,6 +267,35 @@ def execute_research(params: dict, ctx: ToolContext) -> ToolResult:
     if not state_dir:
         return ToolResult(content='Error: state_dir not available.', is_error=True)
 
+    # Background research agents produce evidence; the durable controller owns
+    # lifecycle transitions.  Without this boundary a scouting coordinator can
+    # race the controller, create extra topics, or mark an empty operation as
+    # delivered while researchers and judges are still running.
+    if ctx.operation_domain == 'research' and ctx.runtime_role == 'background_agent':
+        controller_only = {
+            'spawn_coordinator',
+            'spawn_researcher',
+            'spawn_judge',
+            'finalize_delivery',
+            'finalize_operation_selection',
+        }
+        if action in controller_only:
+            return ToolResult(
+                content=(
+                    f'Blocked: {action} is owned by the durable research controller. '
+                    'Save your role-specific artifacts and let the controller advance the operation.'
+                ),
+                is_error=True,
+            )
+        if ctx.operation_role == 'coordinator' and action == 'init_topic':
+            return ToolResult(
+                content=(
+                    'Blocked: durable research coordinators save candidate topics only. '
+                    'The controller selects and initializes topics after scouting.'
+                ),
+                is_error=True,
+            )
+
     try:
         from charon.libris.libris_runtime import (
             ensure_project_metadata,
@@ -459,8 +488,8 @@ def execute_research(params: dict, ctx: ToolContext) -> ToolResult:
                 prompt = str(existing.get('prompt') or '').strip()
             if not prompt:
                 return ToolResult(content='Error: prompt is required (or provide operation_id for an existing operation with a stored prompt).', is_error=True)
-            from charon.libris.libris_agents import start_autonomous_libris_research
-            res = start_autonomous_libris_research(
+            from charon.libris.libris_durable import start_durable_libris_research
+            res = start_durable_libris_research(
                 state_dir,
                 ctx.project_root,
                 prompt=prompt,
@@ -475,7 +504,8 @@ def execute_research(params: dict, ctx: ToolContext) -> ToolResult:
                     f'Libris autonomous research started.\n'
                     f'Operation: {op.get("operation_id")}\n'
                     f'Status: {op.get("status")}\n'
-                    f'Coordinator: {coord.get("id")} ({coord.get("name")})'
+                    f'Coordinator: {coord.get("id")} ({coord.get("name")})\n'
+                    f'Durable continuation: {res.get("durable_op_id")}'
                 ),
                 details=res,
             )
@@ -643,8 +673,13 @@ def execute_research(params: dict, ctx: ToolContext) -> ToolResult:
                 content=(
                     f'Topic: {topic.get("title")}\n'
                     f'Status: {topic.get("status")}\n'
+                    f'Draft report: {topic.get("draft_report_path") or "(none)"}\n'
                     f'Checkpoints: {topic.get("checkpoint_count", 0)}\n'
-                    f'Best checkpoint: {topic.get("best_checkpoint_id") or "(none)"}'
+                    f'Best checkpoint: {topic.get("best_checkpoint_id") or "(none)"}\n'
+                    f'Latest checkpoint report: '
+                    f'{(topic.get("latest_checkpoint") or {}).get("report_path") or "(none)"}\n'
+                    f'Latest checkpoint critique: '
+                    f'{(topic.get("latest_checkpoint") or {}).get("critique_path") or "(none)"}'
                 ),
                 details=topic,
             )
@@ -877,6 +912,15 @@ def execute_research(params: dict, ctx: ToolContext) -> ToolResult:
             res = finalize_operation_selection(state_dir, ctx.project_root, op_id)
             if not res:
                 return ToolResult(content=f'No operation found: {op_id}', is_error=True)
+            if not res.get('ready'):
+                return ToolResult(
+                    content=(
+                        f'Operation {op_id} was not finalized: '
+                        f'{res.get("reason") or "delivery preflight did not pass"}'
+                    ),
+                    is_error=True,
+                    details=res,
+                )
             lines = [f'Finalized operation selection for {op_id}:']
             for item in res.get('selections') or []:
                 lines.append(f'- {item.get("topic_slug")}: {item.get("checkpoint_id")} score={item.get("score")}')

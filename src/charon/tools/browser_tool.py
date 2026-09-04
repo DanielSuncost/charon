@@ -28,29 +28,54 @@ except Exception:  # diagnostics is best-effort and must never block import
 _loop: asyncio.AbstractEventLoop | None = None
 _thread: threading.Thread | None = None
 _ready = threading.Event()
+_thread_start_lock = threading.Lock()
 
 
 def _browser_thread_main():
     global _loop
     _loop = asyncio.new_event_loop()
     asyncio.set_event_loop(_loop)
-    _ready.set()
+    # Signal readiness from inside the running loop.  Setting the event before
+    # run_forever() leaves a small window where callers can submit work to a
+    # loop that has not started yet.
+    _loop.call_soon(_ready.set)
     _loop.run_forever()
 
 
-def _ensure_thread():
-    global _thread
-    if _thread is not None and _thread.is_alive():
-        return
-    _ready.clear()
-    _thread = threading.Thread(target=_browser_thread_main, daemon=True)
-    _thread.start()
-    _ready.wait(timeout=5)
+def _ensure_thread() -> asyncio.AbstractEventLoop:
+    global _loop, _thread
+
+    # Multiple agents may invoke Browser at the same time.  Serialize only
+    # thread creation; every caller still waits for the same readiness event.
+    # Previously, a second caller could observe an alive thread and return
+    # while `_loop` was still None, abandoning its newly-created coroutine.
+    with _thread_start_lock:
+        if _thread is None or not _thread.is_alive():
+            _ready.clear()
+            _loop = None
+            _thread = threading.Thread(target=_browser_thread_main, daemon=True)
+            _thread.start()
+
+    if not _ready.wait(timeout=5):
+        raise RuntimeError('Browser event loop did not start within 5 seconds.')
+
+    loop = _loop
+    if loop is None or loop.is_closed() or not loop.is_running():
+        raise RuntimeError('Browser event loop is unavailable.')
+    return loop
 
 
 def _run(coro, timeout: int = 30):
-    _ensure_thread()
-    future = asyncio.run_coroutine_threadsafe(coro, _loop)
+    try:
+        loop = _ensure_thread()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+    except BaseException:
+        # If startup/submission fails, the loop never owns this coroutine.
+        # Close it explicitly so Python does not emit "was never awaited".
+        close = getattr(coro, 'close', None)
+        if callable(close):
+            close()
+        raise
     return future.result(timeout=timeout)
 
 

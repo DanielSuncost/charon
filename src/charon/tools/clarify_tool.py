@@ -30,6 +30,10 @@ CLARIFY_TOOL_DEF = {
             'choices': {'type': 'array', 'items': {'type': 'string'}},
             'clarification_id': {'type': 'string'},
             'answer': {'type': 'string'},
+            # Internal callers may attach a durable continuation target. Keeping
+            # this in the clarification record is what turns an answer from a
+            # passive note into an actionable resume signal.
+            'metadata': {'type': 'object'},
         },
         'required': ['action'],
     },
@@ -86,6 +90,7 @@ def execute_clarify(params: dict, ctx: ToolContext) -> ToolResult:
                 'status': 'pending',
                 'asked_by_agent_id': ctx.agent_id,
                 'answer': '',
+                'metadata': dict(params.get('metadata') or {}),
                 'created_at': _now_iso(),
                 'updated_at': _now_iso(),
             }
@@ -99,7 +104,7 @@ def execute_clarify(params: dict, ctx: ToolContext) -> ToolResult:
             return ToolResult(content='\n'.join(lines), details=row)
 
         if action == 'list':
-            pending = [r for r in items if r.get('status') == 'pending']
+            pending = [r for r in items if r.get('status') in ('pending', 'applying', 'failed')]
             if not pending:
                 return ToolResult(content='No pending clarifications.', details={'items': []})
             lines = [f'Pending clarifications ({len(pending)}):']
@@ -141,6 +146,68 @@ def execute_clarify(params: dict, ctx: ToolContext) -> ToolResult:
                             ),
                             details=r,
                         )
+
+                    # Libris clarifications carry an explicit continuation target.
+                    # Resume synchronously so the caller can report a verified
+                    # outcome instead of merely saying that the answer was stored.
+                    meta = dict(r.get('metadata') or {})
+                    if not meta:
+                        try:
+                            from charon.libris.libris_durable import discover_libris_clarification
+                            meta = discover_libris_clarification(state_dir, cid)
+                            if meta:
+                                r['metadata'] = meta
+                                _save(state_dir, data)
+                        except Exception as exc:
+                            _diag('clarify_tool', 'legacy clarification continuation discovery failed', error=exc, clarification_id=cid)
+                    if meta.get('continuation') == 'libris':
+                        # Keep interrupted/failed applications visible in the
+                        # clarification inbox instead of silently consuming them.
+                        r['status'] = 'applying'
+                        _save(state_dir, data)
+                        try:
+                            from charon.libris.libris_durable import resume_libris_clarification
+                            resumed = resume_libris_clarification(
+                                state_dir,
+                                clarification_id=cid,
+                                answer=ans,
+                                metadata=meta,
+                            )
+                            r['applied_at'] = _now_iso()
+                            r['applied_result'] = resumed
+                            if resumed.get('resumed'):
+                                r['status'] = 'answered'
+                                r.pop('apply_error', None)
+                            else:
+                                r['status'] = 'failed'
+                                r['apply_error'] = str(resumed.get('error') or 'Libris continuation was not resumed')
+                            _save(state_dir, data)
+                            if resumed.get('resumed'):
+                                return ToolResult(
+                                    content=(
+                                        f'Clarification answered: {cid}. Libris resumed operation '
+                                        f'{resumed.get("operation_id")} (status: {resumed.get("status")}).'
+                                    ),
+                                    details=r,
+                                )
+                            return ToolResult(
+                                content=(
+                                    f'Clarification answered: {cid}, but Libris FAILED to resume: '
+                                    f'{r["apply_error"]}'
+                                ),
+                                details=r,
+                                is_error=True,
+                            )
+                        except Exception as exc:
+                            r['status'] = 'failed'
+                            r['apply_error'] = str(exc)
+                            _save(state_dir, data)
+                            _diag('clarify_tool', 'Libris resume failed after clarification answer', error=exc, clarification_id=cid)
+                            return ToolResult(
+                                content=f'Clarification answered: {cid}, but Libris FAILED to resume: {exc}',
+                                details=r,
+                                is_error=True,
+                            )
                     return ToolResult(content=f'Clarification answered: {cid}', details=r)
             return ToolResult(content=f'Clarification not found: {cid}', is_error=True)
 

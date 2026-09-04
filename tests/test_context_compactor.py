@@ -11,7 +11,7 @@ from charon.context.context_compactor import (
     ContextCompactor, CompactionConfig, _build_leaf_prompt, _build_d1_prompt, _build_d2_prompt,
     _build_d3plus_prompt, _deterministic_fallback,
 )
-from charon.providers import Message, ModelInfo, StreamDelta
+from charon.providers import Message, ModelInfo, StreamDelta, ToolCall
 
 
 # ── Fixtures ────────────────────────────────────────────────────────
@@ -270,6 +270,60 @@ class TestLeafPass:
         # All source messages should still exist
         msgs = ContextStore.get_messages_by_ids(db, summary.source_message_ids)
         assert len(msgs) == len(summary.source_message_ids)
+
+    def test_parallel_tool_batch_is_compacted_as_one_protocol_unit(
+        self, db, model,
+    ):
+        config = CompactionConfig(
+            fresh_tail_count=1,
+            leaf_chunk_tokens=100,
+            leaf_min_fanout=2,
+            condensed_min_fanout=2,
+            summarizer_timeout=5.0,
+        )
+        compactor = ContextCompactor(config)
+        calls = [
+            ToolCall(id=f'tc-{index}', name='Read', arguments={'path': f'{index}.txt'})
+            for index in range(3)
+        ]
+        call_message_id = ContextStore.persist_message(
+            db, 'agent-tools',
+            Message(role='assistant', content='', tool_calls=calls),
+        )
+        result_ids = [
+            ContextStore.persist_message(
+                db, 'agent-tools',
+                Message(
+                    role='tool_result',
+                    content=f'result-{index} ' + 'x' * 400,
+                    tool_call_id=f'tc-{index}',
+                    tool_name='Read',
+                ),
+            )
+            for index in range(3)
+        ]
+        tail_id = ContextStore.persist_message(
+            db, 'agent-tools', Message(role='user', content='continue'),
+        )
+
+        result = asyncio.run(compactor.compact_leaf(
+            db, 'agent-tools', provider=FakeProvider('Summary.'), model=model,
+        ))
+
+        assert result.action_taken
+        summary = ContextStore.get_summary(db, result.created_summary_id)
+        assert set(summary.source_message_ids) == {
+            call_message_id,
+            *result_ids,
+        }
+        assert tail_id not in summary.source_message_ids
+
+        window_message_ids = {
+            item.message_id
+            for item in ContextStore.get_context_window(db, 'agent-tools')
+            if item.item_type == 'message'
+        }
+        assert not set(result_ids) & window_message_ids
 
 
 class TestFallbackEscalation:
