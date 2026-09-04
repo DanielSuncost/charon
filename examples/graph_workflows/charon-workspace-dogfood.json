@@ -1,0 +1,577 @@
+{
+  "schema_version": 1,
+  "graph_id": "charon-workspace-dogfood",
+  "title": "Build Charon Workspace through Charon",
+  "entry_nodes": [
+    "charter_gate"
+  ],
+  "max_node_visits": 4,
+  "max_run_steps": 96,
+  "metadata": {
+    "version": "1.0.0",
+    "status": "operator_template",
+    "description": "A durable, bounded, multi-agent workflow for implementing the Charon Workspace proposal through the existing graph runtime.",
+    "proposal": "docs/proposals/charon-workspace.md",
+    "contract": "docs/contracts/workspace.schema.json",
+    "work_item_id": "work.workspace.increment0",
+    "binding_requirements": {
+      "replace_owner_agent_ids": [
+        "AG-WORKSPACE-INVENTORY",
+        "AG-WORKSPACE-CONTRACT",
+        "AG-WORKSPACE-CONTEXT",
+        "AG-WORKSPACE-COORDINATION",
+        "AG-WORKSPACE-SYNC",
+        "AG-WORKSPACE-INTEGRATION",
+        "AG-WORKSPACE-VERIFICATION",
+        "AG-WORKSPACE-REPAIR"
+      ],
+      "create_work_item": "work.workspace.increment0",
+      "approval_routes": [
+        "proceed",
+        "decline",
+        "accept",
+        "repair"
+      ]
+    },
+    "acceptance_contract": [
+      "The checked-in contract validates the example bundle.",
+      "Durable record and event writes survive restart and idempotent replay.",
+      "Context manifests are deterministic for identical inputs.",
+      "Overlapping exclusive write scopes are rejected and stale fencing tokens cannot integrate.",
+      "Completed work items require linked evidence.",
+      "Existing graph, queue, context, memory, session, and fleet tests remain green."
+    ]
+  },
+  "nodes": [
+    {
+      "id": "charter_gate",
+      "title": "Approve implementation charter",
+      "handler": "human_gate",
+      "join": "any",
+      "max_attempts": 1,
+      "config": {
+        "prompt": "Review the Charon Workspace RFC, contract, owner bindings, scopes, and acceptance criteria. Resume with route=proceed or route=decline.",
+        "resume_key": "charon-workspace-charter",
+        "default_route": "decline"
+      },
+      "metadata": {
+        "type": "approval",
+        "description": "Prevents dispatch until the operator confirms scope and active agent bindings.",
+        "position": {
+          "x": 80,
+          "y": 360
+        }
+      }
+    },
+    {
+      "id": "inventory",
+      "title": "Inventory current implementation seams",
+      "handler": "queue_agent",
+      "join": "any",
+      "config": {
+        "owner_agent_id": "AG-WORKSPACE-INVENTORY",
+        "title": "Workspace implementation inventory",
+        "instruction": "Read the accepted Charon Workspace RFC and inspect the current project registry, memory, context, graph, queue, session, fleet, approval, and persistence implementations. Produce docs/plans/charon-workspace-inventory.md with exact reuse seams, state authorities, migration risks, and a contract-to-module traceability table. Do not modify runtime code. Preserve unrelated user changes. Return the artifact path and validation evidence.",
+        "project": ".",
+        "priority": "high",
+        "scope": [
+          "docs/plans/charon-workspace-inventory.md"
+        ],
+        "max_attempts": 2,
+        "poll_delay_sec": 1.0
+      },
+      "metadata": {
+        "type": "analysis",
+        "work_item_id": "work.workspace.increment0",
+        "write_scope": [
+          "docs/plans/charon-workspace-inventory.md"
+        ],
+        "required_evidence": [
+          "traceability table",
+          "state-authority map",
+          "identified migration hazards"
+        ],
+        "position": {
+          "x": 360,
+          "y": 360
+        }
+      }
+    },
+    {
+      "id": "contract_stream",
+      "title": "Implement records and local store",
+      "handler": "queue_agent",
+      "join": "any",
+      "config": {
+        "owner_agent_id": "AG-WORKSPACE-CONTRACT",
+        "title": "Workspace contract and store",
+        "instruction": "Implement Increment 0 canonical record validation, workspace identity, revisions, local transactional storage, append-only replica events, hash-chain verification, and bundle import/export. Treat docs/contracts/workspace.schema.json as the wire contract. Add focused tests. Do not change knowledge retrieval, leases, or remote sync modules owned by other workstreams. Preserve unrelated user changes and return changed paths, tests, risks, and evidence.",
+        "project": ".",
+        "priority": "high",
+        "scope": [
+          "src/charon/workspace/models.py",
+          "src/charon/workspace/store.py",
+          "src/charon/workspace/events.py",
+          "src/charon/workspace/__init__.py",
+          "tests/test_workspace_models.py",
+          "tests/test_workspace_store.py"
+        ],
+        "max_attempts": 3,
+        "poll_delay_sec": 1.0
+      },
+      "metadata": {
+        "type": "implementation",
+        "work_item_id": "work.workspace.increment0",
+        "lease_mode": "exclusive",
+        "write_scope": [
+          "src/charon/workspace/models.py",
+          "src/charon/workspace/store.py",
+          "src/charon/workspace/events.py",
+          "src/charon/workspace/__init__.py",
+          "tests/test_workspace_models.py",
+          "tests/test_workspace_store.py"
+        ],
+        "required_evidence": [
+          "contract validation tests",
+          "restart recovery test",
+          "idempotent replay test",
+          "event-chain corruption test"
+        ],
+        "position": {
+          "x": 690,
+          "y": 90
+        }
+      }
+    },
+    {
+      "id": "context_stream",
+      "title": "Implement knowledge and context",
+      "handler": "queue_agent",
+      "join": "any",
+      "config": {
+        "owner_agent_id": "AG-WORKSPACE-CONTEXT",
+        "title": "Workspace knowledge and context",
+        "instruction": "Implement the observation and knowledge lifecycle plus a deterministic context-manifest compiler behind the accepted record interfaces. Include provenance, validity time, stale and contested states, candidate explanations, exclusions, budget packing, and manifest digests. Integrate through adapters without replacing the current conversation context store. Add focused tests. Preserve unrelated user changes and return changed paths, tests, risks, and evidence.",
+        "project": ".",
+        "priority": "high",
+        "scope": [
+          "src/charon/workspace/graph.py",
+          "src/charon/workspace/knowledge.py",
+          "src/charon/workspace/context.py",
+          "src/charon/workspace/ingest.py",
+          "tests/test_workspace_knowledge.py",
+          "tests/test_workspace_context.py"
+        ],
+        "max_attempts": 3,
+        "poll_delay_sec": 1.0
+      },
+      "metadata": {
+        "type": "implementation",
+        "work_item_id": "work.workspace.increment0",
+        "lease_mode": "exclusive",
+        "write_scope": [
+          "src/charon/workspace/graph.py",
+          "src/charon/workspace/knowledge.py",
+          "src/charon/workspace/context.py",
+          "src/charon/workspace/ingest.py",
+          "tests/test_workspace_knowledge.py",
+          "tests/test_workspace_context.py"
+        ],
+        "required_evidence": [
+          "manifest determinism test",
+          "policy exclusion test",
+          "contradiction lifecycle test",
+          "budget packing test"
+        ],
+        "position": {
+          "x": 690,
+          "y": 270
+        }
+      }
+    },
+    {
+      "id": "coordination_stream",
+      "title": "Implement work, leases, and evidence",
+      "handler": "queue_agent",
+      "join": "any",
+      "config": {
+        "owner_agent_id": "AG-WORKSPACE-COORDINATION",
+        "title": "Workspace coordination and evidence",
+        "instruction": "Implement work item, task, run, acceptance, artifact, and evidence lifecycles plus normalized scopes, lease overlap detection, heartbeats, expiry, and fencing-token checks. Add adapters to the current graph and task queue without creating a second scheduler. Add focused tests. Preserve unrelated user changes and return changed paths, tests, risks, and evidence.",
+        "project": ".",
+        "priority": "high",
+        "scope": [
+          "src/charon/workspace/work.py",
+          "src/charon/workspace/leases.py",
+          "src/charon/workspace/artifacts.py",
+          "src/charon/workspace/adapters/graph.py",
+          "tests/test_workspace_work.py",
+          "tests/test_workspace_leases.py",
+          "tests/test_workspace_graph_adapter.py"
+        ],
+        "max_attempts": 3,
+        "poll_delay_sec": 1.0
+      },
+      "metadata": {
+        "type": "implementation",
+        "work_item_id": "work.workspace.increment0",
+        "lease_mode": "exclusive",
+        "write_scope": [
+          "src/charon/workspace/work.py",
+          "src/charon/workspace/leases.py",
+          "src/charon/workspace/artifacts.py",
+          "src/charon/workspace/adapters/graph.py",
+          "tests/test_workspace_work.py",
+          "tests/test_workspace_leases.py",
+          "tests/test_workspace_graph_adapter.py"
+        ],
+        "required_evidence": [
+          "overlap matrix test",
+          "stale fencing-token test",
+          "evidence-gated completion test",
+          "duplicate dispatch recovery test"
+        ],
+        "position": {
+          "x": 690,
+          "y": 450
+        }
+      }
+    },
+    {
+      "id": "sync_stream",
+      "title": "Implement sync, trust, and policy",
+      "handler": "queue_agent",
+      "join": "any",
+      "config": {
+        "owner_agent_id": "AG-WORKSPACE-SYNC",
+        "title": "Workspace replica sync and policy",
+        "instruction": "Implement the replica cursor, event-batch, integrity, explicit conflict, and policy-decision interfaces against the accepted contracts. Start with in-process replica exchange and deterministic projections; do not add a new network dependency. Add focused interruption, duplication, reordering, corruption, and authorization tests. Preserve unrelated user changes and return changed paths, tests, risks, and evidence.",
+        "project": ".",
+        "priority": "high",
+        "scope": [
+          "src/charon/workspace/sync.py",
+          "src/charon/workspace/policy.py",
+          "src/charon/workspace/projections.py",
+          "src/charon/workspace/adapters/fleet.py",
+          "tests/test_workspace_sync.py",
+          "tests/test_workspace_policy.py"
+        ],
+        "max_attempts": 3,
+        "poll_delay_sec": 1.0
+      },
+      "metadata": {
+        "type": "implementation",
+        "work_item_id": "work.workspace.increment0",
+        "lease_mode": "exclusive",
+        "write_scope": [
+          "src/charon/workspace/sync.py",
+          "src/charon/workspace/policy.py",
+          "src/charon/workspace/projections.py",
+          "src/charon/workspace/adapters/fleet.py",
+          "tests/test_workspace_sync.py",
+          "tests/test_workspace_policy.py"
+        ],
+        "required_evidence": [
+          "interrupted sync resume test",
+          "duplicate and reordered event test",
+          "corrupt chain rejection test",
+          "unauthorized mutation test"
+        ],
+        "position": {
+          "x": 690,
+          "y": 630
+        }
+      }
+    },
+    {
+      "id": "integration",
+      "title": "Integrate the vertical slice",
+      "handler": "queue_agent",
+      "join": "all",
+      "config": {
+        "owner_agent_id": "AG-WORKSPACE-INTEGRATION",
+        "title": "Integrate Charon Workspace vertical slice",
+        "instruction": "Review all four completed checkpoints and the inventory. Integrate the smallest end-to-end slice without duplicating state authorities: create work item, compile immutable context manifest, dispatch through the existing graph queue adapter, attach evidence, and complete only after acceptance passes. Resolve interface mismatches, update exports, and add an end-to-end restart test. Preserve unrelated user changes. Return an evidence bundle with exact commands and unresolved risks.",
+        "project": ".",
+        "priority": "urgent",
+        "scope": [
+          "src/charon/workspace/",
+          "src/charon/orchestration/",
+          "src/charon/conversation/",
+          "src/charon/context/",
+          "tests/test_workspace_integration.py",
+          "docs/proposals/charon-workspace.md",
+          "docs/contracts/workspace.schema.json",
+          "examples/workspaces/charon-workspace.json"
+        ],
+        "max_attempts": 3,
+        "poll_delay_sec": 1.0
+      },
+      "metadata": {
+        "type": "integration",
+        "work_item_id": "work.workspace.increment0",
+        "lease_mode": "exclusive",
+        "depends_on": [
+          "contract_stream",
+          "context_stream",
+          "coordination_stream",
+          "sync_stream"
+        ],
+        "required_evidence": [
+          "end-to-end vertical slice",
+          "restart test",
+          "state-authority audit",
+          "contract-example validation"
+        ],
+        "position": {
+          "x": 1030,
+          "y": 360
+        }
+      }
+    },
+    {
+      "id": "verification",
+      "title": "Verify independently",
+      "handler": "queue_agent",
+      "join": "any",
+      "max_visits": 3,
+      "config": {
+        "owner_agent_id": "AG-WORKSPACE-VERIFICATION",
+        "title": "Verify Charon Workspace acceptance contract",
+        "instruction": "Independently verify the accepted Workspace contract and integrated vertical slice. Run targeted and regression tests, validate the example bundle and dogfood graph, simulate restart and stale lease fencing, inspect evidence links, and check that no generated output becomes verified knowledge automatically. Do not repair implementation code. Write a durable verification artifact and return a criterion-by-criterion verdict with exact evidence.",
+        "project": ".",
+        "priority": "urgent",
+        "scope": [
+          "artifacts/workspace-verification/"
+        ],
+        "max_attempts": 2,
+        "poll_delay_sec": 1.0
+      },
+      "metadata": {
+        "type": "verification",
+        "work_item_id": "work.workspace.increment0",
+        "write_scope": [
+          "artifacts/workspace-verification/"
+        ],
+        "required_evidence": [
+          "criterion-by-criterion verdict",
+          "targeted test output",
+          "regression summary",
+          "remaining risk register"
+        ],
+        "position": {
+          "x": 1320,
+          "y": 360
+        }
+      }
+    },
+    {
+      "id": "acceptance_gate",
+      "title": "Accept evidence or request repair",
+      "handler": "human_gate",
+      "join": "any",
+      "max_attempts": 1,
+      "max_visits": 3,
+      "config": {
+        "prompt": "Review the independent verification artifact and linked evidence. Resume with route=accept or route=repair.",
+        "resume_key": "charon-workspace-acceptance",
+        "default_route": "repair"
+      },
+      "metadata": {
+        "type": "approval",
+        "description": "A person accepts the evidence or sends a bounded defect list into repair.",
+        "position": {
+          "x": 1600,
+          "y": 360
+        }
+      }
+    },
+    {
+      "id": "repair",
+      "title": "Repair bounded verification failures",
+      "handler": "queue_agent",
+      "join": "any",
+      "max_visits": 2,
+      "config": {
+        "owner_agent_id": "AG-WORKSPACE-REPAIR",
+        "title": "Repair Workspace verification failures",
+        "instruction": "Read the latest verification artifact and acceptance-gate payload. Repair only the enumerated failures, preserve passing behavior and unrelated user changes, update the affected evidence, and report each defect-to-change mapping. If a requested repair requires a contract change, stop and return a decision request instead of silently changing the contract.",
+        "project": ".",
+        "priority": "urgent",
+        "scope": [
+          "src/charon/workspace/",
+          "tests/test_workspace_*.py",
+          "artifacts/workspace-verification/"
+        ],
+        "max_attempts": 2,
+        "poll_delay_sec": 1.0
+      },
+      "metadata": {
+        "type": "repair",
+        "work_item_id": "work.workspace.increment0",
+        "required_evidence": [
+          "defect-to-change map",
+          "focused regression output",
+          "updated evidence bundle"
+        ],
+        "position": {
+          "x": 1600,
+          "y": 610
+        }
+      }
+    },
+    {
+      "id": "complete",
+      "title": "Record accepted milestone",
+      "handler": "noop",
+      "join": "any",
+      "terminal": true,
+      "config": {
+        "output": {
+          "status": "accepted",
+          "work_item_id": "work.workspace.increment0",
+          "summary": "The vertical slice passed independent verification and human evidence review."
+        }
+      },
+      "metadata": {
+        "type": "output",
+        "position": {
+          "x": 1900,
+          "y": 260
+        }
+      }
+    },
+    {
+      "id": "declined",
+      "title": "Record declined charter",
+      "handler": "noop",
+      "join": "any",
+      "terminal": true,
+      "config": {
+        "output": {
+          "status": "declined",
+          "work_item_id": "work.workspace.increment0",
+          "summary": "No implementation tasks were dispatched."
+        }
+      },
+      "metadata": {
+        "type": "output",
+        "position": {
+          "x": 360,
+          "y": 680
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "charter-proceed",
+      "source": "charter_gate",
+      "target": "inventory",
+      "on": "success",
+      "route": "proceed",
+      "title": "approved"
+    },
+    {
+      "id": "charter-decline",
+      "source": "charter_gate",
+      "target": "declined",
+      "on": "success",
+      "route": "decline",
+      "title": "declined"
+    },
+    {
+      "id": "inventory-contract",
+      "source": "inventory",
+      "target": "contract_stream",
+      "on": "success",
+      "title": "contract seam"
+    },
+    {
+      "id": "inventory-context",
+      "source": "inventory",
+      "target": "context_stream",
+      "on": "success",
+      "title": "context seam"
+    },
+    {
+      "id": "inventory-coordination",
+      "source": "inventory",
+      "target": "coordination_stream",
+      "on": "success",
+      "title": "coordination seam"
+    },
+    {
+      "id": "inventory-sync",
+      "source": "inventory",
+      "target": "sync_stream",
+      "on": "success",
+      "title": "sync seam"
+    },
+    {
+      "id": "contract-integration",
+      "source": "contract_stream",
+      "target": "integration",
+      "on": "success",
+      "title": "contract checkpoint"
+    },
+    {
+      "id": "context-integration",
+      "source": "context_stream",
+      "target": "integration",
+      "on": "success",
+      "title": "context checkpoint"
+    },
+    {
+      "id": "coordination-integration",
+      "source": "coordination_stream",
+      "target": "integration",
+      "on": "success",
+      "title": "coordination checkpoint"
+    },
+    {
+      "id": "sync-integration",
+      "source": "sync_stream",
+      "target": "integration",
+      "on": "success",
+      "title": "sync checkpoint"
+    },
+    {
+      "id": "integration-verification",
+      "source": "integration",
+      "target": "verification",
+      "on": "success",
+      "title": "integrated candidate"
+    },
+    {
+      "id": "verification-acceptance",
+      "source": "verification",
+      "target": "acceptance_gate",
+      "on": "success",
+      "title": "evidence bundle"
+    },
+    {
+      "id": "acceptance-complete",
+      "source": "acceptance_gate",
+      "target": "complete",
+      "on": "success",
+      "route": "accept",
+      "title": "accepted"
+    },
+    {
+      "id": "acceptance-repair",
+      "source": "acceptance_gate",
+      "target": "repair",
+      "on": "success",
+      "route": "repair",
+      "title": "repair requested"
+    },
+    {
+      "id": "repair-verification",
+      "source": "repair",
+      "target": "verification",
+      "on": "success",
+      "title": "repaired candidate"
+    }
+  ]
+}

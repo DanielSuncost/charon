@@ -1,0 +1,2261 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:charon:workspace:1.0",
+  "title": "Charon Workspace bundle",
+  "description": "Portable contract for institutional context, coordinated work, evidence, and replica synchronization.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "exported_at",
+    "exported_by_replica_id",
+    "workspace",
+    "entities",
+    "relations",
+    "observations",
+    "knowledge_items",
+    "work_items",
+    "runs",
+    "tasks",
+    "leases",
+    "sessions",
+    "artifacts",
+    "skills",
+    "policies",
+    "context_manifests",
+    "replicas",
+    "conflicts",
+    "events"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "exported_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "exported_by_replica_id": {
+      "$ref": "#/$defs/identifier"
+    },
+    "workspace": {
+      "$ref": "#/$defs/workspace"
+    },
+    "entities": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entity"
+      }
+    },
+    "relations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/relation"
+      }
+    },
+    "observations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/observation"
+      }
+    },
+    "knowledge_items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/knowledgeItem"
+      }
+    },
+    "work_items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/workItem"
+      }
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/run"
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/task"
+      }
+    },
+    "leases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/lease"
+      }
+    },
+    "sessions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/session"
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/skill"
+      }
+    },
+    "policies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/policy"
+      }
+    },
+    "context_manifests": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/contextManifest"
+      }
+    },
+    "replicas": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/replica"
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/conflict"
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/event"
+      }
+    },
+    "extensions": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {}
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,31}$"
+        },
+        "value": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 256
+        }
+      }
+    },
+    "recordRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type",
+        "id"
+      ],
+      "properties": {
+        "record_type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        },
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "actorRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "id"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "user",
+            "agent",
+            "system",
+            "replica",
+            "service"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "provenanceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "captured_at"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "source",
+            "agent",
+            "session",
+            "task",
+            "artifact",
+            "import",
+            "user",
+            "system"
+          ]
+        },
+        "ref_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "captured_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "excerpt": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "extractor": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "extractor_version": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "resourceLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "locator"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "directory",
+            "repository",
+            "document",
+            "service",
+            "artifact_store",
+            "remote",
+            "custom"
+          ]
+        },
+        "locator": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "revision": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "selector",
+        "access"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "path",
+            "entity",
+            "resource",
+            "work_item",
+            "environment",
+            "custom"
+          ]
+        },
+        "selector": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "access": {
+          "enum": [
+            "read",
+            "write",
+            "admin"
+          ]
+        },
+        "recursive": {
+          "type": "boolean",
+          "default": false
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "default": []
+        }
+      }
+    },
+    "recordBase": {
+      "type": "object",
+      "required": [
+        "record_type",
+        "id",
+        "workspace_id",
+        "revision",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "record_type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,63}$"
+        },
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "workspace_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "default": {}
+        },
+        "provenance": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/provenanceRef"
+          },
+          "default": []
+        },
+        "extensions": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        }
+      }
+    },
+    "workspace": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "slug",
+            "title",
+            "state",
+            "roots",
+            "home_replica_id",
+            "default_policy_ids"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "workspace"
+            },
+            "slug": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "description": {
+              "type": "string",
+              "maxLength": 8192
+            },
+            "state": {
+              "enum": [
+                "active",
+                "read_only",
+                "archived"
+              ]
+            },
+            "roots": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/resourceLocator"
+              }
+            },
+            "home_replica_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "default_policy_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "entity": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "kind",
+            "name",
+            "lifecycle",
+            "confidence"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "entity"
+            },
+            "kind": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_.-]{0,63}$"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "description": {
+              "type": "string",
+              "maxLength": 16384
+            },
+            "lifecycle": {
+              "enum": [
+                "proposed",
+                "active",
+                "deprecated",
+                "retired",
+                "unknown"
+              ]
+            },
+            "aliases": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "uniqueItems": true,
+              "default": []
+            },
+            "owner_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true,
+              "default": []
+            },
+            "locators": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/resourceLocator"
+              },
+              "default": []
+            },
+            "attributes": {
+              "type": "object",
+              "additionalProperties": true,
+              "default": {}
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "relationTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "ref"
+          ],
+          "properties": {
+            "kind": {
+              "const": "record"
+            },
+            "ref": {
+              "$ref": "#/$defs/recordRef"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "literal"
+            },
+            "value": true,
+            "data_type": {
+              "enum": [
+                "string",
+                "number",
+                "boolean",
+                "timestamp",
+                "object",
+                "array",
+                "null"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "relation": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "source_ref",
+            "predicate",
+            "target",
+            "status",
+            "confidence"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "relation"
+            },
+            "source_ref": {
+              "$ref": "#/$defs/recordRef"
+            },
+            "predicate": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_.-]{0,127}$"
+            },
+            "target": {
+              "$ref": "#/$defs/relationTarget"
+            },
+            "status": {
+              "enum": [
+                "proposed",
+                "verified",
+                "contested",
+                "stale",
+                "retracted",
+                "superseded"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "effective_from": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "effective_until": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "observation_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true,
+              "default": []
+            },
+            "evidence_artifact_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true,
+              "default": []
+            },
+            "contradicts_relation_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true,
+              "default": []
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "observation": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "subject_ref",
+            "predicate",
+            "value",
+            "observed_at",
+            "status",
+            "source",
+            "confidence",
+            "content_digest"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "observation"
+            },
+            "subject_ref": {
+              "$ref": "#/$defs/recordRef"
+            },
+            "predicate": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_.-]{0,127}$"
+            },
+            "value": true,
+            "observed_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "valid_from": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "valid_until": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "status": {
+              "enum": [
+                "current",
+                "stale",
+                "contested",
+                "retracted",
+                "superseded"
+              ]
+            },
+            "source": {
+              "$ref": "#/$defs/provenanceRef"
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "content_digest": {
+              "$ref": "#/$defs/digest"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "reviewState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required",
+        "status"
+      ],
+      "properties": {
+        "required": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "not_required",
+            "pending",
+            "approved",
+            "rejected"
+          ]
+        },
+        "reviewer": {
+          "$ref": "#/$defs/actorRef"
+        },
+        "reviewed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "rationale": {
+          "type": "string",
+          "maxLength": 8192
+        }
+      }
+    },
+    "knowledgeItem": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "kind",
+            "title",
+            "body",
+            "status",
+            "confidence",
+            "review"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "knowledge_item"
+            },
+            "kind": {
+              "enum": [
+                "fact",
+                "decision",
+                "constraint",
+                "procedure",
+                "preference",
+                "summary",
+                "risk",
+                "question",
+                "lesson",
+                "note"
+              ]
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "body": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            },
+            "status": {
+              "enum": [
+                "proposed",
+                "verified",
+                "contested",
+                "stale",
+                "rejected",
+                "retracted",
+                "superseded",
+                "expired"
+              ]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "scopes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/scope"
+              },
+              "default": []
+            },
+            "observation_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true,
+              "default": []
+            },
+            "evidence_artifact_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true,
+              "default": []
+            },
+            "contradicts_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true,
+              "default": []
+            },
+            "supersedes_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true,
+              "default": []
+            },
+            "valid_from": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "valid_until": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "review": {
+              "$ref": "#/$defs/reviewState"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "uniqueItems": true,
+              "default": []
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "verifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "command",
+            "test",
+            "inspection",
+            "metric",
+            "approval",
+            "artifact",
+            "custom"
+          ]
+        },
+        "spec": {
+          "type": "object",
+          "additionalProperties": true,
+          "default": {}
+        }
+      }
+    },
+    "acceptanceCriterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "statement",
+        "required",
+        "verifier",
+        "status",
+        "evidence_artifact_ids"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "verifier": {
+          "$ref": "#/$defs/verifier"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "passed",
+            "failed",
+            "waived"
+          ]
+        },
+        "evidence_artifact_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "uniqueItems": true
+        },
+        "waiver_reason": {
+          "type": "string",
+          "maxLength": 8192
+        }
+      }
+    },
+    "workItem": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "kind",
+            "title",
+            "status",
+            "priority",
+            "acceptance_criteria"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "work_item"
+            },
+            "kind": {
+              "enum": [
+                "objective",
+                "initiative",
+                "task",
+                "defect",
+                "question",
+                "decision",
+                "review"
+              ]
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "description": {
+              "type": "string",
+              "maxLength": 65536
+            },
+            "status": {
+              "enum": [
+                "backlog",
+                "ready",
+                "active",
+                "blocked",
+                "review",
+                "done",
+                "cancelled"
+              ]
+            },
+            "priority": {
+              "enum": [
+                "low",
+                "normal",
+                "high",
+                "urgent"
+              ]
+            },
+            "parent_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "dependency_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true,
+              "default": []
+            },
+            "blocked_by_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true,
+              "default": []
+            },
+            "owner": {
+              "$ref": "#/$defs/actorRef"
+            },
+            "assignees": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/actorRef"
+              },
+              "default": []
+            },
+            "scopes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/scope"
+              },
+              "default": []
+            },
+            "acceptance_criteria": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/acceptanceCriterion"
+              }
+            },
+            "run_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true,
+              "default": []
+            },
+            "due_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "terminal_reason": {
+              "type": "string",
+              "maxLength": 8192
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "run": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "workflow_id",
+            "workflow_revision",
+            "status",
+            "work_item_ids",
+            "task_ids",
+            "initiated_by",
+            "event_cursors"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "run"
+            },
+            "workflow_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "workflow_revision": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "status": {
+              "enum": [
+                "planned",
+                "running",
+                "waiting",
+                "suspended",
+                "blocked",
+                "completed",
+                "failed",
+                "cancelled",
+                "quarantined"
+              ]
+            },
+            "work_item_ids": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true
+            },
+            "task_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true
+            },
+            "initiated_by": {
+              "$ref": "#/$defs/actorRef"
+            },
+            "started_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "completed_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "terminal_reason": {
+              "type": "string",
+              "maxLength": 8192
+            },
+            "event_cursors": {
+              "$ref": "#/$defs/cursorMap"
+            },
+            "metrics": {
+              "type": "object",
+              "additionalProperties": {
+                "type": [
+                  "number",
+                  "string",
+                  "boolean",
+                  "null"
+                ]
+              },
+              "default": {}
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "task": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "work_item_id",
+            "run_id",
+            "title",
+            "instruction",
+            "status",
+            "owner",
+            "attempt",
+            "max_attempts",
+            "scopes",
+            "dependency_task_ids",
+            "lease_ids",
+            "evidence_artifact_ids"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "task"
+            },
+            "work_item_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "run_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "instruction": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            },
+            "status": {
+              "enum": [
+                "pending",
+                "claimed",
+                "running",
+                "waiting",
+                "blocked",
+                "succeeded",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "owner": {
+              "$ref": "#/$defs/actorRef"
+            },
+            "attempt": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_attempts": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "scopes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/scope"
+              }
+            },
+            "dependency_task_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true
+            },
+            "context_manifest_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "lease_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true
+            },
+            "session_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "started_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "completed_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "result_summary": {
+              "type": "string",
+              "maxLength": 32768
+            },
+            "evidence_artifact_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true
+            },
+            "idempotency_key": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "lease": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "resource",
+            "mode",
+            "owner_task_id",
+            "fencing_token",
+            "status",
+            "acquired_at",
+            "expires_at"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "lease"
+            },
+            "resource": {
+              "$ref": "#/$defs/scope"
+            },
+            "mode": {
+              "enum": [
+                "shared",
+                "exclusive"
+              ]
+            },
+            "owner_task_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "owner_session_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "fencing_token": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "status": {
+              "enum": [
+                "requested",
+                "active",
+                "released",
+                "expired",
+                "revoked"
+              ]
+            },
+            "acquired_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "heartbeat_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "expires_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "released_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "previous_lease_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "release_reason": {
+              "type": "string",
+              "maxLength": 4096
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "session": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "kind",
+            "status",
+            "actor",
+            "task_ids",
+            "started_at",
+            "event_cursors"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "session"
+            },
+            "kind": {
+              "enum": [
+                "interactive",
+                "worker",
+                "coordinator",
+                "remote"
+              ]
+            },
+            "status": {
+              "enum": [
+                "starting",
+                "active",
+                "idle",
+                "disconnected",
+                "completed",
+                "failed",
+                "stopped"
+              ]
+            },
+            "actor": {
+              "$ref": "#/$defs/actorRef"
+            },
+            "replica_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "host_ref": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "task_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true
+            },
+            "parent_session_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "continuation_of_session_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "started_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "ended_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "checkpoint_artifact_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "transcript_artifact_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "event_cursors": {
+              "$ref": "#/$defs/cursorMap"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "artifact": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "kind",
+            "title",
+            "media_type",
+            "locator",
+            "digest",
+            "immutable",
+            "status",
+            "produced_by"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "artifact"
+            },
+            "kind": {
+              "enum": [
+                "document",
+                "source_snapshot",
+                "change_set",
+                "test_result",
+                "inspection",
+                "metric",
+                "image",
+                "log",
+                "checkpoint",
+                "delivery_bundle",
+                "context",
+                "custom"
+              ]
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "media_type": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*$"
+            },
+            "locator": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "size_bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "immutable": {
+              "type": "boolean"
+            },
+            "status": {
+              "enum": [
+                "available",
+                "missing",
+                "quarantined",
+                "expired",
+                "superseded"
+              ]
+            },
+            "produced_by": {
+              "$ref": "#/$defs/actorRef"
+            },
+            "task_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "run_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "session_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "source_revision": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "metadata": {
+              "type": "object",
+              "additionalProperties": true,
+              "default": {}
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "skill": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "name",
+            "version",
+            "description",
+            "status",
+            "capabilities",
+            "invocation",
+            "policy_ids"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "skill"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "description": {
+              "type": "string",
+              "maxLength": 8192
+            },
+            "status": {
+              "enum": [
+                "proposed",
+                "active",
+                "deprecated",
+                "disabled"
+              ]
+            },
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.:-]{0,127}$"
+              },
+              "uniqueItems": true
+            },
+            "invocation": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "entrypoint",
+                "side_effect_level"
+              ],
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "built_in",
+                    "command",
+                    "service",
+                    "manual"
+                  ]
+                },
+                "entrypoint": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "side_effect_level": {
+                  "enum": [
+                    "none",
+                    "read",
+                    "write",
+                    "external"
+                  ]
+                },
+                "input_contract": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "output_contract": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            },
+            "policy_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true
+            },
+            "source_artifact_id": {
+              "$ref": "#/$defs/identifier"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "policy": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "name",
+            "version",
+            "status",
+            "priority",
+            "effect",
+            "actions",
+            "subject_selectors",
+            "resource_selectors",
+            "conditions",
+            "rationale"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "policy"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "status": {
+              "enum": [
+                "draft",
+                "active",
+                "disabled",
+                "superseded"
+              ]
+            },
+            "priority": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            },
+            "effect": {
+              "enum": [
+                "allow",
+                "deny",
+                "require_approval"
+              ]
+            },
+            "actions": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.:-]{0,127}$"
+              },
+              "uniqueItems": true
+            },
+            "subject_selectors": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "uniqueItems": true
+            },
+            "resource_selectors": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/scope"
+              }
+            },
+            "conditions": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "rationale": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "contextBudget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit",
+        "limit",
+        "used"
+      ],
+      "properties": {
+        "unit": {
+          "enum": [
+            "token",
+            "byte",
+            "item"
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "used": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "contextEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_ref",
+        "section",
+        "order",
+        "score",
+        "score_components",
+        "reasons",
+        "representation",
+        "digest",
+        "units"
+      ],
+      "properties": {
+        "record_ref": {
+          "$ref": "#/$defs/recordRef"
+        },
+        "section": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.-]{0,63}$"
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "score": {
+          "type": "number"
+        },
+        "score_components": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "reasons": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "representation": {
+          "enum": [
+            "inline",
+            "summary",
+            "reference",
+            "instruction",
+            "metadata"
+          ]
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 262144
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "units": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "contextExclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_ref",
+        "reason_code",
+        "reason"
+      ],
+      "properties": {
+        "record_ref": {
+          "$ref": "#/$defs/recordRef"
+        },
+        "reason_code": {
+          "enum": [
+            "policy",
+            "stale",
+            "contested",
+            "duplicate",
+            "budget",
+            "low_relevance",
+            "invalid_time",
+            "unavailable",
+            "other"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "score": {
+          "type": "number"
+        }
+      }
+    },
+    "contextManifest": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "task_id",
+            "compiler",
+            "workspace_revision",
+            "event_cursors",
+            "built_at",
+            "query",
+            "budget",
+            "policy_ids",
+            "entries",
+            "exclusions",
+            "digest"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "context_manifest"
+            },
+            "task_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "compiler": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "version"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "version": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                }
+              }
+            },
+            "workspace_revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "event_cursors": {
+              "$ref": "#/$defs/cursorMap"
+            },
+            "built_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "query": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "budget": {
+              "$ref": "#/$defs/contextBudget"
+            },
+            "policy_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/contextEntry"
+              }
+            },
+            "exclusions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/contextExclusion"
+              }
+            },
+            "digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "successor_of_manifest_id": {
+              "$ref": "#/$defs/identifier"
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "cursorMap": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[A-Za-z][A-Za-z0-9_.:-]{0,127}$"
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "replica": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "name",
+            "kind",
+            "trust",
+            "identity",
+            "cursors",
+            "capabilities",
+            "policy_ids"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "replica"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "kind": {
+              "enum": [
+                "local",
+                "remote",
+                "relay"
+              ]
+            },
+            "trust": {
+              "enum": [
+                "pending",
+                "trusted",
+                "read_only",
+                "revoked"
+              ]
+            },
+            "identity": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 8192
+            },
+            "cursors": {
+              "$ref": "#/$defs/cursorMap"
+            },
+            "last_seen_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "capabilities": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.:-]{0,127}$"
+              },
+              "uniqueItems": true
+            },
+            "policy_ids": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/identifier"
+              },
+              "uniqueItems": true
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "conflictVariant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replica_id",
+        "event_id",
+        "value_digest"
+      ],
+      "properties": {
+        "replica_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "event_id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "value": true,
+        "value_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "conflict": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "kind",
+            "status",
+            "record_refs",
+            "variants",
+            "detected_at"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "conflict"
+            },
+            "kind": {
+              "enum": [
+                "record_revision",
+                "field_merge",
+                "knowledge_claim",
+                "lease_fence",
+                "policy",
+                "artifact_digest",
+                "custom"
+              ]
+            },
+            "status": {
+              "enum": [
+                "open",
+                "resolved",
+                "dismissed"
+              ]
+            },
+            "record_refs": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/recordRef"
+              }
+            },
+            "base_ref": {
+              "$ref": "#/$defs/recordRef"
+            },
+            "variants": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "$ref": "#/$defs/conflictVariant"
+              }
+            },
+            "detected_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "work_item_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "resolution": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "strategy",
+                "resolved_by",
+                "resolved_at",
+                "rationale"
+              ],
+              "properties": {
+                "strategy": {
+                  "enum": [
+                    "select",
+                    "merge",
+                    "retain_both",
+                    "revert",
+                    "dismiss"
+                  ]
+                },
+                "selected_event_ids": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/identifier"
+                  },
+                  "uniqueItems": true
+                },
+                "resolved_by": {
+                  "$ref": "#/$defs/actorRef"
+                },
+                "resolved_at": {
+                  "$ref": "#/$defs/timestamp"
+                },
+                "rationale": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                }
+              }
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "event": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/recordBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "record_type",
+            "replica_id",
+            "replica_sequence",
+            "logical_time",
+            "event_type",
+            "occurred_at",
+            "actor",
+            "subject_refs",
+            "payload",
+            "digest"
+          ],
+          "properties": {
+            "record_type": {
+              "const": "event"
+            },
+            "replica_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "replica_sequence": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "logical_time": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "event_type": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_.:-]{0,127}$"
+            },
+            "occurred_at": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "actor": {
+              "$ref": "#/$defs/actorRef"
+            },
+            "subject_refs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/recordRef"
+              }
+            },
+            "correlation_id": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "causation_event_id": {
+              "$ref": "#/$defs/identifier"
+            },
+            "base_revision": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "previous_digest": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/digest"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "digest": {
+              "$ref": "#/$defs/digest"
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 16384
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

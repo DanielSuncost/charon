@@ -1,0 +1,418 @@
+{
+  "schema_version": 1,
+  "graph_id": "software-delivery",
+  "title": "Software delivery swarm",
+  "entry_nodes": [
+    "intake"
+  ],
+  "max_node_visits": 4,
+  "max_run_steps": 64,
+  "metadata": {
+    "version": "1.0.0",
+    "description": "A routed multi-agent workflow with parallel implementation, evidence fan-in, evaluation, and a bounded repair loop."
+  },
+  "nodes": [
+    {
+      "id": "intake",
+      "title": "Scope intake",
+      "handler": "fixture",
+      "join": "any",
+      "config": {
+        "result": {
+          "status": "success",
+          "output": {
+            "summary": "Objective and acceptance contract recorded"
+          }
+        }
+      },
+      "metadata": {
+        "type": "input",
+        "description": "Normalize the objective, constraints, and acceptance evidence.",
+        "position": {
+          "x": 80,
+          "y": 340
+        }
+      }
+    },
+    {
+      "id": "planner",
+      "title": "Plan workstreams",
+      "handler": "fixture",
+      "join": "any",
+      "config": {
+        "result": {
+          "status": "success",
+          "output": {
+            "summary": "Three independent workstreams selected"
+          }
+        }
+      },
+      "metadata": {
+        "type": "coordinator",
+        "description": "Decompose the objective into bounded parallel workstreams.",
+        "position": {
+          "x": 360,
+          "y": 340
+        }
+      }
+    },
+    {
+      "id": "route_runtime",
+      "title": "Route runtime work",
+      "handler": "route",
+      "join": "any",
+      "config": {
+        "policy": "balanced",
+        "state_key": "route_runtime",
+        "task": {
+          "task_id": "runtime-implementation",
+          "context_tokens": 24000,
+          "required_capabilities": [
+            "tools",
+            "code"
+          ],
+          "quality_floor": 0.7,
+          "metadata": {
+            "task_class": "implementation",
+            "complexity": 0.82
+          }
+        },
+        "candidate_source": "examples/routing/calibration-fixture.json"
+      },
+      "metadata": {
+        "type": "router",
+        "description": "Choose a model using implementation calibration and run constraints.",
+        "position": {
+          "x": 650,
+          "y": 100
+        }
+      }
+    },
+    {
+      "id": "route_experience",
+      "title": "Route experience work",
+      "handler": "route",
+      "join": "any",
+      "config": {
+        "policy": "quality",
+        "state_key": "route_experience",
+        "task": {
+          "task_id": "experience-implementation",
+          "context_tokens": 19000,
+          "required_capabilities": [
+            "tools",
+            "vision"
+          ],
+          "quality_floor": 0.74,
+          "metadata": {
+            "task_class": "interface",
+            "complexity": 0.68
+          }
+        },
+        "candidate_source": "examples/routing/calibration-fixture.json"
+      },
+      "metadata": {
+        "type": "router",
+        "description": "Choose a model for interface implementation and visual review.",
+        "position": {
+          "x": 650,
+          "y": 340
+        }
+      }
+    },
+    {
+      "id": "route_evidence",
+      "title": "Route evidence work",
+      "handler": "route",
+      "join": "any",
+      "config": {
+        "policy": "deadline",
+        "state_key": "route_evidence",
+        "task": {
+          "task_id": "evidence-verification",
+          "context_tokens": 11500,
+          "required_capabilities": [
+            "tools",
+            "code"
+          ],
+          "latency_slo_ms": 30000,
+          "metadata": {
+            "task_class": "verification",
+            "complexity": 0.45
+          }
+        },
+        "candidate_source": "examples/routing/calibration-fixture.json"
+      },
+      "metadata": {
+        "type": "router",
+        "description": "Choose a fast, reliable model for tests and benchmark instrumentation.",
+        "position": {
+          "x": 650,
+          "y": 580
+        }
+      }
+    },
+    {
+      "id": "runtime_agent",
+      "title": "Runtime engineer",
+      "handler": "fixture",
+      "join": "any",
+      "config": {
+        "outcome": "success",
+        "model_from": "route_runtime",
+        "summary": "Runtime checkpoint produced"
+      },
+      "metadata": {
+        "type": "agent",
+        "description": "Implement graph execution and persistence within a bounded scope.",
+        "position": {
+          "x": 950,
+          "y": 100
+        }
+      }
+    },
+    {
+      "id": "experience_agent",
+      "title": "Experience engineer",
+      "handler": "fixture",
+      "join": "any",
+      "config": {
+        "outcome": "success",
+        "model_from": "route_experience",
+        "summary": "Interface checkpoint produced"
+      },
+      "metadata": {
+        "type": "agent",
+        "description": "Build and visually validate the graph control plane.",
+        "position": {
+          "x": 950,
+          "y": 340
+        }
+      }
+    },
+    {
+      "id": "evidence_agent",
+      "title": "Evaluation engineer",
+      "handler": "fixture",
+      "join": "any",
+      "config": {
+        "outcome": "success",
+        "model_from": "route_evidence",
+        "summary": "Evidence checkpoint produced"
+      },
+      "metadata": {
+        "type": "agent",
+        "description": "Run tests, benchmark policies, and assemble the evidence bundle.",
+        "position": {
+          "x": 950,
+          "y": 580
+        }
+      }
+    },
+    {
+      "id": "integration",
+      "title": "Integrate checkpoints",
+      "handler": "fixture",
+      "join": "all",
+      "config": {
+        "result": {
+          "status": "success",
+          "output": {
+            "summary": "Three checkpoints integrated"
+          }
+        }
+      },
+      "metadata": {
+        "type": "merge",
+        "description": "Merge compatible outputs only after all workstreams arrive.",
+        "position": {
+          "x": 1250,
+          "y": 340
+        }
+      }
+    },
+    {
+      "id": "quality_gate",
+      "title": "Evaluate release",
+      "handler": "fixture",
+      "join": "any",
+      "config": {
+        "sequence": [
+          {
+            "status": "success",
+            "route": "repair",
+            "output": {
+              "score": 0.81,
+              "threshold": 0.86,
+              "summary": "One targeted repair requested"
+            }
+          },
+          {
+            "status": "success",
+            "route": "pass",
+            "output": {
+              "score": 0.93,
+              "threshold": 0.86,
+              "summary": "Composite evaluation passed"
+            }
+          }
+        ]
+      },
+      "metadata": {
+        "type": "judge",
+        "description": "Score correctness, usability, performance, and evidence coverage.",
+        "position": {
+          "x": 1540,
+          "y": 340
+        }
+      }
+    },
+    {
+      "id": "repair",
+      "title": "Targeted repair",
+      "handler": "fixture",
+      "join": "any",
+      "config": {
+        "result": {
+          "status": "success",
+          "output": {
+            "summary": "Requested repair applied"
+          }
+        }
+      },
+      "metadata": {
+        "type": "agent",
+        "description": "Apply the smallest repair requested by the evaluation gate.",
+        "position": {
+          "x": 1540,
+          "y": 590
+        }
+      }
+    },
+    {
+      "id": "release",
+      "title": "Release candidate",
+      "handler": "fixture",
+      "join": "any",
+      "terminal": true,
+      "config": {
+        "result": {
+          "status": "success",
+          "output": {
+            "summary": "Release candidate and evidence sealed"
+          }
+        }
+      },
+      "metadata": {
+        "type": "checkpoint",
+        "description": "Seal the selected implementation and its evidence as a durable result.",
+        "position": {
+          "x": 1830,
+          "y": 340
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "intake-planner",
+      "source": "intake",
+      "target": "planner",
+      "on": "success",
+      "title": "scope"
+    },
+    {
+      "id": "planner-runtime-route",
+      "source": "planner",
+      "target": "route_runtime",
+      "on": "success",
+      "title": "runtime"
+    },
+    {
+      "id": "planner-experience-route",
+      "source": "planner",
+      "target": "route_experience",
+      "on": "success",
+      "title": "experience"
+    },
+    {
+      "id": "planner-evidence-route",
+      "source": "planner",
+      "target": "route_evidence",
+      "on": "success",
+      "title": "evidence"
+    },
+    {
+      "id": "runtime-route-agent",
+      "source": "route_runtime",
+      "target": "runtime_agent",
+      "on": "success",
+      "title": "dispatch"
+    },
+    {
+      "id": "experience-route-agent",
+      "source": "route_experience",
+      "target": "experience_agent",
+      "on": "success",
+      "title": "dispatch"
+    },
+    {
+      "id": "evidence-route-agent",
+      "source": "route_evidence",
+      "target": "evidence_agent",
+      "on": "success",
+      "title": "dispatch"
+    },
+    {
+      "id": "runtime-integrate",
+      "source": "runtime_agent",
+      "target": "integration",
+      "on": "success",
+      "title": "checkpoint"
+    },
+    {
+      "id": "experience-integrate",
+      "source": "experience_agent",
+      "target": "integration",
+      "on": "success",
+      "title": "checkpoint"
+    },
+    {
+      "id": "evidence-integrate",
+      "source": "evidence_agent",
+      "target": "integration",
+      "on": "success",
+      "title": "evidence"
+    },
+    {
+      "id": "integrate-quality",
+      "source": "integration",
+      "target": "quality_gate",
+      "on": "success",
+      "title": "candidate"
+    },
+    {
+      "id": "quality-repair",
+      "source": "quality_gate",
+      "target": "repair",
+      "on": "success",
+      "route": "repair",
+      "title": "repair"
+    },
+    {
+      "id": "repair-quality",
+      "source": "repair",
+      "target": "quality_gate",
+      "on": "success",
+      "title": "re-evaluate"
+    },
+    {
+      "id": "quality-release",
+      "source": "quality_gate",
+      "target": "release",
+      "on": "success",
+      "route": "pass",
+      "title": "accepted"
+    }
+  ]
+}

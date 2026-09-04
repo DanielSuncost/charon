@@ -35,13 +35,19 @@ already work, now durable and reusable.
 """
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import json
+import os
+import tempfile
+import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from charon.infra import orchestration_trace as _ot
 
@@ -122,6 +128,8 @@ class _KindSpec:
 
 
 _REGISTRY: dict[str, _KindSpec] = {}
+_LOCAL_LOCKS: dict[str, threading.RLock] = {}
+_LOCAL_LOCKS_GUARD = threading.Lock()
 
 
 def register_kind(kind: str, *, steps: dict[str, StepFn], entry: str,
@@ -153,8 +161,41 @@ def _ops_dir(state_dir: Path) -> Path:
     return d
 
 
+def _locks_dir(state_dir: Path) -> Path:
+    d = Path(state_dir) / "orchestration" / "locks"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def _op_path(state_dir: Path, op_id: str) -> Path:
     return _ops_dir(state_dir) / f"{op_id}.json"
+
+
+def _op_lock_path(state_dir: Path, op_id: str) -> Path:
+    # Hash the caller-supplied id so locking preserves the legacy API without
+    # allowing separators or platform-specific characters into a lock path.
+    digest = hashlib.sha256(str(op_id).encode("utf-8")).hexdigest()
+    return _locks_dir(state_dir) / f"{digest}.lock"
+
+
+def _local_lock(path: Path) -> threading.RLock:
+    key = str(path.resolve())
+    with _LOCAL_LOCKS_GUARD:
+        return _LOCAL_LOCKS.setdefault(key, threading.RLock())
+
+
+@contextmanager
+def _locked_op(state_dir: Path, op_id: str) -> Iterator[None]:
+    """Serialize one operation across threads and scheduler processes."""
+    lock_path = _op_lock_path(state_dir, op_id)
+    local = _local_lock(lock_path)
+    with local:
+        with lock_path.open("a+", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _read_op(state_dir: Path, op_id: str) -> dict | None:
@@ -167,40 +208,101 @@ def _read_op(state_dir: Path, op_id: str) -> dict | None:
         return None
 
 
-def _write_op(state_dir: Path, op: dict) -> None:
+def _write_op_unlocked(state_dir: Path, op: dict) -> None:
     op["updated_at"] = _now_iso()
     p = _op_path(state_dir, op["op_id"])
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(op, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(p)  # atomic swap — never a torn state file
+    tmp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=p.parent,
+            prefix=f".{p.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            tmp_path = Path(handle.name)
+            handle.write(json.dumps(op, ensure_ascii=False, indent=2))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, p)  # atomic swap — never a torn state file
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+
+def _write_op(state_dir: Path, op: dict) -> None:
+    """Compatibility writer serialized with public lifecycle mutations."""
+    with _locked_op(state_dir, str(op["op_id"])):
+        _write_op_unlocked(state_dir, op)
 
 
 # ── lifecycle ──────────────────────────────────────────────────────────────
 
-def start_operation(state_dir: Path, kind: str, *, initial_state: dict | None = None,
-                    op_id: str | None = None, title: str = "") -> dict:
-    """Create a durable operation of `kind`, positioned at its entry step."""
+def start_operation(
+    state_dir: Path,
+    kind: str,
+    *,
+    initial_state: dict | None = None,
+    op_id: str | None = None,
+    title: str = "",
+    suspended: bool = False,
+    suspended_reason: str = "",
+    resume_key: str | None = None,
+    idempotent: bool = False,
+    idempotency_identity: dict[str, Any] | None = None,
+) -> dict:
+    """Create a durable operation at its entry step in one atomic write."""
     if kind not in _REGISTRY:
         raise ValueError(f"unknown operation kind {kind!r}; register_kind first")
     spec = _REGISTRY[kind]
     op_id = op_id or f"op_{uuid.uuid4().hex[:16]}"
     op = {
         "op_id": op_id, "kind": kind, "title": title,
-        "status": "running",           # running | suspended | done | failed
+        "status": "suspended" if suspended else "running",
         "cursor": spec.entry,
         "state": dict(initial_state or {}),
         "attempt": 0,
         "not_before": 0.0,
-        "suspended_reason": "", "resume_key": None, "resume_payload": None,
+        "suspended_reason": suspended_reason if suspended else "",
+        "resume_key": resume_key if suspended else None,
+        "resume_payload": None,
         "result": None, "error": "",
         "trace_id": f"tr_{op_id}",
         "history": [],                  # [{step, directive, at, ok}]
         "created_at": _now_iso(), "updated_at": _now_iso(),
     }
-    _write_op(state_dir, op)
-    _ot.record_span(state_dir, name=f"{kind} start", system="orchestration",
-                    kind="operation", trace_id=op["trace_id"], operation_id=op_id,
-                    status="ok", attributes={"kind": kind})
+    with _locked_op(state_dir, op_id):
+        existing = _read_op(state_dir, op_id)
+        if existing is not None:
+            if not idempotent:
+                raise ValueError(f"operation {op_id!r} already exists")
+            if existing.get("kind") != kind:
+                raise ValueError(
+                    f"operation {op_id!r} already exists with kind "
+                    f"{existing.get('kind')!r}"
+                )
+            identity = dict(idempotency_identity or {})
+            if not identity:
+                raise ValueError(
+                    "idempotent reuse requires a canonical launch identity"
+                )
+            existing_state = existing.get("state") or {}
+            mismatches = {
+                key: (existing_state.get(key), expected)
+                for key, expected in identity.items()
+                if existing_state.get(key) != expected
+            }
+            if mismatches:
+                raise ValueError(
+                    f"operation {op_id!r} launch identity does not match: "
+                    f"{mismatches!r}"
+                )
+            return existing
+        _write_op_unlocked(state_dir, op)
+        _ot.record_span(state_dir, name=f"{kind} start", system="orchestration",
+                        kind="operation", trace_id=op["trace_id"], operation_id=op_id,
+                        status="ok", attributes={"kind": kind})
     return op
 
 
@@ -211,25 +313,29 @@ def get_operation(state_dir: Path, op_id: str) -> dict | None:
 def resume(state_dir: Path, op_id: str, payload: Any) -> dict | None:
     """Feed input to a suspended operation and make it runnable again. The step
     that suspended re-runs with `ctx.resume_payload = payload`."""
-    op = _read_op(state_dir, op_id)
-    if not op or op.get("status") != "suspended":
-        return None
-    op["status"] = "running"
-    op["resume_payload"] = payload
-    op["attempt"] = 0
-    op["not_before"] = 0.0
-    _write_op(state_dir, op)
-    return op
+    with _locked_op(state_dir, op_id):
+        op = _read_op(state_dir, op_id)
+        if not op or op.get("status") != "suspended":
+            return None
+        op["status"] = "running"
+        op["resume_payload"] = payload
+        op["attempt"] = 0
+        op["not_before"] = 0.0
+        op["suspended_reason"] = ""
+        op["resume_key"] = None
+        _write_op_unlocked(state_dir, op)
+        return op
 
 
 def request_stop(state_dir: Path, op_id: str, reason: str = "") -> dict | None:
-    op = _read_op(state_dir, op_id)
-    if not op:
-        return None
-    op["status"] = "failed"
-    op["error"] = f"stopped: {reason}"[:300]
-    _write_op(state_dir, op)
-    return op
+    with _locked_op(state_dir, op_id):
+        op = _read_op(state_dir, op_id)
+        if not op:
+            return None
+        op["status"] = "failed"
+        op["error"] = f"stopped: {reason}"[:300]
+        _write_op_unlocked(state_dir, op)
+        return op
 
 
 def _merge_state(state: dict, updates: dict, reducers: dict) -> None:
@@ -253,6 +359,11 @@ def tick_operation(state_dir: Path, op_id: str) -> dict:
     A step that raises is retried (exponential backoff via `not_before`) up to the
     kind's `max_attempts`, then the operation fails.
     """
+    with _locked_op(state_dir, op_id):
+        return _tick_operation_unlocked(state_dir, op_id)
+
+
+def _tick_operation_unlocked(state_dir: Path, op_id: str) -> dict:
     op = _read_op(state_dir, op_id)
     if not op:
         return {"op_id": op_id, "action": "missing"}
@@ -265,7 +376,7 @@ def tick_operation(state_dir: Path, op_id: str) -> dict:
     if not spec:
         op["status"] = "failed"
         op["error"] = f"kind {op['kind']!r} not registered in this process"
-        _write_op(state_dir, op)
+        _write_op_unlocked(state_dir, op)
         return {"op_id": op_id, "action": "failed", "error": op["error"]}
 
     step_name = op["cursor"]
@@ -273,7 +384,7 @@ def tick_operation(state_dir: Path, op_id: str) -> dict:
     if not step_fn:
         op["status"] = "failed"
         op["error"] = f"step {step_name!r} not found for kind {op['kind']!r}"
-        _write_op(state_dir, op)
+        _write_op_unlocked(state_dir, op)
         return {"op_id": op_id, "action": "failed", "error": op["error"]}
 
     ctx = StepContext(
@@ -297,13 +408,13 @@ def tick_operation(state_dir: Path, op_id: str) -> dict:
                 op["error"] = f"{type(e).__name__}: {e}"[:300]
                 op["history"].append({"step": step_name, "directive": "error",
                                       "at": _now_iso(), "ok": False})
-                _write_op(state_dir, op)
+                _write_op_unlocked(state_dir, op)
                 _diag("orchestration", f"operation {op_id} step {step_name} failed after retries", error=e)
                 return {"op_id": op_id, "action": "failed", "step": step_name,
                         "error": op["error"]}
             backoff = spec.backoff_base ** attempt
             op["not_before"] = time.time() + backoff
-            _write_op(state_dir, op)
+            _write_op_unlocked(state_dir, op)
             return {"op_id": op_id, "action": "retry", "step": step_name,
                     "attempt": attempt, "backoff_sec": round(backoff, 2)}
 
@@ -340,7 +451,7 @@ def tick_operation(state_dir: Path, op_id: str) -> dict:
         op["error"] = f"unknown directive {directive.kind!r}"
         action = "fail"
 
-    _write_op(state_dir, op)
+    _write_op_unlocked(state_dir, op)
     return {"op_id": op_id, "action": action, "step": step_name,
             "cursor": op["cursor"], "status": op["status"]}
 

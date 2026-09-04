@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="A graph-native control plane for inspecting and calibrating multi-agent runs."
+    />
+    <meta name="theme-color" content="#090b10" />
+    <title>Charon Graph Studio</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b1718'/%3E%3Cpath d='M6 10 16 4l10 6v12L16 28 6 22Z' fill='none' stroke='%2369e1c4' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%2369e1c4'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">Skip to graph workspace</a>
+
+    <div class="studio" id="studio">
+      <aside class="workflow-rail" id="workflowRail" aria-label="Workflow overview">
+        <div class="rail-brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 34 34">
+              <path d="M6 9.5 17 3l11 6.5v15L17 31 6 24.5Z" />
+              <path d="m10.5 12 6.5-3.7 6.5 3.7v7.7L17 23.5l-6.5-3.8Z" />
+              <circle cx="17" cy="16" r="2.7" />
+            </svg>
+          </div>
+          <div>
+            <p class="eyebrow">CHARON</p>
+            <p class="brand-title">Graph Studio</p>
+          </div>
+          <button
+            class="icon-button rail-close"
+            type="button"
+            data-action="toggle-rail"
+            aria-label="Close workflow panel"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m7 7 10 10M17 7 7 17" />
+            </svg>
+          </button>
+        </div>
+
+        <section class="rail-section workflow-summary" aria-labelledby="workflowHeading">
+          <div class="section-heading">
+            <p class="section-kicker">Active workflow</p>
+            <span class="live-indicator" id="railLiveIndicator">
+              <span aria-hidden="true"></span>
+              Ready
+            </span>
+          </div>
+          <h1 id="workflowHeading">Adaptive build graph</h1>
+          <p class="workflow-id" id="workflowId">graph://loading</p>
+          <div class="source-chip" id="sourceChip">
+            <span class="source-dot" aria-hidden="true"></span>
+            <span>Embedded fixture</span>
+          </div>
+        </section>
+
+        <section class="rail-section run-summary" aria-labelledby="runSummaryHeading">
+          <div class="section-heading">
+            <h2 id="runSummaryHeading">Run pulse</h2>
+            <span class="mono-label" id="runId">—</span>
+          </div>
+          <div class="metric-quartet" id="metricQuartet"></div>
+        </section>
+
+        <section class="rail-section run-sequence" aria-labelledby="runSequenceHeading">
+          <div class="section-heading">
+            <h2 id="runSequenceHeading">Execution path</h2>
+            <span class="count-pill" id="nodeCount">0 nodes</span>
+          </div>
+          <ol class="node-run-list" id="nodeRunList"></ol>
+        </section>
+
+        <section class="rail-section legend-section" aria-labelledby="legendHeading">
+          <div class="section-heading">
+            <h2 id="legendHeading">Signal key</h2>
+          </div>
+          <div class="signal-legend">
+            <span><i class="signal-dot is-active"></i>Active</span>
+            <span><i class="signal-dot is-complete"></i>Complete</span>
+            <span><i class="signal-dot is-waiting"></i>Queued</span>
+            <span><i class="signal-dot is-error"></i>Needs attention</span>
+          </div>
+        </section>
+
+        <div class="rail-footer">
+          <p>Graph-native orchestration</p>
+          <span>Local control plane</span>
+        </div>
+      </aside>
+
+      <header class="topbar">
+        <div class="topbar-context">
+          <button
+            class="icon-button rail-toggle"
+            type="button"
+            data-action="toggle-rail"
+            aria-label="Open workflow panel"
+            aria-controls="workflowRail"
+            aria-expanded="false"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h16M4 12h16M4 17h16" />
+            </svg>
+          </button>
+          <div class="context-glyph" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <circle cx="6" cy="12" r="2.5" />
+              <circle cx="18" cy="6" r="2.5" />
+              <circle cx="18" cy="18" r="2.5" />
+              <path d="m8.3 10.9 7.4-3.8M8.3 13.1l7.4 3.8" />
+            </svg>
+          </div>
+          <div>
+            <p class="topbar-breadcrumb">Orchestration / <span id="breadcrumbRun">demo</span></p>
+            <p class="topbar-title" id="topbarTitle">Adaptive build graph</p>
+          </div>
+        </div>
+
+        <nav class="view-tabs" aria-label="Studio views">
+          <button
+            class="view-tab is-selected"
+            id="graphTab"
+            type="button"
+            role="tab"
+            aria-selected="true"
+            aria-controls="graphPanel"
+            data-view="graph"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="5" cy="12" r="2" />
+              <circle cx="19" cy="6" r="2" />
+              <circle cx="19" cy="18" r="2" />
+              <path d="m7 11 10-4M7 13l10 4" />
+            </svg>
+            Graph
+          </button>
+          <button
+            class="view-tab"
+            id="calibrationTab"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="calibrationPanel"
+            data-view="calibration"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 19V9m7 10V5m7 14v-7" />
+              <path d="M3 19h18" />
+            </svg>
+            Calibration
+          </button>
+        </nav>
+
+        <div class="run-controls" aria-label="Run controls">
+          <span class="connection-state" id="connectionState">
+            <span aria-hidden="true"></span>
+            Offline-ready
+          </span>
+          <button
+            class="control-button control-secondary"
+            type="button"
+            data-action="reset"
+            title="Reset demo"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7v5h5M20 17v-5h-5" />
+              <path d="M6.1 16.2A7 7 0 0 0 18 8.5M17.9 7.8A7 7 0 0 0 6 15.5" />
+            </svg>
+            <span>Reset</span>
+          </button>
+          <button
+            class="control-button control-secondary"
+            type="button"
+            data-action="tick"
+            title="Advance one event"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m8 5 10 7-10 7Z" />
+              <path d="M19 5v14" />
+            </svg>
+            <span>Step</span>
+          </button>
+          <button class="control-button control-primary" type="button" data-action="run">
+            <svg class="run-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m8 5 10 7-10 7Z" />
+            </svg>
+            <svg class="pause-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M8 6v12M16 6v12" />
+            </svg>
+            <span id="runButtonLabel">Run graph</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="graph-panel" id="workspace">
+        <section
+          class="graph-canvas"
+          id="graphPanel"
+          role="tabpanel"
+          aria-labelledby="graphTab"
+          tabindex="-1"
+        >
+          <div class="canvas-header">
+            <div>
+              <span class="canvas-kicker">Live topology</span>
+              <span class="canvas-hint" id="canvasHint">Drag to pan · scroll to zoom</span>
+            </div>
+            <div class="canvas-tools" aria-label="Canvas controls">
+              <button class="icon-button" type="button" data-action="zoom-out" aria-label="Zoom out">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M7 12h10" />
+                </svg>
+              </button>
+              <span class="zoom-readout" id="zoomReadout">100%</span>
+              <button class="icon-button" type="button" data-action="zoom-in" aria-label="Zoom in">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M7 12h10M12 7v10" />
+                </svg>
+              </button>
+              <button class="icon-button" type="button" data-action="fit" aria-label="Fit graph">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 4H4v5m11-5h5v5M9 20H4v-5m11 5h5v-5" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="canvas-stage" id="canvasStage">
+            <svg
+              class="graph-svg"
+              id="graphSvg"
+              viewBox="0 0 1160 680"
+              role="img"
+              aria-labelledby="graphTitle graphDescription"
+            >
+              <title id="graphTitle">Multi-agent execution graph</title>
+              <desc id="graphDescription">
+                Directed workflow of routers, agents, tools, evaluators, and decision gates.
+              </desc>
+              <defs>
+                <filter id="edgeGlow" x="-40%" y="-40%" width="180%" height="180%">
+                  <feGaussianBlur stdDeviation="4" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+                <filter id="nodeShadow" x="-20%" y="-30%" width="140%" height="170%">
+                  <feDropShadow dx="0" dy="8" stdDeviation="8" flood-opacity=".22" />
+                </filter>
+                <marker
+                  id="edgeArrow"
+                  viewBox="0 0 10 10"
+                  refX="8"
+                  refY="5"
+                  markerWidth="6"
+                  markerHeight="6"
+                  orient="auto-start-reverse"
+                >
+                  <path d="M 0 0 L 10 5 L 0 10 z" />
+                </marker>
+              </defs>
+              <g id="viewport">
+                <g id="edgeLayer"></g>
+                <g id="nodeLayer"></g>
+              </g>
+            </svg>
+            <div class="canvas-empty" id="canvasEmpty" hidden>
+              <span aria-hidden="true">◇</span>
+              <h2>No graph definition</h2>
+              <p>The snapshot did not include any nodes.</p>
+            </div>
+          </div>
+
+          <div class="canvas-foot">
+            <div class="run-progress">
+              <div class="run-progress-copy">
+                <span id="progressLabel">Ready to run</span>
+                <span id="progressValue">0 / 0</span>
+              </div>
+              <div
+                class="progress-track"
+                role="progressbar"
+                aria-label="Run progress"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow="0"
+                id="progressTrack"
+              >
+                <span id="progressBar"></span>
+              </div>
+            </div>
+            <button class="focus-active" type="button" data-action="focus-active">
+              <span class="focus-active-pulse" aria-hidden="true"></span>
+              Focus active node
+            </button>
+          </div>
+        </section>
+      </main>
+
+      <aside class="inspector" id="nodeInspector" aria-labelledby="inspectorTitle">
+        <div class="inspector-header">
+          <div>
+            <p class="section-kicker">Node inspector</p>
+            <h2 id="inspectorTitle">Select a node</h2>
+          </div>
+          <button
+            class="icon-button inspector-close"
+            type="button"
+            data-action="close-inspector"
+            aria-label="Close node inspector"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m7 7 10 10M17 7 7 17" />
+            </svg>
+          </button>
+        </div>
+        <div class="inspector-body" id="inspectorBody">
+          <div class="inspector-empty">
+            <div class="empty-orbit" aria-hidden="true">
+              <span></span><span></span><i></i>
+            </div>
+            <p>Choose a node to inspect its model, policy, runtime state, and configuration.</p>
+          </div>
+        </div>
+      </aside>
+
+      <section
+        class="calibration-panel"
+        id="calibrationPanel"
+        role="tabpanel"
+        aria-labelledby="calibrationTab"
+        hidden
+      >
+        <div class="calibration-scroll">
+          <header class="calibration-hero">
+            <div>
+              <p class="section-kicker">Policy evaluation</p>
+              <h2>Routing calibration</h2>
+              <p>
+                Compare quality, latency, cost, and confidence before promoting a routing policy.
+              </p>
+            </div>
+            <div class="provenance-notice" id="provenanceNotice">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 8v5m0 3.5v.5" />
+                <circle cx="12" cy="12" r="9" />
+              </svg>
+              <span>Synthetic fixture data — interface demonstration only.</span>
+            </div>
+          </header>
+
+          <div class="policy-scorecards" id="policyScorecards"></div>
+          <div class="recommendation-summary" id="recommendationSummary" hidden></div>
+
+          <div class="calibration-grid">
+            <article class="analytics-card confidence-card">
+              <div class="analytics-heading">
+                <div>
+                  <p class="section-kicker">Uncertainty</p>
+                  <h3>Task pass-rate confidence intervals</h3>
+                </div>
+                <span class="analytics-unit" id="confidenceUnit">Confidence interval</span>
+              </div>
+              <div class="confidence-chart" id="confidenceChart"></div>
+            </article>
+
+            <article class="analytics-card pareto-card">
+              <div class="analytics-heading">
+                <div>
+                  <p class="section-kicker">Efficiency frontier</p>
+                  <h3>Quality vs. request cost</h3>
+                </div>
+                <span class="analytics-unit">Lower cost →</span>
+              </div>
+              <div class="pareto-chart-wrap" id="paretoChart"></div>
+            </article>
+
+            <article class="analytics-card routing-card">
+              <div class="analytics-heading">
+                <div>
+                  <p class="section-kicker">Policy profile</p>
+                  <h3>Routing matrix</h3>
+                </div>
+                <span class="analytics-unit">Traffic share</span>
+              </div>
+              <div class="routing-table-wrap" id="routingMatrix"></div>
+            </article>
+
+            <article class="analytics-card comparisons-card">
+              <div class="analytics-heading">
+                <div>
+                  <p class="section-kicker">Paired analysis</p>
+                  <h3>Policy comparisons</h3>
+                </div>
+                <span class="analytics-unit">Calibrated deltas</span>
+              </div>
+              <div class="comparison-list" id="comparisonList"></div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="event-strip" aria-labelledby="eventStripHeading">
+        <div class="event-strip-heading">
+          <div>
+            <span class="event-beacon" aria-hidden="true"></span>
+            <h2 id="eventStripHeading">Live events</h2>
+          </div>
+          <span id="eventCount">0 signals</span>
+        </div>
+        <div class="event-stream" id="eventStream" tabindex="0"></div>
+      </section>
+    </div>
+
+    <div class="rail-scrim" data-action="toggle-rail" aria-hidden="true"></div>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <div class="sr-only" id="announcer" aria-live="polite" aria-atomic="true"></div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

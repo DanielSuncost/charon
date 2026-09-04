@@ -1,0 +1,606 @@
+{
+  "schema_version": "1.0",
+  "exported_at": "2026-08-11T16:00:00Z",
+  "exported_by_replica_id": "replica.local",
+  "workspace": {
+    "record_type": "workspace",
+    "id": "workspace.charon",
+    "workspace_id": "workspace.charon",
+    "revision": 1,
+    "created_at": "2026-08-11T16:00:00Z",
+    "updated_at": "2026-08-11T16:00:00Z",
+    "labels": {
+      "stage": "proposal"
+    },
+    "slug": "charon",
+    "title": "Charon",
+    "description": "The Charon project represented through its proposed institutional context and coordinated-delivery contract.",
+    "state": "active",
+    "roots": [
+      {
+        "kind": "repository",
+        "locator": "."
+      }
+    ],
+    "home_replica_id": "replica.local",
+    "default_policy_ids": [
+      "policy.workspace.sensitive_mutation"
+    ]
+  },
+  "entities": [
+    {
+      "record_type": "entity",
+      "id": "entity.charon",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "kind": "system",
+      "name": "Charon",
+      "description": "A local-first agent operating environment for durable, coordinated work.",
+      "lifecycle": "active",
+      "locators": [
+        {
+          "kind": "directory",
+          "locator": "."
+        }
+      ],
+      "confidence": 1.0
+    },
+    {
+      "record_type": "entity",
+      "id": "entity.workspace",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "kind": "subsystem",
+      "name": "Workspace",
+      "description": "The proposed institutional context and coordinated-delivery control plane.",
+      "lifecycle": "proposed",
+      "locators": [
+        {
+          "kind": "document",
+          "locator": "docs/proposals/charon-workspace.md",
+          "digest": {
+            "algorithm": "sha256",
+            "value": "f31aa0993e7b1ab3babcd9918247e4eec0b6a323fa8370e10c1091a1dffa8d5c"
+          }
+        }
+      ],
+      "confidence": 1.0
+    },
+    {
+      "record_type": "entity",
+      "id": "entity.graph_control_plane",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "kind": "subsystem",
+      "name": "Graph control plane",
+      "description": "Durable graph scheduling, retries, suspension, queue dispatch, and projections.",
+      "lifecycle": "active",
+      "locators": [
+        {
+          "kind": "document",
+          "locator": "docs/architecture/graph-control-plane.md",
+          "digest": {
+            "algorithm": "sha256",
+            "value": "bc7f895e101d267856919f352d24059b5bbc8a2ee8094d4ed6877589de7ae620"
+          }
+        }
+      ],
+      "confidence": 1.0
+    },
+    {
+      "record_type": "entity",
+      "id": "entity.context_runtime",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "kind": "subsystem",
+      "name": "Context runtime",
+      "description": "Budget-constrained assembly and lossless conversational compaction.",
+      "lifecycle": "active",
+      "locators": [
+        {
+          "kind": "directory",
+          "locator": "src/charon/context"
+        }
+      ],
+      "confidence": 1.0
+    },
+    {
+      "record_type": "entity",
+      "id": "entity.remote_runtime",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "kind": "subsystem",
+      "name": "Remote runtime",
+      "description": "Structured remote task dispatch, session access, and result ingestion.",
+      "lifecycle": "active",
+      "locators": [
+        {
+          "kind": "document",
+          "locator": "docs/remote-agent-teams.md",
+          "digest": {
+            "algorithm": "sha256",
+            "value": "51112cc0d2a9e0705338d9d14883a4ac45bb671da0e2f184ac33da3f3af18cb0"
+          }
+        }
+      ],
+      "confidence": 1.0
+    }
+  ],
+  "relations": [
+    {
+      "record_type": "relation",
+      "id": "relation.charon_contains_workspace",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "source_ref": {
+        "record_type": "entity",
+        "id": "entity.charon",
+        "revision": 1
+      },
+      "predicate": "contains",
+      "target": {
+        "kind": "record",
+        "ref": {
+          "record_type": "entity",
+          "id": "entity.workspace",
+          "revision": 1
+        }
+      },
+      "status": "proposed",
+      "confidence": 1.0,
+      "evidence_artifact_ids": [
+        "artifact.workspace.rfc"
+      ]
+    },
+    {
+      "record_type": "relation",
+      "id": "relation.workspace_uses_graph",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "source_ref": {
+        "record_type": "entity",
+        "id": "entity.workspace",
+        "revision": 1
+      },
+      "predicate": "uses",
+      "target": {
+        "kind": "record",
+        "ref": {
+          "record_type": "entity",
+          "id": "entity.graph_control_plane",
+          "revision": 1
+        }
+      },
+      "status": "verified",
+      "confidence": 1.0,
+      "observation_ids": [
+        "observation.graph_runtime_capabilities"
+      ],
+      "evidence_artifact_ids": [
+        "artifact.workspace.rfc"
+      ]
+    },
+    {
+      "record_type": "relation",
+      "id": "relation.workspace_extends_context",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "source_ref": {
+        "record_type": "entity",
+        "id": "entity.workspace",
+        "revision": 1
+      },
+      "predicate": "extends",
+      "target": {
+        "kind": "record",
+        "ref": {
+          "record_type": "entity",
+          "id": "entity.context_runtime",
+          "revision": 1
+        }
+      },
+      "status": "verified",
+      "confidence": 1.0,
+      "observation_ids": [
+        "observation.context_budgeting"
+      ],
+      "evidence_artifact_ids": [
+        "artifact.workspace.rfc"
+      ]
+    },
+    {
+      "record_type": "relation",
+      "id": "relation.workspace_extends_remote",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "source_ref": {
+        "record_type": "entity",
+        "id": "entity.workspace",
+        "revision": 1
+      },
+      "predicate": "extends",
+      "target": {
+        "kind": "record",
+        "ref": {
+          "record_type": "entity",
+          "id": "entity.remote_runtime",
+          "revision": 1
+        }
+      },
+      "status": "verified",
+      "confidence": 1.0,
+      "observation_ids": [
+        "observation.remote_dispatch"
+      ],
+      "evidence_artifact_ids": [
+        "artifact.workspace.rfc"
+      ]
+    }
+  ],
+  "observations": [
+    {
+      "record_type": "observation",
+      "id": "observation.graph_runtime_capabilities",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "subject_ref": {
+        "record_type": "entity",
+        "id": "entity.graph_control_plane",
+        "revision": 1
+      },
+      "predicate": "supports",
+      "value": [
+        "durable runs",
+        "fan-out",
+        "fan-in",
+        "retry",
+        "suspension",
+        "idempotent queue dispatch"
+      ],
+      "observed_at": "2026-08-11T16:00:00Z",
+      "status": "current",
+      "source": {
+        "kind": "source",
+        "locator": "docs/architecture/graph-control-plane.md",
+        "digest": {
+          "algorithm": "sha256",
+          "value": "bc7f895e101d267856919f352d24059b5bbc8a2ee8094d4ed6877589de7ae620"
+        },
+        "captured_at": "2026-08-11T16:00:00Z",
+        "extractor": "workspace-example",
+        "extractor_version": "1.0"
+      },
+      "confidence": 1.0,
+      "content_digest": {
+        "algorithm": "sha256",
+        "value": "bc7f895e101d267856919f352d24059b5bbc8a2ee8094d4ed6877589de7ae620"
+      }
+    },
+    {
+      "record_type": "observation",
+      "id": "observation.context_budgeting",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "subject_ref": {
+        "record_type": "entity",
+        "id": "entity.context_runtime",
+        "revision": 1
+      },
+      "predicate": "supports",
+      "value": [
+        "budget-constrained assembly",
+        "fresh-tail preservation",
+        "tool-exchange integrity",
+        "compacted-context recall guidance"
+      ],
+      "observed_at": "2026-08-11T16:00:00Z",
+      "status": "current",
+      "source": {
+        "kind": "source",
+        "locator": "src/charon/context/context_assembler.py",
+        "digest": {
+          "algorithm": "sha256",
+          "value": "0a6be4e597db18568efe34f760f288f0be38202b1c8e76581ffa44fdf700bb77"
+        },
+        "captured_at": "2026-08-11T16:00:00Z",
+        "extractor": "workspace-example",
+        "extractor_version": "1.0"
+      },
+      "confidence": 1.0,
+      "content_digest": {
+        "algorithm": "sha256",
+        "value": "0a6be4e597db18568efe34f760f288f0be38202b1c8e76581ffa44fdf700bb77"
+      }
+    },
+    {
+      "record_type": "observation",
+      "id": "observation.remote_dispatch",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "subject_ref": {
+        "record_type": "entity",
+        "id": "entity.remote_runtime",
+        "revision": 1
+      },
+      "predicate": "supports",
+      "value": [
+        "structured task dispatch",
+        "interactive sessions",
+        "structured result ingestion"
+      ],
+      "observed_at": "2026-08-11T16:00:00Z",
+      "status": "current",
+      "source": {
+        "kind": "source",
+        "locator": "docs/remote-agent-teams.md",
+        "digest": {
+          "algorithm": "sha256",
+          "value": "51112cc0d2a9e0705338d9d14883a4ac45bb671da0e2f184ac33da3f3af18cb0"
+        },
+        "captured_at": "2026-08-11T16:00:00Z",
+        "extractor": "workspace-example",
+        "extractor_version": "1.0"
+      },
+      "confidence": 1.0,
+      "content_digest": {
+        "algorithm": "sha256",
+        "value": "51112cc0d2a9e0705338d9d14883a4ac45bb671da0e2f184ac33da3f3af18cb0"
+      }
+    }
+  ],
+  "knowledge_items": [
+    {
+      "record_type": "knowledge_item",
+      "id": "knowledge.workspace.context_as_artifact",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "kind": "decision",
+      "title": "Task context is an immutable artifact",
+      "body": "Every dispatched task receives a persisted context manifest containing exact inputs, exclusions, reasons, budget, record revisions, and a normalized digest.",
+      "status": "proposed",
+      "confidence": 0.95,
+      "evidence_artifact_ids": [
+        "artifact.workspace.rfc",
+        "artifact.workspace.contract"
+      ],
+      "review": {
+        "required": true,
+        "status": "pending"
+      },
+      "tags": [
+        "context",
+        "reproducibility"
+      ]
+    }
+  ],
+  "work_items": [
+    {
+      "record_type": "work_item",
+      "id": "work.workspace.increment0",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "kind": "initiative",
+      "title": "Build the Workspace contract vertical slice",
+      "description": "Implement the first end-to-end path without replacing Charon's existing scheduler or context store.",
+      "status": "ready",
+      "priority": "high",
+      "owner": {
+        "kind": "user",
+        "id": "user.local"
+      },
+      "scopes": [
+        {
+          "kind": "path",
+          "selector": "src/charon/workspace",
+          "access": "write",
+          "recursive": true
+        }
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "criterion.contract_example",
+          "statement": "The canonical contract validates this example bundle.",
+          "required": true,
+          "verifier": {
+            "kind": "test",
+            "spec": {
+              "test_id": "workspace-contract-example"
+            }
+          },
+          "status": "pending",
+          "evidence_artifact_ids": []
+        },
+        {
+          "id": "criterion.graph_template",
+          "statement": "The dogfood workflow validates against the current durable graph definition.",
+          "required": true,
+          "verifier": {
+            "kind": "test",
+            "spec": {
+              "test_id": "workspace-dogfood-graph"
+            }
+          },
+          "status": "pending",
+          "evidence_artifact_ids": []
+        },
+        {
+          "id": "criterion.evidence_gate",
+          "statement": "A work item cannot become done while required evidence is missing.",
+          "required": true,
+          "verifier": {
+            "kind": "test",
+            "spec": {
+              "test_id": "workspace-evidence-gate"
+            }
+          },
+          "status": "pending",
+          "evidence_artifact_ids": []
+        }
+      ]
+    }
+  ],
+  "runs": [],
+  "tasks": [],
+  "leases": [],
+  "sessions": [],
+  "artifacts": [
+    {
+      "record_type": "artifact",
+      "id": "artifact.workspace.rfc",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "kind": "document",
+      "title": "Charon Workspace RFC",
+      "media_type": "text/markdown",
+      "locator": "docs/proposals/charon-workspace.md",
+      "digest": {
+        "algorithm": "sha256",
+        "value": "f31aa0993e7b1ab3babcd9918247e4eec0b6a323fa8370e10c1091a1dffa8d5c"
+      },
+      "immutable": false,
+      "status": "available",
+      "produced_by": {
+        "kind": "user",
+        "id": "user.local"
+      }
+    },
+    {
+      "record_type": "artifact",
+      "id": "artifact.workspace.contract",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "kind": "document",
+      "title": "Charon Workspace contract",
+      "media_type": "application/schema+json",
+      "locator": "docs/contracts/workspace.schema.json",
+      "digest": {
+        "algorithm": "sha256",
+        "value": "233cc630ac2ee07074148d0d3c78d8bdc04f97d36bd8907f5d6e16dfbf3a5cb0"
+      },
+      "immutable": false,
+      "status": "available",
+      "produced_by": {
+        "kind": "user",
+        "id": "user.local"
+      }
+    },
+    {
+      "record_type": "artifact",
+      "id": "artifact.workspace.dogfood",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "kind": "document",
+      "title": "Charon Workspace dogfood workflow",
+      "media_type": "application/json",
+      "locator": "examples/graph_workflows/charon-workspace-dogfood.json",
+      "digest": {
+        "algorithm": "sha256",
+        "value": "a6cea672185aae02f108f89f4484443d1a3e42dda635fb7a72f29efd1c64ec8e"
+      },
+      "immutable": false,
+      "status": "available",
+      "produced_by": {
+        "kind": "user",
+        "id": "user.local"
+      }
+    }
+  ],
+  "skills": [],
+  "policies": [
+    {
+      "record_type": "policy",
+      "id": "policy.workspace.sensitive_mutation",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "name": "Review sensitive workspace mutations",
+      "version": "1.0",
+      "status": "active",
+      "priority": 100,
+      "effect": "require_approval",
+      "actions": [
+        "lease.override",
+        "policy.change",
+        "replica.trust",
+        "knowledge.verify"
+      ],
+      "subject_selectors": [
+        "*"
+      ],
+      "resource_selectors": [
+        {
+          "kind": "resource",
+          "selector": "workspace.charon",
+          "access": "admin",
+          "recursive": true
+        }
+      ],
+      "conditions": {},
+      "rationale": "Authority, trust, and evidence bypasses require an explicit human decision."
+    }
+  ],
+  "context_manifests": [],
+  "replicas": [
+    {
+      "record_type": "replica",
+      "id": "replica.local",
+      "workspace_id": "workspace.charon",
+      "revision": 1,
+      "created_at": "2026-08-11T16:00:00Z",
+      "updated_at": "2026-08-11T16:00:00Z",
+      "name": "Local workspace replica",
+      "kind": "local",
+      "trust": "trusted",
+      "identity": "example-local-replica-identity",
+      "cursors": {
+        "replica.local": 0
+      },
+      "capabilities": [
+        "event.append",
+        "artifact.read",
+        "artifact.write",
+        "task.dispatch"
+      ],
+      "policy_ids": [
+        "policy.workspace.sensitive_mutation"
+      ]
+    }
+  ],
+  "conflicts": [],
+  "events": []
+}

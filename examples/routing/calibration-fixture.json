@@ -1,0 +1,867 @@
+{
+  "schema_version": "1.0",
+  "dataset_id": "routing-fixture-v2",
+  "data_kind": "generated_fixture",
+  "seed": 42,
+  "description": "Deterministic synthetic demonstration data for the graph control plane. These values are not live provider measurements.",
+  "task_classes": [
+    "planning",
+    "implementation",
+    "interface",
+    "verification"
+  ],
+  "models": [
+    {
+      "candidate_id": "ember-small",
+      "provider": "local",
+      "model_id": "ember-small",
+      "capabilities": [
+        "code",
+        "tools"
+      ],
+      "context_window": 65536,
+      "estimated_cost_usd": 0.004,
+      "estimated_latency_ms": 8200.0,
+      "estimated_quality": 0.74,
+      "estimated_reliability": 0.82,
+      "calibration": {
+        "model_id": "ember-small",
+        "trial_count": 96,
+        "success_count": 73,
+        "success_rate": 0.755102,
+        "success_ci_low": 0.666076,
+        "success_ci_high": 0.834718,
+        "uncertainty_width": 0.168642,
+        "p50_latency_ms": 8421.855,
+        "p95_latency_ms": 14438.67125,
+        "mean_cost_usd": 0.003862,
+        "mean_score": 0.749115,
+        "brier_score": 0.172151,
+        "expected_calibration_error": 0.051701,
+        "probability_count": 96,
+        "score_count": 96,
+        "prior_alpha": 1.0,
+        "prior_beta": 1.0,
+        "metadata": {}
+      },
+      "task_calibrations": {
+        "implementation": {
+          "model_id": "ember-small",
+          "trial_count": 24,
+          "success_count": 18,
+          "success_rate": 0.730769,
+          "success_ci_low": 0.551006,
+          "success_ci_high": 0.880006,
+          "uncertainty_width": 0.329001,
+          "p50_latency_ms": 8007.505,
+          "p95_latency_ms": 9072.28695,
+          "mean_cost_usd": 0.003838,
+          "mean_score": 0.748444,
+          "brier_score": 0.192666,
+          "expected_calibration_error": 0.045,
+          "probability_count": 24,
+          "score_count": 24,
+          "prior_alpha": 1.0,
+          "prior_beta": 1.0,
+          "metadata": {}
+        },
+        "interface": {
+          "model_id": "ember-small",
+          "trial_count": 24,
+          "success_count": 14,
+          "success_rate": 0.576923,
+          "success_ci_low": 0.388347,
+          "success_ci_high": 0.755324,
+          "uncertainty_width": 0.366977,
+          "p50_latency_ms": 8200.99,
+          "p95_latency_ms": 9427.11305,
+          "mean_cost_usd": 0.003854,
+          "mean_score": 0.613876,
+          "brier_score": 0.24868,
+          "expected_calibration_error": 0.10375,
+          "probability_count": 24,
+          "score_count": 24,
+          "prior_alpha": 1.0,
+          "prior_beta": 1.0,
+          "metadata": {}
+        },
+        "planning": {
+          "model_id": "ember-small",
+          "trial_count": 24,
+          "success_count": 21,
+          "success_rate": 0.846154,
+          "success_ci_low": 0.689961,
+          "success_ci_high": 0.956557,
+          "uncertainty_width": 0.266595,
+          "p50_latency_ms": 13286.57,
+          "p95_latency_ms": 14817.43555,
+          "mean_cost_usd": 0.003893,
+          "mean_score": 0.787797,
+          "brier_score": 0.105968,
+          "expected_calibration_error": 0.04,
+          "probability_count": 24,
+          "score_count": 24,
+          "prior_alpha": 1.0,
+          "prior_beta": 1.0,
+          "metadata": {}
+        },
+        "verification": {
+          "model_id": "ember-small",
+          "trial_count": 24,
+          "success_count": 20,
+          "success_rate": 0.807692,
+          "success_ci_low": 0.641469,
+          "success_ci_high": 0.933213,
+          "uncertainty_width": 0.291744,
+          "p50_latency_ms": 7981.8615,
+          "p95_latency_ms": 9283.46835,
+          "mean_cost_usd": 0.003863,
+          "mean_score": 0.846342,
+          "brier_score": 0.141292,
+          "expected_calibration_error": 0.081667,
+          "probability_count": 24,
+          "score_count": 24,
+          "prior_alpha": 1.0,
+          "prior_beta": 1.0,
+          "metadata": {}
+        }
+      },
+      "metadata": {
+        "data_kind": "synthetic_profile",
+        "seed": 42
+      }
+    },
+    {
+      "candidate_id": "forge-medium",
+      "provider": "hosted",
+      "model_id": "forge-medium",
+      "capabilities": [
+        "code",
+        "tools",
+        "vision"
+      ],
+      "context_window": 131072,
+      "estimated_cost_usd": 0.031,
+      "estimated_latency_ms": 15100.0,
+      "estimated_quality": 0.86,
+      "estimated_reliability": 0.91,
+      "calibration": {
+        "model_id": "forge-medium",
+        "trial_count": 96,
+        "success_count": 91,
+        "success_rate": 0.938776,
+        "success_ci_low": 0.883815,
+        "success_ci_high": 0.97755,
+        "uncertainty_width": 0.093735,
+        "p50_latency_ms": 14442.6995,
+        "p95_latency_ms": 16701.647,
+        "mean_cost_usd": 0.031003,
+        "mean_score": 0.908928,
+        "brier_score": 0.046065,
+        "expected_calibration_error": 0.028385,
+        "probability_count": 96,
+        "score_count": 96,
+        "prior_alpha": 1.0,
+        "prior_beta": 1.0,
+        "metadata": {}
+      },
+      "task_calibrations": {
+        "implementation": {
+          "model_id": "forge-medium",
+          "trial_count": 24,
+          "success_count": 24,
+          "success_rate": 0.961538,
+          "success_ci_low": 0.862024,
+          "success_ci_high": 1.0,
+          "uncertainty_width": 0.137976,
+          "p50_latency_ms": 15054.8395,
+          "p95_latency_ms": 16676.0988,
+          "mean_cost_usd": 0.030985,
+          "mean_score": 0.93016,
+          "brier_score": 0.002809,
+          "expected_calibration_error": 0.042292,
+          "probability_count": 24,
+          "score_count": 24,
+          "prior_alpha": 1.0,
+          "prior_beta": 1.0,
+          "metadata": {}
+        },
+        "interface": {
+          "model_id": "forge-medium",
+          "trial_count": 24,
+          "success_count": 20,
+          "success_rate": 0.807692,
+          "success_ci_low": 0.641469,
+          "success_ci_high": 0.933213,
+          "uncertainty_width": 0.291744,
+          "p50_latency_ms": 15141.927,
+          "p95_latency_ms": 16712.8814,
+          "mean_cost_usd": 0.03099,
+          "mean_score": 0.873684,
+          "brier_score": 0.139321,
+          "expected_calibration_error": 0.041667,
+          "probability_count": 24,
+          "score_count": 24,
+          "prior_alpha": 1.0,
+          "prior_beta": 1.0,
+          "metadata": {}
+        },
+        "planning": {
+          "model_id": "forge-medium",
+          "trial_count": 24,
+          "success_count": 24,
+          "success_rate": 0.961538,
+          "success_ci_low": 0.862024,
+          "success_ci_high": 1.0,
+          "uncertainty_width": 0.137976,
+          "p50_latency_ms": 11629.768,
+          "p95_latency_ms": 13348.8829,
+          "mean_cost_usd": 0.030977,
+          "mean_score": 0.930955,
+          "brier_score": 0.000882,
+          "expected_calibration_error": 0.022917,
+          "probability_count": 24,
+          "score_count": 24,
+          "prior_alpha": 1.0,
+          "prior_beta": 1.0,
+          "metadata": {}
+        },
+        "verification": {
+          "model_id": "forge-medium",
+          "trial_count": 24,
+          "success_count": 23,
+          "success_rate": 0.923077,
+          "success_ci_low": 0.797582,
+          "success_ci_high": 0.992607,
+          "uncertainty_width": 0.195025,
+          "p50_latency_ms": 14662.646,
+          "p95_latency_ms": 16928.4965,
+          "mean_cost_usd": 0.031059,
+          "mean_score": 0.900911,
+          "brier_score": 0.041245,
+          "expected_calibration_error": 0.043333,
+          "probability_count": 24,
+          "score_count": 24,
+          "prior_alpha": 1.0,
+          "prior_beta": 1.0,
+          "metadata": {}
+        }
+      },
+      "metadata": {
+        "data_kind": "synthetic_profile",
+        "seed": 42
+      }
+    },
+    {
+      "candidate_id": "oracle-large",
+      "provider": "hosted",
+      "model_id": "oracle-large",
+      "capabilities": [
+        "code",
+        "long_context",
+        "tools",
+        "vision"
+      ],
+      "context_window": 262144,
+      "estimated_cost_usd": 0.092,
+      "estimated_latency_ms": 26400.0,
+      "estimated_quality": 0.94,
+      "estimated_reliability": 0.95,
+      "calibration": {
+        "model_id": "oracle-large",
+        "trial_count": 96,
+        "success_count": 94,
+        "success_rate": 0.969388,
+        "success_ci_low": 0.927193,
+        "success_ci_high": 0.994268,
+        "uncertainty_width": 0.067075,
+        "p50_latency_ms": 26396.7685,
+        "p95_latency_ms": 29354.56325,
+        "mean_cost_usd": 0.09252,
+        "mean_score": 0.967412,
+        "brier_score": 0.021324,
+        "expected_calibration_error": 0.032431,
+        "probability_count": 96,
+        "score_count": 96,
+        "prior_alpha": 1.0,
+        "prior_beta": 1.0,
+        "metadata": {}
+      },
+      "task_calibrations": {
+        "implementation": {
+          "model_id": "oracle-large",
+          "trial_count": 24,
+          "success_count": 23,
+          "success_rate": 0.923077,
+          "success_ci_low": 0.797582,
+          "success_ci_high": 0.992607,
+          "uncertainty_width": 0.195025,
+          "p50_latency_ms": 26719.405,
+          "p95_latency_ms": 28593.5127,
+          "mean_cost_usd": 0.092211,
+          "mean_score": 0.968669,
+          "brier_score": 0.036487,
+          "expected_calibration_error": 0.004375,
+          "probability_count": 24,
+          "score_count": 24,
+          "prior_alpha": 1.0,
+          "prior_beta": 1.0,
+          "metadata": {}
+        },
+        "interface": {
+          "model_id": "oracle-large",
+          "trial_count": 24,
+          "success_count": 23,
+          "success_rate": 0.923077,
+          "success_ci_low": 0.797582,
+          "success_ci_high": 0.992607,
+          "uncertainty_width": 0.195025,
+          "p50_latency_ms": 26515.6405,
+          "p95_latency_ms": 31494.59745,
+          "mean_cost_usd": 0.09243,
+          "mean_score": 0.98716,
+          "brier_score": 0.038111,
+          "expected_calibration_error": 0.001389,
+          "probability_count": 24,
+          "score_count": 24,
+          "prior_alpha": 1.0,
+          "prior_beta": 1.0,
+          "metadata": {}
+        },
+        "planning": {
+          "model_id": "oracle-large",
+          "trial_count": 24,
+          "success_count": 24,
+          "success_rate": 0.961538,
+          "success_ci_low": 0.862024,
+          "success_ci_high": 1.0,
+          "uncertainty_width": 0.137976,
+          "p50_latency_ms": 25857.1295,
+          "p95_latency_ms": 29010.93925,
+          "mean_cost_usd": 0.092714,
+          "mean_score": 0.958651,
+          "brier_score": 0.004764,
+          "expected_calibration_error": 0.059583,
+          "probability_count": 24,
+          "score_count": 24,
+          "prior_alpha": 1.0,
+          "prior_beta": 1.0,
+          "metadata": {}
+        },
+        "verification": {
+          "model_id": "oracle-large",
+          "trial_count": 24,
+          "success_count": 24,
+          "success_rate": 0.961538,
+          "success_ci_low": 0.862024,
+          "success_ci_high": 1.0,
+          "uncertainty_width": 0.137976,
+          "p50_latency_ms": 26603.6455,
+          "p95_latency_ms": 29068.46905,
+          "mean_cost_usd": 0.092726,
+          "mean_score": 0.955169,
+          "brier_score": 0.005933,
+          "expected_calibration_error": 0.067153,
+          "probability_count": 24,
+          "score_count": 24,
+          "prior_alpha": 1.0,
+          "prior_beta": 1.0,
+          "metadata": {}
+        }
+      },
+      "metadata": {
+        "data_kind": "synthetic_profile",
+        "seed": 42
+      }
+    }
+  ],
+  "policies": [
+    {
+      "policy_id": "balanced",
+      "trials": 96,
+      "scenarios": 32,
+      "repetitions_per_scenario": 3,
+      "success_rate": 0.9375,
+      "success_ci": [
+        0.885417,
+        0.979167
+      ],
+      "trial_success_rate": 0.9375,
+      "mean_score": 0.886742,
+      "p50_latency_ms": 12572.997667,
+      "p95_latency_ms": 21763.078483,
+      "mean_cost_usd": 0.02497,
+      "brier_score": 0.056547,
+      "expected_calibration_error": 0.016302,
+      "interval_method": "scenario_cluster_bootstrap_percentile",
+      "interval_status": "estimated",
+      "confidence_level": 0.95,
+      "recommended": true
+    },
+    {
+      "policy_id": "quality",
+      "trials": 96,
+      "scenarios": 32,
+      "repetitions_per_scenario": 3,
+      "success_rate": 0.979167,
+      "success_ci": [
+        0.947917,
+        1.0
+      ],
+      "trial_success_rate": 0.979167,
+      "mean_score": 0.922375,
+      "p50_latency_ms": 14744.9425,
+      "p95_latency_ms": 28434.516333,
+      "mean_cost_usd": 0.042758,
+      "brier_score": 0.022863,
+      "expected_calibration_error": 0.036944,
+      "interval_method": "scenario_cluster_bootstrap_percentile",
+      "interval_status": "estimated",
+      "confidence_level": 0.95
+    },
+    {
+      "policy_id": "economy",
+      "trials": 96,
+      "scenarios": 32,
+      "repetitions_per_scenario": 3,
+      "success_rate": 0.84375,
+      "success_ci": [
+        0.770833,
+        0.916667
+      ],
+      "trial_success_rate": 0.84375,
+      "mean_score": 0.82377,
+      "p50_latency_ms": 10663.761167,
+      "p95_latency_ms": 21341.104,
+      "mean_cost_usd": 0.014636,
+      "brier_score": 0.122953,
+      "expected_calibration_error": 0.039792,
+      "interval_method": "scenario_cluster_bootstrap_percentile",
+      "interval_status": "estimated",
+      "confidence_level": 0.95
+    },
+    {
+      "policy_id": "deadline",
+      "trials": 96,
+      "scenarios": 32,
+      "repetitions_per_scenario": 3,
+      "success_rate": 0.864583,
+      "success_ci": [
+        0.791667,
+        0.927083
+      ],
+      "trial_success_rate": 0.864583,
+      "mean_score": 0.849659,
+      "p50_latency_ms": 9709.352833,
+      "p95_latency_ms": 21341.104,
+      "mean_cost_usd": 0.019792,
+      "brier_score": 0.103883,
+      "expected_calibration_error": 0.058333,
+      "interval_method": "scenario_cluster_bootstrap_percentile",
+      "interval_status": "estimated",
+      "confidence_level": 0.95
+    }
+  ],
+  "recommendation": {
+    "rule_id": "held_out_operating_envelope_v1",
+    "evaluation_split": "evaluation",
+    "eligibility": {
+      "mean_cost_usd_lte": 0.03,
+      "p95_latency_ms_lte": 25000
+    },
+    "rank_by": [
+      "success_rate_desc",
+      "mean_score_desc",
+      "policy_id_asc"
+    ],
+    "eligible_policy_ids": [
+      "balanced",
+      "deadline",
+      "economy"
+    ],
+    "selected_policy_id": "balanced"
+  },
+  "comparisons": [
+    {
+      "baseline": "balanced",
+      "challenger": "quality",
+      "metric": "success_rate",
+      "delta": 0.041667,
+      "confidence_interval": [
+        0.010417,
+        0.083333
+      ],
+      "conclusion": "higher",
+      "interval_method": "paired_scenario_cluster_bootstrap_percentile",
+      "interval_status": "estimated",
+      "matched_pairs": 96,
+      "matched_scenarios": 32,
+      "unmatched_baseline": 0,
+      "unmatched_challenger": 0
+    },
+    {
+      "baseline": "balanced",
+      "challenger": "economy",
+      "metric": "mean_cost_usd",
+      "delta": -0.010333,
+      "confidence_interval": [
+        -0.014743,
+        -0.005946
+      ],
+      "conclusion": "lower",
+      "interval_method": "paired_scenario_cluster_bootstrap_percentile",
+      "interval_status": "estimated",
+      "matched_pairs": 96,
+      "matched_scenarios": 32,
+      "unmatched_baseline": 0,
+      "unmatched_challenger": 0
+    },
+    {
+      "baseline": "balanced",
+      "challenger": "deadline",
+      "metric": "mean_latency_ms",
+      "delta": -1386.756813,
+      "confidence_interval": [
+        -2422.353437,
+        -460.222625
+      ],
+      "conclusion": "lower",
+      "interval_method": "paired_scenario_cluster_bootstrap_percentile",
+      "interval_status": "estimated",
+      "matched_pairs": 96,
+      "matched_scenarios": 32,
+      "unmatched_baseline": 0,
+      "unmatched_challenger": 0
+    }
+  ],
+  "routing_matrix": [
+    {
+      "policy_id": "balanced",
+      "task_class": "planning",
+      "model_id": "ember-small",
+      "share": 0.25
+    },
+    {
+      "policy_id": "balanced",
+      "task_class": "planning",
+      "model_id": "forge-medium",
+      "share": 0.75
+    },
+    {
+      "policy_id": "balanced",
+      "task_class": "planning",
+      "model_id": "oracle-large",
+      "share": 0.0
+    },
+    {
+      "policy_id": "balanced",
+      "task_class": "implementation",
+      "model_id": "ember-small",
+      "share": 0.25
+    },
+    {
+      "policy_id": "balanced",
+      "task_class": "implementation",
+      "model_id": "forge-medium",
+      "share": 0.75
+    },
+    {
+      "policy_id": "balanced",
+      "task_class": "implementation",
+      "model_id": "oracle-large",
+      "share": 0.0
+    },
+    {
+      "policy_id": "balanced",
+      "task_class": "interface",
+      "model_id": "ember-small",
+      "share": 0.0
+    },
+    {
+      "policy_id": "balanced",
+      "task_class": "interface",
+      "model_id": "forge-medium",
+      "share": 0.75
+    },
+    {
+      "policy_id": "balanced",
+      "task_class": "interface",
+      "model_id": "oracle-large",
+      "share": 0.25
+    },
+    {
+      "policy_id": "balanced",
+      "task_class": "verification",
+      "model_id": "ember-small",
+      "share": 1.0
+    },
+    {
+      "policy_id": "balanced",
+      "task_class": "verification",
+      "model_id": "forge-medium",
+      "share": 0.0
+    },
+    {
+      "policy_id": "balanced",
+      "task_class": "verification",
+      "model_id": "oracle-large",
+      "share": 0.0
+    },
+    {
+      "policy_id": "quality",
+      "task_class": "planning",
+      "model_id": "ember-small",
+      "share": 0.25
+    },
+    {
+      "policy_id": "quality",
+      "task_class": "planning",
+      "model_id": "forge-medium",
+      "share": 0.75
+    },
+    {
+      "policy_id": "quality",
+      "task_class": "planning",
+      "model_id": "oracle-large",
+      "share": 0.0
+    },
+    {
+      "policy_id": "quality",
+      "task_class": "implementation",
+      "model_id": "ember-small",
+      "share": 0.0
+    },
+    {
+      "policy_id": "quality",
+      "task_class": "implementation",
+      "model_id": "forge-medium",
+      "share": 1.0
+    },
+    {
+      "policy_id": "quality",
+      "task_class": "implementation",
+      "model_id": "oracle-large",
+      "share": 0.0
+    },
+    {
+      "policy_id": "quality",
+      "task_class": "interface",
+      "model_id": "ember-small",
+      "share": 0.0
+    },
+    {
+      "policy_id": "quality",
+      "task_class": "interface",
+      "model_id": "forge-medium",
+      "share": 0.375
+    },
+    {
+      "policy_id": "quality",
+      "task_class": "interface",
+      "model_id": "oracle-large",
+      "share": 0.625
+    },
+    {
+      "policy_id": "quality",
+      "task_class": "verification",
+      "model_id": "ember-small",
+      "share": 0.375
+    },
+    {
+      "policy_id": "quality",
+      "task_class": "verification",
+      "model_id": "forge-medium",
+      "share": 0.25
+    },
+    {
+      "policy_id": "quality",
+      "task_class": "verification",
+      "model_id": "oracle-large",
+      "share": 0.375
+    },
+    {
+      "policy_id": "economy",
+      "task_class": "planning",
+      "model_id": "ember-small",
+      "share": 1.0
+    },
+    {
+      "policy_id": "economy",
+      "task_class": "planning",
+      "model_id": "forge-medium",
+      "share": 0.0
+    },
+    {
+      "policy_id": "economy",
+      "task_class": "planning",
+      "model_id": "oracle-large",
+      "share": 0.0
+    },
+    {
+      "policy_id": "economy",
+      "task_class": "implementation",
+      "model_id": "ember-small",
+      "share": 1.0
+    },
+    {
+      "policy_id": "economy",
+      "task_class": "implementation",
+      "model_id": "forge-medium",
+      "share": 0.0
+    },
+    {
+      "policy_id": "economy",
+      "task_class": "implementation",
+      "model_id": "oracle-large",
+      "share": 0.0
+    },
+    {
+      "policy_id": "economy",
+      "task_class": "interface",
+      "model_id": "ember-small",
+      "share": 0.0
+    },
+    {
+      "policy_id": "economy",
+      "task_class": "interface",
+      "model_id": "forge-medium",
+      "share": 0.75
+    },
+    {
+      "policy_id": "economy",
+      "task_class": "interface",
+      "model_id": "oracle-large",
+      "share": 0.25
+    },
+    {
+      "policy_id": "economy",
+      "task_class": "verification",
+      "model_id": "ember-small",
+      "share": 1.0
+    },
+    {
+      "policy_id": "economy",
+      "task_class": "verification",
+      "model_id": "forge-medium",
+      "share": 0.0
+    },
+    {
+      "policy_id": "economy",
+      "task_class": "verification",
+      "model_id": "oracle-large",
+      "share": 0.0
+    },
+    {
+      "policy_id": "deadline",
+      "task_class": "planning",
+      "model_id": "ember-small",
+      "share": 0.25
+    },
+    {
+      "policy_id": "deadline",
+      "task_class": "planning",
+      "model_id": "forge-medium",
+      "share": 0.75
+    },
+    {
+      "policy_id": "deadline",
+      "task_class": "planning",
+      "model_id": "oracle-large",
+      "share": 0.0
+    },
+    {
+      "policy_id": "deadline",
+      "task_class": "implementation",
+      "model_id": "ember-small",
+      "share": 1.0
+    },
+    {
+      "policy_id": "deadline",
+      "task_class": "implementation",
+      "model_id": "forge-medium",
+      "share": 0.0
+    },
+    {
+      "policy_id": "deadline",
+      "task_class": "implementation",
+      "model_id": "oracle-large",
+      "share": 0.0
+    },
+    {
+      "policy_id": "deadline",
+      "task_class": "interface",
+      "model_id": "ember-small",
+      "share": 0.0
+    },
+    {
+      "policy_id": "deadline",
+      "task_class": "interface",
+      "model_id": "forge-medium",
+      "share": 0.75
+    },
+    {
+      "policy_id": "deadline",
+      "task_class": "interface",
+      "model_id": "oracle-large",
+      "share": 0.25
+    },
+    {
+      "policy_id": "deadline",
+      "task_class": "verification",
+      "model_id": "ember-small",
+      "share": 1.0
+    },
+    {
+      "policy_id": "deadline",
+      "task_class": "verification",
+      "model_id": "forge-medium",
+      "share": 0.0
+    },
+    {
+      "policy_id": "deadline",
+      "task_class": "verification",
+      "model_id": "oracle-large",
+      "share": 0.0
+    }
+  ],
+  "provenance": {
+    "generation_method": "seeded_synthetic_simulation",
+    "generator_version": "1.0",
+    "generator_path": "scripts/generate_routing_fixture.py",
+    "config_sha256": "e3569d832a9dfd27e3de5ca4937c95d1cefd14a192748afaa426bcab60f40835",
+    "code_sha256": {
+      "scripts/generate_routing_fixture.py": "5f7c08ef33b4b0f9ca6ea9adf00437d7b3e92d4f549e335d7d965833cabaf848",
+      "src/charon/evaluation/agentic_benchmark.py": "4e22d351dd7c6cc652b8be0dd27593cadfa04e857acf5ba5eec6597252e9bd7d",
+      "src/charon/routing/calibration.py": "cc6c37ca763bed6d2679097dcbbb9c4c57cdda45d0246f5fbc634c10270b1f51",
+      "src/charon/routing/policy.py": "d1b174ca5d0da3a61a112251fe9fbf7e53d1dde9f6c51046244c8534568b4d12"
+    },
+    "raw_corpora": {
+      "model_calibration_trials": {
+        "path": "examples/routing/calibration-trials.jsonl",
+        "split": "calibration",
+        "records": 288,
+        "scenarios": 32,
+        "sha256": "bbf3ab80717163954a642449e7be89e82b15d40d11a61a037db5059d71f80040"
+      },
+      "evaluation_model_outcomes": {
+        "path": "examples/routing/evaluation-model-outcomes.jsonl",
+        "split": "evaluation",
+        "records": 288,
+        "scenarios": 32,
+        "sha256": "99508cfb7826dd8935a8ba81573323a9f045b7ae054cb9774644d97caf3fcb18"
+      },
+      "policy_benchmark_trials": {
+        "path": "examples/routing/policy-benchmark-trials.jsonl",
+        "split": "evaluation",
+        "records": 384,
+        "scenarios": 32,
+        "sha256": "66c80c737eb7f31f1cd82891a83c5e2f99c653a20f0dcb1729c26f798cad6b02"
+      }
+    },
+    "calibration_scenario_count": 32,
+    "evaluation_scenario_count": 32,
+    "repetitions_per_scenario": 3,
+    "bootstrap_samples": 4000,
+    "confidence_level": 0.95
+  }
+}

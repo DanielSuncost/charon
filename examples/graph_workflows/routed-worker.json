@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "graph_id": "routed-worker",
+  "title": "Routed worker template",
+  "entry_nodes": [
+    "select_model"
+  ],
+  "max_node_visits": 2,
+  "max_run_steps": 12,
+  "metadata": {
+    "version": "1.0.0",
+    "description": "An executable route-to-queue template. Replace the owner, model, and operator priors before running it."
+  },
+  "nodes": [
+    {
+      "id": "select_model",
+      "title": "Select execution model",
+      "handler": "route",
+      "join": "any",
+      "config": {
+        "policy": "balanced",
+        "state_key": "selected_route",
+        "task": {
+          "task_id": "routed-worker-task",
+          "context_tokens": 12000,
+          "required_capabilities": [
+            "code",
+            "tools"
+          ],
+          "metadata": {
+            "task_class": "implementation"
+          }
+        },
+        "candidates": [
+          {
+            "candidate_id": "local-worker",
+            "provider": "local",
+            "model_id": "qwen3-30b-a3b",
+            "capabilities": [
+              "code",
+              "tools"
+            ],
+            "context_window": 65536,
+            "estimated_cost_usd": 0.01,
+            "estimated_latency_ms": 8000,
+            "estimated_quality": 0.75,
+            "estimated_reliability": 0.8,
+            "metadata": {
+              "estimate_kind": "operator_prior",
+              "replace_before_use": true
+            }
+          }
+        ]
+      },
+      "metadata": {
+        "type": "router",
+        "description": "Apply hard constraints and a versioned policy to configured endpoints.",
+        "position": {
+          "x": 120,
+          "y": 180
+        }
+      }
+    },
+    {
+      "id": "execute_task",
+      "title": "Execute routed task",
+      "handler": "queue_agent",
+      "join": "any",
+      "terminal": true,
+      "config": {
+        "owner_agent_id": "AG-REPLACE-ME",
+        "instruction": "Implement the bounded task and return validation evidence.",
+        "route_from": "selected_route",
+        "project": ".",
+        "priority": "normal",
+        "scope": [],
+        "max_attempts": 3,
+        "poll_delay_sec": 1.0
+      },
+      "metadata": {
+        "type": "agent",
+        "description": "Dispatch through the ordinary Charon queue and verify the executed endpoint.",
+        "position": {
+          "x": 500,
+          "y": 180
+        }
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "route-to-worker",
+      "source": "select_model",
+      "target": "execute_task",
+      "on": "success",
+      "title": "selected endpoint"
+    }
+  ]
+}
