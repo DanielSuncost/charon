@@ -191,27 +191,107 @@ class WorkCommandsMixin:
                 }
                 common.emit({'type': 'status', 'message': 'Usage: /libris <broad research prompt>', 'request_id': request_id})
                 return
-            if rest.startswith('status '):
-                op_id = rest[7:].strip()
+            if (
+                rest in {'approval', 'approvals'}
+                or rest.startswith('approval ')
+                or rest.startswith('approvals ')
+            ):
+                parts = rest.split(None, 1)
+                requested_policy = (
+                    parts[1].strip().lower() if len(parts) > 1 else ''
+                )
                 try:
-                    from charon.libris.libris_runtime import get_libris_swarm_state
-                    swarm = get_libris_swarm_state(common.STATE_DIR, Path(self._libris_project_root()), op_id)
-                    if not swarm:
-                        common.emit({'type': 'error', 'error': f'No Libris operation found: {op_id}', 'request_id': request_id})
-                        return
+                    from charon.infra.tool_approval import (
+                        get_approval_status,
+                        set_research_source_approval_policy,
+                    )
+
+                    if requested_policy:
+                        if requested_policy not in {'auto', 'ask'}:
+                            common.emit({
+                                'type': 'error',
+                                'error': (
+                                    'Usage: /libris approvals [auto|ask]'
+                                ),
+                                'request_id': request_id,
+                            })
+                            return
+                        set_research_source_approval_policy(
+                            common.STATE_DIR,
+                            requested_policy,
+                        )
+
+                    status = get_approval_status(
+                        self._active_agent_id or 'default',
+                        state_dir=common.STATE_DIR,
+                    )
+                    effective = str(
+                        status.get('research_sources') or 'auto'
+                    )
+                    configured = str(
+                        status.get('configured_research_sources') or 'auto'
+                    )
+                    env_override = str(
+                        status.get('research_sources_env_override') or ''
+                    )
+                    behavior = {
+                        'auto': (
+                            'read-only research source access proceeds '
+                            'without a prompt'
+                        ),
+                        'ask': (
+                            'each unapproved research source tool prompts '
+                            'before access'
+                        ),
+                    }.get(effective, effective)
                     lines = [
-                        f'Operation: {swarm.get("operation_id")}',
-                        f'Status: {swarm.get("status")}',
-                        f'Topics: {len(swarm.get("topics") or [])}',
+                        'Libris source approvals',
+                        f'Effective policy: {effective} — {behavior}.',
+                        f'Configured policy: {configured}',
                     ]
-                    coord = swarm.get('coordinator') or {}
-                    if coord:
-                        lines.append(f'Coordinator: {coord.get("name")} [{coord.get("status")}]')
-                    for topic in swarm.get('topics') or []:
-                        lines.append(f'- {topic.get("title")} [{topic.get("status")}/{topic.get("phase")}]')
-                    common.emit({'type': 'status', 'message': '\n'.join(lines), 'request_id': request_id})
-                except Exception as e:
-                    common.emit({'type': 'error', 'error': f'Libris status failed: {e}', 'request_id': request_id})
+                    if env_override:
+                        lines.append(
+                            'Environment override: '
+                            f'CHARON_RESEARCH_SOURCE_APPROVAL={env_override}'
+                        )
+                    lines.extend([
+                        (
+                            'Mutating network actions and dangerous commands '
+                            'remain gated.'
+                        ),
+                        'Change with /libris approvals auto|ask.',
+                    ])
+                    common.emit({
+                        'type': 'status',
+                        'message': '\n'.join(lines),
+                        'request_id': request_id,
+                    })
+                except Exception as exc:
+                    common.emit({
+                        'type': 'error',
+                        'error': f'Could not update Libris approvals: {exc}',
+                        'request_id': request_id,
+                    })
+                return
+            if rest == 'status' or rest.startswith('status '):
+                requested = rest[6:].strip()
+                op_id = requested or self._resolve_libris_operation_id()
+                self._emit_libris_status(op_id, request_id)
+                return
+            if rest == 'cancel':
+                self._pending_libris_intake = None
+                common.emit({'type': 'status', 'message': 'Cancelled pending Libris intake.', 'request_id': request_id})
+                return
+            if rest == 'launch' or rest.startswith('launch '):
+                choice = rest[6:].strip()
+                pending = self._pending_libris_intake or {}
+                options = list(pending.get('goal_options') or [])
+                if choice.isdigit() and 1 <= int(choice) <= len(options):
+                    pending['selected_goal'] = options[int(choice) - 1]
+                    self._pending_libris_intake = pending
+                    self._start_libris_from_pending(request_id)
+                else:
+                    common.emit({'type': 'error', 'error': f'Invalid Libris goal option: {choice}', 'request_id': request_id})
                 return
             if rest.startswith('use '):
                 choice = rest[4:].strip()
@@ -648,9 +728,16 @@ class WorkCommandsMixin:
                 session_id = self._active_agent_id or 'default'
 
                 if arg == 'status':
-                    status = get_approval_status(session_id)
+                    status = get_approval_status(
+                        session_id,
+                        state_dir=common.STATE_DIR,
+                    )
                     skip = '(ALL CHECKS DISABLED)' if status['skip_all'] else ''
                     lines = [f'Approval status {skip}']
+                    lines.append(
+                        'Libris research sources: '
+                        f'{status.get("research_sources", "auto")}'
+                    )
                     if status['session_approved']:
                         lines.append('Session approved:')
                         for a in status['session_approved']:
@@ -665,13 +752,28 @@ class WorkCommandsMixin:
                 elif not arg or arg == 'all':
                     # Approve all tools for all session IDs
                     for sid in session_ids:
-                        for tool in ('Web', 'Http', 'Write', 'Edit', 'Bash', 'Git', 'SpawnBatch', 'SpawnShade', 'Browser', 'X'):
+                        for tool in (
+                            'Web',
+                            'Http',
+                            'Paper',
+                            'SourceDiscovery',
+                            'Write',
+                            'Edit',
+                            'Bash',
+                            'Git',
+                            'SpawnBatch',
+                            'SpawnShade',
+                            'Browser',
+                            'X',
+                        ):
                             approve_tool_for_session(sid, tool)
                     common.emit({'type': 'status', 'message': '✓ All tools approved for this session.', 'request_id': request_id})
                 elif arg.startswith('network') or arg.startswith('web') or arg.startswith('http'):
                     for sid in session_ids:
                         approve_tool_for_session(sid, 'Web')
                         approve_tool_for_session(sid, 'Http')
+                        approve_tool_for_session(sid, 'Paper')
+                        approve_tool_for_session(sid, 'SourceDiscovery')
                         approve_tool_for_session(sid, 'Browser')
                         approve_tool_for_session(sid, 'X')
                     common.emit({'type': 'status', 'message': '✓ Network tools approved for this session.', 'request_id': request_id})

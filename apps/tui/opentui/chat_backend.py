@@ -30,6 +30,7 @@ import json
 import signal
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from backend import common
 from charon.conversation.conversation_engine import ConversationEngine
@@ -49,6 +50,7 @@ from backend.dashboard import _collect_devop_rooms  # noqa: F401
 from backend.nlparse import _parse_interval_phrase, _natural_language_to_cron  # noqa: F401
 
 from backend.providers_mixin import ProvidersMixin
+from backend.async_runtime import AsyncRuntime
 from backend.chat_mixin import ChatMixin
 from backend.commands_mixin import CommandsMixin
 from backend.commands_core import CoreCommandsMixin
@@ -72,6 +74,14 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, CoreCommandsMixin, A
             start_scheduler(common.STATE_DIR, poll_seconds=2.0)
         except Exception:
             pass
+        # One process-lifetime event loop keeps provider transports and prompt
+        # session state warm across chat turns. The stdin/main thread remains
+        # synchronous and responsive; chat workers submit coroutines here.
+        self._async_runtime = AsyncRuntime()
+        self._post_turn_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix='charon-post-turn',
+        )
         self.engine: ConversationEngine | None = None
         self.chat_history: list[dict] = []
         self._engine_lock = threading.Lock()
@@ -81,6 +91,10 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, CoreCommandsMixin, A
         self._session_tasks: list[dict] = []
         self._pending_provider_switch: dict | None = None
         self._pending_libris_intake: dict | None = None
+        self._last_libris_operation_id: str = ''
+        self._tracked_libris_operation_ids: list[str] = []
+        self._announced_libris_completions: set[str] = set()
+        self._announced_orchestration_events: dict[str, str] = {}
         self._pending_remote_onboard: dict | None = None
         self._pending_fleet_setup: dict | None = None
         self.visible_thoughts: bool = bool(_load_ui_settings().get('visible_thoughts', False))
@@ -89,6 +103,11 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, CoreCommandsMixin, A
         self._last_orchestration_parse: dict = {}
         self._owned_boat_sessions: set[str] = set()
         self._shutdown_cleaned = False
+        self._chat_busy = False
+        self._active_chat_request_id: str | None = None
+        self._active_chat_message = ''
+        self._active_chat_started_at = 0.0
+        self._active_tool: dict = {}
 
     def _register_owned_boat_session(self, session_name: str | None) -> None:
         name = str(session_name or '').strip()
@@ -105,6 +124,21 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, CoreCommandsMixin, A
             except Exception:
                 pass
         self._owned_boat_sessions.clear()
+        try:
+            provider = getattr(self.engine, 'provider', None)
+            close_provider = getattr(provider, 'aclose', None)
+            if callable(close_provider):
+                self._async_runtime.run(close_provider())
+        except Exception:
+            pass
+        try:
+            self._async_runtime.shutdown()
+        except Exception:
+            pass
+        try:
+            self._post_turn_executor.shutdown(wait=True, cancel_futures=False)
+        except Exception:
+            pass
 
     def run(self):
         # Check if already set up — auto-initialize if so
@@ -212,10 +246,17 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, CoreCommandsMixin, A
             request_id = msg.get('request_id')
 
             if req_type == 'chat':
-                # Run chat on a worker thread so main loop stays responsive
-                self._chat_busy = True
-                t = threading.Thread(target=self._chat_worker, args=(msg.get('message', ''), request_id), daemon=True)
-                t.start()
+                message = msg.get('message', '')
+                if self._chat_busy:
+                    # Be defensive when a client has stale lifecycle state.
+                    # Starting a second worker would only block on _engine_lock
+                    # and leave the user's question invisible to the active run.
+                    self.handle_steer(message, request_id)
+                else:
+                    # Run chat on a worker thread so main loop stays responsive.
+                    self._chat_busy = True
+                    t = threading.Thread(target=self._chat_worker, args=(message, request_id), daemon=True)
+                    t.start()
             elif req_type == 'command':
                 self.handle_command(msg.get('command', ''), request_id)
             elif req_type == 'refresh':
@@ -236,7 +277,13 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, CoreCommandsMixin, A
             elif req_type == 'approval_response':
                 try:
                     from charon.tools import respond_to_approval
-                    respond_to_approval(msg.get('approved', False))
+                    approval_id = str(msg.get('approval_id') or '').strip()
+                    if approval_id:
+                        respond_to_approval(approval_id, msg.get('approved', False))
+                    else:
+                        # Backward compatibility with an older TUI is safe only
+                        # when the tool layer has exactly one pending request.
+                        respond_to_approval(bool(msg.get('approved', False)))
                 except Exception:
                     pass
             elif req_type == 'steer':

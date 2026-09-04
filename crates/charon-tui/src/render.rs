@@ -60,8 +60,10 @@ pub fn render_border_colored<W: Write>(
     out.queue(SetForegroundColor(border_color))?;
     write!(out, " ")?;
     let inner_width = area.width as usize;
-    let prefix_display_len = 4 + title.len(); // ╭─ <title> <space> in display columns
-    let fill_count = inner_width.saturating_sub(prefix_display_len);
+    let title_width = title.chars().count();
+    // The prefix includes the left corner; leave enough fill for the right
+    // corner to land at x + width, aligned with the side and bottom borders.
+    let fill_count = inner_width.saturating_sub(3 + title_width);
     let fill = "─".repeat(fill_count);
     write!(out, "{}╮", fill)?;
 
@@ -218,4 +220,34 @@ pub fn render_terminal<W: Write>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn titled_border_top_aligns_with_side_and_bottom_boundaries() {
+        for title in ["x", "ø"] {
+            let mut output = Vec::new();
+            render_border_colored(
+                &mut output,
+                Rect {
+                    x: 2,
+                    y: 2,
+                    width: 10,
+                    height: 1,
+                },
+                title,
+                CtColor::Blue,
+            )
+            .expect("border renders");
+            let rendered = String::from_utf8(output).expect("terminal output is UTF-8");
+
+            // Seven top-border dashes plus ten bottom-border dashes means
+            // both rows span the same 12 columns including their corners.
+            assert_eq!(rendered.matches('─').count(), 17);
+            assert_eq!(rendered.matches('│').count(), 2);
+        }
+    }
 }

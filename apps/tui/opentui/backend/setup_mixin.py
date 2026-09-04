@@ -40,7 +40,7 @@ class SetupMixin:
         elif subcmd == 'reset':
             onboarding = {'complete': False, 'step': 'provider-mode', 'provider_mode': '', 'provider': '', 'model': ''}
             self._save_onboarding(onboarding)
-            self.engine = None  # force re-creation
+            self._dispose_engine()  # force re-creation
             common.emit({'type': 'status', 'message': 'Setup reset.', 'request_id': request_id})
         elif subcmd == 'provider':
             # Parse: /setup provider claude-code [--force]
@@ -217,7 +217,7 @@ class SetupMixin:
                     target_state['complete'] = True
                     target_state['step'] = 'done'
                     _persist_target_state()
-                    self.engine = None
+                    self._dispose_engine()
                     if detected:
                         common.emit({'type': 'status', 'message': f'Provider set to {arg}. Auto-selected model {chosen_model}.', 'request_id': request_id})
                     else:
@@ -319,7 +319,7 @@ class SetupMixin:
             self._save_onboarding(onboarding)
             if session_override and self._active_agent_id:
                 save_session_provider_config(common.STATE_DIR, self._active_agent_id, target_state)
-            self.engine = None
+            self._dispose_engine()
             common.emit({'type': 'status', 'message': f'✓ Model set to {arg}. Setup complete.', 'request_id': request_id})
             effective_onboarding = dict(onboarding)
             effective_onboarding.update(target_state)
@@ -455,7 +455,7 @@ class SetupMixin:
                 onboarding['step'] = 'model'
                 self._save_onboarding(onboarding)
                 self._pending_auth = None
-                self.engine = None
+                self._dispose_engine()
 
                 common.emit({'type': 'status', 'message': '✓ Authentication successful! Now run /setup model <model_name>', 'request_id': request_id})
             except Exception as e:
@@ -465,7 +465,7 @@ class SetupMixin:
             onboarding['complete'] = True
             onboarding['step'] = 'done'
             self._save_onboarding(onboarding)
-            self.engine = None  # force re-creation with new config
+            self._dispose_engine()  # force re-creation with new config
             self._on_setup_complete(onboarding, request_id)
         elif subcmd in ('api-key',):
             onboarding['api_key'] = arg
@@ -473,7 +473,7 @@ class SetupMixin:
                 onboarding['provider'] = 'api'
             onboarding['provider_mode'] = 'provider'
             self._save_onboarding(onboarding)
-            self.engine = None
+            self._dispose_engine()
             common.emit({'type': 'status', 'message': 'API key saved.', 'request_id': request_id})
         elif subcmd == 'no-provider':
             onboarding['provider_mode'] = 'no-provider'
@@ -481,7 +481,7 @@ class SetupMixin:
             onboarding['complete'] = True
             onboarding['step'] = 'done'
             self._save_onboarding(onboarding)
-            self.engine = None
+            self._dispose_engine()
             self._on_setup_complete(onboarding, request_id)
         else:
             common.emit({'type': 'error', 'error': f'Unknown setup command: {subcmd}', 'request_id': request_id})

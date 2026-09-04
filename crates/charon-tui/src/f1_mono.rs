@@ -225,7 +225,7 @@ fn draw_footer(buf: &mut ScreenBuf, app: &App, w: u16, h: u16) {
     };
     let left = format!("  ❈ CHARON  {}  ctx:{}  chat:{}↑ {}↓{}", provider, ctx, fmt_k(chat_in), fmt_k(chat_out), queue_str);
     let right = if app.chat.streaming {
-        "PgUp/PgDn scroll  Ctrl+C copy  Esc clear"
+        "Enter steer  /queue later  PgUp/PgDn scroll"
     } else {
         "Enter send  / commands  PgUp/PgDn scroll"
     };

@@ -1,4 +1,5 @@
 use serde_json::{json, Map, Value};
+use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -176,6 +177,44 @@ fn merge_json_objects(dst: &mut Map<String, Value>, src: &Map<String, Value>) {
     }
 }
 
+fn compact_tool_result_summary(content: &str) -> String {
+    content
+        .lines()
+        .take(3)
+        .map(|line| {
+            let mut short: String = line.chars().take(160).collect();
+            if line.chars().count() > 160 {
+                short.push('…');
+            }
+            short
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn provider_model_label(payload: Option<&Value>) -> String {
+    let Some(payload) = payload else {
+        return "initializing…".to_string();
+    };
+    let provider = payload
+        .get("onboarding")
+        .and_then(|o| o.get("provider"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let model = payload
+        .get("onboarding")
+        .and_then(|o| o.get("model"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if provider.is_empty() && model.is_empty() {
+        "unconfigured".to_string()
+    } else if model.is_empty() {
+        provider.to_string()
+    } else {
+        format!("{}/{}", provider, model)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct MenuItem {
     pub cmd: String,
@@ -194,13 +233,253 @@ pub struct UsageStats {
     pub context_window: Option<u64>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApprovalRequest {
+    pub approval_id: String,
     pub tool: String,
     pub reason: String,
     pub risk: String,
     pub params: String,
+    pub agent_id: String,
+    pub operation_id: String,
+    pub work_unit_id: String,
     pub selected: usize,
+}
+
+impl ApprovalRequest {
+    fn from_backend_event(event: &Value) -> Self {
+        Self {
+            approval_id: event
+                .get("approval_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string(),
+            tool: event
+                .get("tool")
+                .and_then(Value::as_str)
+                .unwrap_or("tool")
+                .to_string(),
+            reason: event
+                .get("reason")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            risk: event
+                .get("risk")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string(),
+            params: event
+                .get("params")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            agent_id: event
+                .get("agent_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            operation_id: event
+                .get("operation_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            work_unit_id: event
+                .get("work_unit_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            selected: 0,
+        }
+    }
+
+    fn approved_for_selection(&self) -> bool {
+        self.selected != 1
+    }
+
+    fn response_event(&self, approved: bool) -> Value {
+        json!({
+            "type": "approval_response",
+            "approval_id": self.approval_id,
+            "approved": approved,
+        })
+    }
+}
+
+fn enqueue_approval(
+    active: &mut Option<ApprovalRequest>,
+    queued: &mut VecDeque<ApprovalRequest>,
+    request: ApprovalRequest,
+) {
+    let duplicate_active = active
+        .as_ref()
+        .map(|item| !request.approval_id.is_empty() && item.approval_id == request.approval_id)
+        .unwrap_or(false);
+    let duplicate_queued = !request.approval_id.is_empty()
+        && queued
+            .iter()
+            .any(|item| item.approval_id == request.approval_id);
+    if duplicate_active || duplicate_queued {
+        return;
+    }
+
+    if active.is_none() {
+        *active = Some(request);
+    } else {
+        queued.push_back(request);
+    }
+}
+
+fn resolve_approval(
+    active: &mut Option<ApprovalRequest>,
+    queued: &mut VecDeque<ApprovalRequest>,
+    approval_id: &str,
+) -> bool {
+    if active
+        .as_ref()
+        .map(|item| item.approval_id == approval_id)
+        .unwrap_or(false)
+    {
+        *active = queued.pop_front();
+        return true;
+    }
+
+    if let Some(index) = queued
+        .iter()
+        .position(|item| item.approval_id == approval_id)
+    {
+        queued.remove(index);
+        return true;
+    }
+    false
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibrisIntake {
+    pub prompt: String,
+    pub stop_condition: String,
+    pub options: Vec<String>,
+    pub selected: usize,
+}
+
+impl LibrisIntake {
+    fn from_backend_event(event: &Value) -> Option<Self> {
+        let option_values = event.get("options").and_then(Value::as_array)?;
+        let mut options = Vec::with_capacity(option_values.len());
+        for value in option_values {
+            let option = value.as_str()?.trim();
+            if option.is_empty() {
+                return None;
+            }
+            options.push(option.to_string());
+        }
+        if options.is_empty() {
+            return None;
+        }
+        Some(Self {
+            prompt: event.get("prompt").and_then(Value::as_str).unwrap_or("").trim().to_string(),
+            stop_condition: event
+                .get("stop_condition")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string(),
+            options,
+            selected: 0,
+        })
+    }
+
+    pub fn move_up(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+
+    pub fn move_down(&mut self) {
+        if self.selected + 1 < self.options.len() {
+            self.selected += 1;
+        }
+    }
+
+    pub fn launch_command(&self, option_index: usize) -> Option<String> {
+        (option_index < self.options.len()).then(|| format!("/libris launch {}", option_index + 1))
+    }
+}
+
+fn libris_room_focus_target(event: &Value) -> Option<String> {
+    event
+        .get("operation_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|operation_id| !operation_id.is_empty())
+        .map(|operation_id| format!("libris-{operation_id}"))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LibrisCompletion {
+    pub operation_id: String,
+    pub topic_count: usize,
+    pub artifact_count: usize,
+    pub primary_label: String,
+    pub primary_path: String,
+    pub primary_media_type: String,
+}
+
+impl LibrisCompletion {
+    fn from_backend_event(event: &Value) -> Option<Self> {
+        let operation_id = event
+            .get("operation_id")
+            .and_then(Value::as_str)?
+            .trim();
+        let topic_count = event
+            .get("topic_count")
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok())?;
+        let primary = event.get("primary_artifact")?.as_object()?;
+        let primary_path = primary.get("path").and_then(Value::as_str)?.trim();
+        if operation_id.is_empty()
+            || topic_count == 0
+            || !std::path::Path::new(primary_path).is_absolute()
+        {
+            return None;
+        }
+        let artifacts = event.get("artifacts").and_then(Value::as_array)?;
+        if artifacts.is_empty()
+            || !artifacts.iter().all(|artifact| {
+                artifact
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .is_some_and(|path| std::path::Path::new(path).is_absolute())
+            })
+        {
+            return None;
+        }
+        let declared_artifact_count = event
+            .get("artifact_count")
+            .and_then(Value::as_u64)
+            .and_then(|value| usize::try_from(value).ok());
+        if declared_artifact_count.is_some_and(|count| count != artifacts.len()) {
+            return None;
+        }
+        let artifact_count = declared_artifact_count.unwrap_or(artifacts.len());
+        Some(Self {
+            operation_id: operation_id.to_string(),
+            topic_count,
+            artifact_count,
+            primary_label: primary
+                .get("label")
+                .and_then(Value::as_str)
+                .unwrap_or("Primary artifact")
+                .trim()
+                .to_string(),
+            primary_path: primary_path.to_string(),
+            primary_media_type: primary
+                .get("media_type")
+                .and_then(Value::as_str)
+                .unwrap_or("application/octet-stream")
+                .trim()
+                .to_string(),
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -213,6 +492,7 @@ pub enum ChatMessage {
     Status { text: String },
     Error { text: String },
     Stderr { text: String },
+    LibrisCompleted { delivery: LibrisCompletion },
     /// A user message waiting in the queue (follow-up or steer).
     /// `tag` is "queued" or "steering". Converted to User on delivery.
     QueuedUser { text: String, tag: String },
@@ -258,6 +538,9 @@ pub struct ChatState {
     pub auth_url: Option<String>,
     pub auth_action_index: usize,
     pub approval: Option<ApprovalRequest>,
+    pub approval_queue: VecDeque<ApprovalRequest>,
+    pub libris_intake: Option<LibrisIntake>,
+    pub pending_libris_room_focus: Option<String>,
     pub view_mode: ChatViewMode,
     pub info_pane_open: bool,
     pub info_pane_tab: usize,
@@ -306,6 +589,9 @@ impl ChatState {
             auth_url: None,
             auth_action_index: 0,
             approval: None,
+            approval_queue: VecDeque::new(),
+            libris_intake: None,
+            pending_libris_room_focus: None,
             view_mode: ChatViewMode::Transcript,
             info_pane_open: false,
             info_pane_tab: 0,
@@ -369,7 +655,22 @@ impl ChatState {
         self.history_index = None;
         self.scroll = 0;
 
-        if text.starts_with('/') {
+        if self.streaming && (text.starts_with("/queue ") || text.starts_with("/follow-up ")) {
+            // Explicitly defer work until the current run reaches a natural
+            // stopping point. Plain Enter while streaming is intentionally a
+            // steer so the user can talk to a busy agent without waiting for a
+            // long tool chain to finish.
+            let msg = text
+                .strip_prefix("/queue ")
+                .or_else(|| text.strip_prefix("/follow-up "))
+                .unwrap_or("")
+                .trim();
+            if !msg.is_empty() {
+                let _ = self.backend.send_follow_up(msg);
+                self.pending_queue.push(msg.to_string());
+                self.messages.push(ChatMessage::QueuedUser { text: msg.to_string(), tag: "queued".to_string() });
+            }
+        } else if text.starts_with('/') {
             // Commands always go through immediately
             if text.starts_with("/steer ") {
                 let msg = text.trim_start_matches("/steer ").trim();
@@ -382,16 +683,21 @@ impl ChatState {
                 let _ = self.backend.send_command(&text);
             }
         } else if self.streaming {
-            // During streaming, queue as follow-up
-            let _ = self.backend.send_follow_up(&text);
-            self.pending_queue.push(text.clone());
-            self.messages.push(ChatMessage::QueuedUser { text: text.clone(), tag: "queued".to_string() });
+            // A live message should be heard promptly. The engine delivers the
+            // steer after the current atomic tool call (or during text
+            // streaming), then answers it on the next model turn.
+            let _ = self.backend.send_steer(&text);
+            self.messages.push(ChatMessage::QueuedUser { text: text.clone(), tag: "steering".to_string() });
         } else {
             // Normal send
             self.transcript.push(format!("> {}", text));
             self.messages.push(ChatMessage::User { text: text.clone() });
             self.start_provisional_outcome(&text);
             let _ = self.backend.send_chat(&text);
+            // Mark the request active immediately. Waiting for the first text
+            // delta left a tool-only turn looking idle, so additional Enter
+            // presses started overlapping backend workers instead of steering.
+            self.streaming = true;
         }
         self.input.clear();
     }
@@ -570,15 +876,23 @@ impl ChatState {
     }
 
     pub fn approval_deny(&mut self) {
-        self.approval = None;
-        let _ = self.backend.send(json!({"type": "approval_response", "approved": false}));
+        let Some(approval) = self.approval.take() else {
+            return;
+        };
+        self.approval = self.approval_queue.pop_front();
+        let _ = self.backend.send(approval.response_event(false));
         self.push_status("✗ Denied");
     }
 
     pub fn approval_accept_selected(&mut self) {
         let Some(approval) = self.approval.take() else { return; };
-        let _ = self.backend.send(json!({"type": "approval_response", "approved": true}));
+        self.approval = self.approval_queue.pop_front();
+        let approved = approval.approved_for_selection();
+        let _ = self.backend.send(approval.response_event(approved));
         match approval.selected {
+            1 => {
+                self.push_status("✗ Denied");
+            }
             2 => {
                 let _ = self.backend.send_command("/approve all");
                 self.push_status("✓ All tools approved for session");
@@ -587,6 +901,61 @@ impl ChatState {
                 self.push_status("✓ Approved");
             }
         }
+    }
+
+    pub fn libris_intake_open(&self) -> bool {
+        self.libris_intake.is_some()
+    }
+
+    pub fn libris_intake_move_up(&mut self) {
+        if let Some(intake) = self.libris_intake.as_mut() {
+            intake.move_up();
+        }
+    }
+
+    pub fn libris_intake_move_down(&mut self) {
+        if let Some(intake) = self.libris_intake.as_mut() {
+            intake.move_down();
+        }
+    }
+
+    pub fn libris_intake_launch_selected(&mut self) {
+        let selected = self.libris_intake.as_ref().map(|intake| intake.selected);
+        if let Some(selected) = selected {
+            self.libris_intake_launch_option(selected);
+        }
+    }
+
+    pub fn libris_intake_launch_option(&mut self, option_index: usize) {
+        let Some(command) = self
+            .libris_intake
+            .as_ref()
+            .and_then(|intake| intake.launch_command(option_index))
+        else {
+            return;
+        };
+        self.libris_intake = None;
+        self.close_menu();
+        self.transcript.push(format!("> {}", command));
+        self.messages.push(ChatMessage::User { text: command.clone() });
+        self.input_history.push(command.clone());
+        self.history_index = None;
+        self.scroll = 0;
+        let _ = self.backend.send_command(&command);
+    }
+
+    pub fn libris_intake_cancel(&mut self) {
+        if self.libris_intake.take().is_none() {
+            return;
+        }
+        self.close_menu();
+        let command = "/libris cancel";
+        self.transcript.push(format!("> {}", command));
+        self.messages.push(ChatMessage::User { text: command.to_string() });
+        self.input_history.push(command.to_string());
+        self.history_index = None;
+        self.scroll = 0;
+        let _ = self.backend.send_command(command);
     }
 
     fn summarize_outcome_prompt(text: &str) -> String {
@@ -787,7 +1156,7 @@ impl ChatState {
             "tool_result" => {
                 let tool = m.get("tool_name").and_then(|x| x.as_str()).unwrap_or("tool");
                 let is_error = m.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false);
-                let summary: String = content.lines().take(3).collect::<Vec<_>>().join(" ");
+                let summary = compact_tool_result_summary(content);
                 self.transcript.push(format!("[tool result] {}: {}", tool, summary));
                 self.messages.push(ChatMessage::ToolResult {
                     tool: tool.to_string(),
@@ -843,6 +1212,7 @@ impl ChatState {
                 }
             }
             "thinking_start" => {
+                self.streaming = true;
                 self.transcript.push("[thinking…]".to_string());
                 self.messages.push(ChatMessage::Thinking { text: String::new(), streaming: true });
             }
@@ -864,6 +1234,7 @@ impl ChatState {
                 }
             }
             "tool_call" => {
+                self.streaming = true;
                 let tool = v.get("tool_name").and_then(|x| x.as_str()).unwrap_or("tool");
                 let arguments = v.get("arguments").cloned().unwrap_or(Value::Null);
                 let summary = if let Some(obj) = arguments.as_object() {
@@ -883,11 +1254,11 @@ impl ChatState {
             "tool_result" => {
                 let tool = v.get("tool_name").and_then(|x| x.as_str()).unwrap_or("tool");
                 let content = v.get("content").and_then(|x| x.as_str()).unwrap_or("");
-                let summary: String = content.lines().take(3).collect::<Vec<_>>().join(" ");
+                let summary = compact_tool_result_summary(content);
                 self.transcript.push(format!("[tool result] {}: {}", tool, summary));
                 self.messages.push(ChatMessage::ToolResult { tool: tool.to_string(), content: content.to_string(), is_error: v.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false) });
             }
-            "turn_complete" | "chat_complete" => {
+            "chat_complete" => {
                 self.streaming = false;
                 self.finish_latest_provisional_outcome();
                 self.request_refresh();
@@ -898,14 +1269,22 @@ impl ChatState {
                     *streaming = false;
                 }
             }
+            "turn_complete" => {
+                // A tool-using request may contain many model turns. Only the
+                // request-level chat_complete event is a lifecycle boundary.
+            }
             "status" => {
                 let msg = v.get("message").and_then(|x| x.as_str()).unwrap_or("");
-                self.streaming = false;
+                // Status is informational, not a lifecycle boundary. Retry,
+                // compaction, background orchestration, and command statuses
+                // can arrive while a chat turn is still running.
                 self.push_status(msg);
             }
             "error" => {
                 let msg = v.get("error").and_then(|x| x.as_str()).unwrap_or("unknown error");
-                self.streaming = false;
+                // The backend emits chat_complete after an in-turn error. Do
+                // not let unrelated/background errors make a live run appear
+                // idle before then.
                 // Dismiss auth dialog if open — auth failures should not leave the UI stuck
                 if self.auth_open() {
                     self.auth_dismiss();
@@ -949,18 +1328,78 @@ impl ChatState {
                 self.pending_queue.clear();
             }
             "approval_request" => {
-                let tool = v.get("tool").and_then(|x| x.as_str()).unwrap_or("tool");
-                let reason = v.get("reason").and_then(|x| x.as_str()).unwrap_or("");
-                let risk = v.get("risk").and_then(|x| x.as_str()).unwrap_or("unknown");
-                let params = v.get("params").and_then(|x| x.as_str()).unwrap_or("");
-                self.approval = Some(ApprovalRequest {
-                    tool: tool.to_string(),
-                    reason: reason.to_string(),
-                    risk: risk.to_string(),
-                    params: params.to_string(),
-                    selected: 0,
-                });
-                self.transcript.push(format!("[approval] {} — {}", tool, reason));
+                let approval = ApprovalRequest::from_backend_event(&v);
+                self.transcript.push(format!(
+                    "[approval] {} — {}",
+                    approval.tool, approval.reason
+                ));
+                enqueue_approval(
+                    &mut self.approval,
+                    &mut self.approval_queue,
+                    approval,
+                );
+            }
+            "approval_resolved" => {
+                let approval_id = v
+                    .get("approval_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let resolution = v
+                    .get("resolution")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if resolve_approval(
+                    &mut self.approval,
+                    &mut self.approval_queue,
+                    approval_id,
+                ) && resolution == "timeout"
+                {
+                    self.push_status("Approval timed out");
+                }
+            }
+            "libris_intake" => {
+                self.pending_libris_room_focus = None;
+                if let Some(intake) = LibrisIntake::from_backend_event(&v) {
+                    self.close_menu();
+                    self.libris_intake = Some(intake);
+                } else {
+                    self.libris_intake = None;
+                    self.push_error("Libris intake did not include any launch options.");
+                }
+            }
+            "libris_started" => {
+                self.libris_intake = None;
+                self.pending_libris_room_focus = libris_room_focus_target(&v);
+            }
+            "libris_completed" => {
+                self.pending_libris_room_focus = libris_room_focus_target(&v);
+                if let Some(delivery) = LibrisCompletion::from_backend_event(&v) {
+                    let already_announced = self.messages.iter().any(|message| {
+                        matches!(
+                            message,
+                            ChatMessage::LibrisCompleted { delivery: existing }
+                                if existing.operation_id == delivery.operation_id
+                        )
+                    });
+                    if !already_announced {
+                        self.transcript.push(format!(
+                            "[libris delivery ready] {} — {} report(s) — {}",
+                            delivery.operation_id,
+                            delivery.topic_count,
+                            delivery.primary_path
+                        ));
+                        self.messages
+                            .push(ChatMessage::LibrisCompleted { delivery });
+                    }
+                } else {
+                    self.push_error(
+                        "Libris completion did not include a validated absolute artifact path. Inspect F4 for delivery status.",
+                    );
+                }
+            }
+            "libris_intake_cancelled" => {
+                self.libris_intake = None;
+                self.pending_libris_room_focus = None;
             }
             "conversation_restored" => {
                 let count = v.get("count").and_then(|x| x.as_u64()).unwrap_or(0);
@@ -968,6 +1407,10 @@ impl ChatState {
                 self.transcript.clear();
                 self.messages.clear();
                 self.streaming = false;
+                self.approval = None;
+                self.approval_queue.clear();
+                self.libris_intake = None;
+                self.pending_libris_room_focus = None;
                 if !agent_id.is_empty() {
                     self.session_id = agent_id.to_string();
                 }
@@ -1210,6 +1653,10 @@ impl ChatState {
             item("/devteam", "Create a live developer team room"),
             item("/devteam hermes", "Create a Hermes developer team room with live participants"),
             item("/libris", "Start a Libris research room with live participants"),
+            item("/libris status", "Inspect the latest Libris run and output paths"),
+            item("/libris approvals", "Show research source approval policy"),
+            item("/libris approvals auto", "Auto-allow read-only research sources"),
+            item("/libris approvals ask", "Ask before reading research sources"),
             item("/hotkeys", "Keyboard shortcuts"),
             item("/timestamps", "Toggle timestamps"),
             item("/thoughts", "Toggle visible thoughts"),
@@ -1353,7 +1800,11 @@ impl ChatState {
         if input == "/libris" || input.starts_with("/libris ") {
             items.extend([
                 item("/libris ", "Start a Libris research room from a broad prompt"),
-                item("/libris status ", "Inspect a Libris room / swarm operation"),
+                item("/libris status", "Inspect the latest Libris run and output paths"),
+                item("/libris status ", "Inspect a specific Libris room / swarm operation"),
+                item("/libris approvals", "Show research source approval policy"),
+                item("/libris approvals auto", "Auto-allow read-only research sources"),
+                item("/libris approvals ask", "Ask before reading research sources"),
             ]);
         }
 
@@ -1445,23 +1896,7 @@ impl ChatState {
     }
 
     pub fn provider_model(&self) -> String {
-        let provider = self.refresh_payload.as_ref()
-            .and_then(|p| p.get("onboarding"))
-            .and_then(|o| o.get("provider"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let model = self.refresh_payload.as_ref()
-            .and_then(|p| p.get("onboarding"))
-            .and_then(|o| o.get("model"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if provider.is_empty() && model.is_empty() {
-            "unconfigured".to_string()
-        } else if model.is_empty() {
-            provider.to_string()
-        } else {
-            format!("{}/{}", provider, model)
-        }
+        provider_model_label(self.refresh_payload.as_ref())
     }
 
     pub fn orchestration_parse_hint(&self) -> Option<String> {
@@ -1502,4 +1937,179 @@ fn open_url(url: &str) -> bool {
 
 fn copy_to_clipboard(text: &str) -> bool {
     crate::clipboard::copy_to_clipboard_bool(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn approval(approval_id: &str, selected: usize) -> ApprovalRequest {
+        ApprovalRequest {
+            approval_id: approval_id.to_string(),
+            tool: "Http".to_string(),
+            reason: "external request".to_string(),
+            risk: "network".to_string(),
+            params: "url: https://example.test".to_string(),
+            agent_id: "AG-test".to_string(),
+            operation_id: "op-test".to_string(),
+            work_unit_id: "topic-test".to_string(),
+            selected,
+        }
+    }
+
+    #[test]
+    fn approval_deny_selection_builds_a_targeted_false_response() {
+        let request = approval("approval-one", 1);
+        assert!(!request.approved_for_selection());
+        assert_eq!(
+            request.response_event(request.approved_for_selection()),
+            json!({
+                "type": "approval_response",
+                "approval_id": "approval-one",
+                "approved": false,
+            })
+        );
+    }
+
+    #[test]
+    fn concurrent_approvals_queue_and_resolve_by_id() {
+        let mut active = None;
+        let mut queued = VecDeque::new();
+        enqueue_approval(&mut active, &mut queued, approval("approval-one", 0));
+        enqueue_approval(&mut active, &mut queued, approval("approval-two", 0));
+        enqueue_approval(&mut active, &mut queued, approval("approval-three", 0));
+
+        assert_eq!(
+            active.as_ref().map(|item| item.approval_id.as_str()),
+            Some("approval-one")
+        );
+        assert_eq!(queued.len(), 2);
+
+        assert!(resolve_approval(
+            &mut active,
+            &mut queued,
+            "approval-two"
+        ));
+        assert_eq!(
+            active.as_ref().map(|item| item.approval_id.as_str()),
+            Some("approval-one")
+        );
+        assert_eq!(
+            queued.front().map(|item| item.approval_id.as_str()),
+            Some("approval-three")
+        );
+
+        assert!(resolve_approval(
+            &mut active,
+            &mut queued,
+            "approval-one"
+        ));
+        assert_eq!(
+            active.as_ref().map(|item| item.approval_id.as_str()),
+            Some("approval-three")
+        );
+    }
+
+    #[test]
+    fn provider_label_distinguishes_startup_from_missing_configuration() {
+        assert_eq!(provider_model_label(None), "initializing…");
+
+        let empty = json!({"onboarding": {}});
+        assert_eq!(provider_model_label(Some(&empty)), "unconfigured");
+
+        let configured = json!({
+            "onboarding": {"provider": "openai", "model": "gpt-5.6-sol"}
+        });
+        assert_eq!(
+            provider_model_label(Some(&configured)),
+            "openai/gpt-5.6-sol"
+        );
+    }
+
+    #[test]
+    fn libris_intake_event_parses_moves_and_builds_launch_command() {
+        let event = json!({
+            "type": "libris_intake",
+            "prompt": "Compare two routing policies",
+            "stop_condition": "Stop after three calibrated trials",
+            "options": [
+                "Prioritize statistical confidence",
+                "Prioritize routing cost",
+                "Balance quality and cost"
+            ]
+        });
+
+        let mut intake = LibrisIntake::from_backend_event(&event).expect("valid intake");
+        assert_eq!(intake.prompt, "Compare two routing policies");
+        assert_eq!(intake.stop_condition, "Stop after three calibrated trials");
+        assert_eq!(intake.selected, 0);
+
+        intake.move_up();
+        assert_eq!(intake.selected, 0, "selection clamps at the first option");
+        intake.move_down();
+        intake.move_down();
+        intake.move_down();
+        assert_eq!(intake.selected, 2, "selection clamps at the final option");
+        assert_eq!(intake.launch_command(intake.selected).as_deref(), Some("/libris launch 3"));
+    }
+
+    #[test]
+    fn libris_intake_rejects_missing_string_options() {
+        let event = json!({
+            "type": "libris_intake",
+            "prompt": "Research",
+            "options": [null, 4, "  "]
+        });
+        assert!(LibrisIntake::from_backend_event(&event).is_none());
+    }
+
+    #[test]
+    fn libris_started_event_builds_the_f4_room_focus_target() {
+        let event = json!({
+            "type": "libris_started",
+            "operation_id": "op-new"
+        });
+        assert_eq!(
+            libris_room_focus_target(&event).as_deref(),
+            Some("libris-op-new")
+        );
+    }
+
+    #[test]
+    fn libris_completion_requires_a_report_count_and_absolute_primary_path() {
+        let event = json!({
+            "type": "libris_completed",
+            "operation_id": "op-finished",
+            "topic_count": 3,
+            "artifact_count": 2,
+            "primary_artifact": {
+                "label": "Shareable report",
+                "path": "/tmp/libris/op-finished/delivery/report.html",
+                "media_type": "text/html"
+            },
+            "artifacts": [
+                {"path": "/tmp/libris/op-finished/delivery/report.html"},
+                {"path": "/tmp/libris/op-finished/delivery/executive-summary.md"}
+            ]
+        });
+        let delivery =
+            LibrisCompletion::from_backend_event(&event).expect("valid completion");
+        assert_eq!(delivery.operation_id, "op-finished");
+        assert_eq!(delivery.topic_count, 3);
+        assert_eq!(delivery.artifact_count, 2);
+        assert_eq!(
+            delivery.primary_path,
+            "/tmp/libris/op-finished/delivery/report.html"
+        );
+
+        let relative_path = json!({
+            "type": "libris_completed",
+            "operation_id": "op-invalid",
+            "topic_count": 1,
+            "primary_artifact": {
+                "path": "delivery/report.html"
+            }
+        });
+        assert!(LibrisCompletion::from_backend_event(&relative_path).is_none());
+    }
 }

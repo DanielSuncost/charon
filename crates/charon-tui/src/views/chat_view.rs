@@ -7,9 +7,12 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::app::App;
-use crate::chat::{ChatMessage, ChatTextPoint, ChatViewMode};
+use crate::chat::{
+    ChatMessage, ChatTextPoint, ChatViewMode, LibrisCompletion, LibrisIntake,
+};
 use crate::copy_to_clipboard;
 use crate::render::{self, Rect};
+use crate::screen::{Cell, ScreenBuf};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ChatLayoutVariant {
@@ -38,6 +41,23 @@ pub struct ChatVisualCache {
     pub width: usize,
     pub variant: Option<ChatLayoutVariant>,
     pub lines: Vec<ChatRenderLine>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LibrisModalRowKind {
+    Intro,
+    Label,
+    Body,
+    Option,
+    Footer,
+    Spacer,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LibrisModalRow {
+    pub text: String,
+    pub kind: LibrisModalRowKind,
+    pub selected: bool,
 }
 
 #[derive(Deserialize)]
@@ -96,6 +116,339 @@ pub fn chat_layout_variant(w: u16, h: u16) -> ChatLayoutVariant {
         ChatLayoutVariant::Mid
     } else {
         ChatLayoutVariant::Tiny
+    }
+}
+
+fn truncate_modal_text(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    if width == 1 {
+        return "…".to_string();
+    }
+    let mut truncated = text.chars().take(width - 1).collect::<String>();
+    truncated.push('…');
+    truncated
+}
+
+fn wrap_modal_text(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    for paragraph in text.lines() {
+        if paragraph.trim().is_empty() {
+            lines.push(String::new());
+            continue;
+        }
+        let mut current = String::new();
+        for word in paragraph.split_whitespace() {
+            let word_len = word.chars().count();
+            if word_len > width {
+                if !current.is_empty() {
+                    lines.push(std::mem::take(&mut current));
+                }
+                let chars = word.chars().collect::<Vec<_>>();
+                for chunk in chars.chunks(width) {
+                    lines.push(chunk.iter().collect());
+                }
+                continue;
+            }
+            let needed = word_len + usize::from(!current.is_empty());
+            if current.chars().count() + needed <= width {
+                if !current.is_empty() {
+                    current.push(' ');
+                }
+                current.push_str(word);
+            } else {
+                lines.push(std::mem::take(&mut current));
+                current.push_str(word);
+            }
+        }
+        if !current.is_empty() {
+            lines.push(current);
+        }
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn capped_modal_wrap(text: &str, width: usize, max_lines: usize) -> Vec<String> {
+    if max_lines == 0 {
+        return Vec::new();
+    }
+    let wrapped = wrap_modal_text(text, width);
+    let was_truncated = wrapped.len() > max_lines;
+    let mut out = wrapped.into_iter().take(max_lines).collect::<Vec<_>>();
+    if was_truncated {
+        if let Some(last) = out.last_mut() {
+            *last = truncate_modal_text(&format!("{}…", last.trim_end_matches('…')), width);
+        }
+    }
+    out
+}
+
+fn libris_option_rows(
+    option: &str,
+    option_index: usize,
+    selected: bool,
+    width: usize,
+    max_lines: usize,
+) -> Vec<LibrisModalRow> {
+    let prefix = format!("{} {}. ", if selected { "▸" } else { " " }, option_index + 1);
+    let prefix_width = prefix.chars().count();
+    let body_width = width.saturating_sub(prefix_width).max(1);
+    let wrapped = capped_modal_wrap(option, body_width, max_lines.max(1));
+    wrapped
+        .into_iter()
+        .enumerate()
+        .map(|(line_index, line)| LibrisModalRow {
+            text: if line_index == 0 {
+                format!("{}{}", prefix, line)
+            } else {
+                format!("{}{}", " ".repeat(prefix_width), line)
+            },
+            kind: LibrisModalRowKind::Option,
+            selected,
+        })
+        .collect()
+}
+
+pub(crate) fn libris_intake_modal_rows(
+    intake: &LibrisIntake,
+    width: usize,
+    max_rows: usize,
+) -> Vec<LibrisModalRow> {
+    if width == 0 || max_rows == 0 {
+        return Vec::new();
+    }
+    let selected = intake.selected.min(intake.options.len().saturating_sub(1));
+    let stop_condition = if intake.stop_condition.is_empty() {
+        "No explicit stop condition."
+    } else {
+        intake.stop_condition.as_str()
+    };
+    let numeric_max = intake.options.len().min(9);
+    let footer = if numeric_max > 0 {
+        format!(
+            "↑/↓ choose  ·  Enter launch  ·  1-{} quick launch  ·  Esc cancel",
+            numeric_max
+        )
+    } else {
+        "↑/↓ choose  ·  Enter launch  ·  Esc cancel".to_string()
+    };
+
+    let mut rows = vec![
+        LibrisModalRow {
+            text: "Review the research direction before Charon fans out.".to_string(),
+            kind: LibrisModalRowKind::Intro,
+            selected: false,
+        },
+        LibrisModalRow { text: String::new(), kind: LibrisModalRowKind::Spacer, selected: false },
+        LibrisModalRow { text: "PROMPT".to_string(), kind: LibrisModalRowKind::Label, selected: false },
+    ];
+    for line in capped_modal_wrap(&intake.prompt, width.saturating_sub(2).max(1), 3) {
+        rows.push(LibrisModalRow {
+            text: format!("  {}", line),
+            kind: LibrisModalRowKind::Body,
+            selected: false,
+        });
+    }
+    rows.push(LibrisModalRow { text: String::new(), kind: LibrisModalRowKind::Spacer, selected: false });
+    rows.push(LibrisModalRow {
+        text: "STOP CONDITION".to_string(),
+        kind: LibrisModalRowKind::Label,
+        selected: false,
+    });
+    for line in capped_modal_wrap(stop_condition, width.saturating_sub(2).max(1), 2) {
+        rows.push(LibrisModalRow {
+            text: format!("  {}", line),
+            kind: LibrisModalRowKind::Body,
+            selected: false,
+        });
+    }
+    rows.push(LibrisModalRow { text: String::new(), kind: LibrisModalRowKind::Spacer, selected: false });
+    rows.push(LibrisModalRow {
+        text: "RESEARCH STANDARD".to_string(),
+        kind: LibrisModalRowKind::Label,
+        selected: false,
+    });
+    for (index, option) in intake.options.iter().enumerate() {
+        rows.extend(libris_option_rows(option, index, index == selected, width, 3));
+    }
+    rows.push(LibrisModalRow { text: String::new(), kind: LibrisModalRowKind::Spacer, selected: false });
+    rows.push(LibrisModalRow { text: footer.clone(), kind: LibrisModalRowKind::Footer, selected: false });
+    if rows.len() <= max_rows {
+        return rows;
+    }
+
+    // Compact layout for short terminals. Keep the selected choice visible
+    // and reserve the final row for controls.
+    let mut compact_top = Vec::new();
+    if max_rows >= 6 {
+        compact_top.push(LibrisModalRow {
+            text: truncate_modal_text(&format!("Prompt: {}", intake.prompt), width),
+            kind: LibrisModalRowKind::Body,
+            selected: false,
+        });
+        compact_top.push(LibrisModalRow {
+            text: truncate_modal_text(&format!("Stop: {}", stop_condition), width),
+            kind: LibrisModalRowKind::Body,
+            selected: false,
+        });
+    }
+    if max_rows >= 4 {
+        compact_top.push(LibrisModalRow {
+            text: "Choose a research standard:".to_string(),
+            kind: LibrisModalRowKind::Label,
+            selected: false,
+        });
+    }
+    while compact_top.len() + 2 > max_rows {
+        compact_top.remove(0);
+    }
+    let option_slots = max_rows.saturating_sub(compact_top.len() + 1).max(1);
+    let visible_options = option_slots.min(intake.options.len().max(1));
+    let mut start = selected.saturating_sub(visible_options / 2);
+    start = start.min(intake.options.len().saturating_sub(visible_options));
+
+    let mut compact = compact_top;
+    if intake.options.is_empty() {
+        compact.push(LibrisModalRow {
+            text: "No launch options available.".to_string(),
+            kind: LibrisModalRowKind::Body,
+            selected: false,
+        });
+    } else {
+        for index in start..start + visible_options {
+            let mut option_rows = libris_option_rows(
+                &intake.options[index],
+                index,
+                index == selected,
+                width,
+                1,
+            );
+            if let Some(row) = option_rows.first_mut() {
+                row.text = truncate_modal_text(&row.text, width);
+            }
+            compact.extend(option_rows);
+        }
+    }
+    if compact.len() < max_rows {
+        compact.push(LibrisModalRow {
+            text: footer,
+            kind: LibrisModalRowKind::Footer,
+            selected: false,
+        });
+    }
+    compact.truncate(max_rows);
+    compact
+}
+
+fn draw_libris_modal_border(buf: &mut ScreenBuf, area: Rect, title: &str) {
+    let border = style::Color::Rgb { r: 167, g: 139, b: 250 };
+    let title_fg = style::Color::Rgb { r: 232, g: 213, b: 163 };
+    let bg = style::Color::Rgb { r: 12, g: 14, b: 24 };
+    let left = area.x.saturating_sub(1);
+    let top = area.y.saturating_sub(1);
+    let right = area.x.saturating_add(area.width);
+    let bottom = area.y.saturating_add(area.height);
+
+    for y in top..=bottom {
+        buf.fill(y, left, right.saturating_add(1), ' ', style::Color::Reset, bg);
+    }
+    buf.set(left, top, Cell { ch: '╭', fg: border, bg, bold: false });
+    buf.set(right, top, Cell { ch: '╮', fg: border, bg, bold: false });
+    buf.set(left, bottom, Cell { ch: '╰', fg: border, bg, bold: false });
+    buf.set(right, bottom, Cell { ch: '╯', fg: border, bg, bold: false });
+    for x in left.saturating_add(1)..right {
+        buf.set(x, top, Cell { ch: '─', fg: border, bg, bold: false });
+        buf.set(x, bottom, Cell { ch: '─', fg: border, bg, bold: false });
+    }
+    for y in area.y..bottom {
+        buf.set(left, y, Cell { ch: '│', fg: border, bg, bold: false });
+        buf.set(right, y, Cell { ch: '│', fg: border, bg, bold: false });
+    }
+    let title_width = area.width.saturating_sub(4) as usize;
+    let title = truncate_modal_text(title, title_width);
+    buf.put_str(left.saturating_add(2), top, &format!(" {} ", title), title_fg, bg, true);
+}
+
+pub(crate) fn draw_libris_intake_modal(buf: &mut ScreenBuf, intake: &LibrisIntake, w: u16, h: u16) {
+    if w < 12 || h < 6 {
+        return;
+    }
+    let horizontal_margin = if w >= 72 { 8 } else { 2 };
+    let outer_width = w.saturating_sub(horizontal_margin).min(96);
+    let inner_width = outer_width.saturating_sub(2);
+    if inner_width < 8 {
+        return;
+    }
+    let vertical_margin = if h >= 20 { 6 } else { 2 };
+    let max_inner_height = h.saturating_sub(vertical_margin).saturating_sub(2).max(1);
+    let rows = libris_intake_modal_rows(intake, inner_width as usize, max_inner_height as usize);
+    if rows.is_empty() {
+        return;
+    }
+    let inner_height = (rows.len() as u16).min(max_inner_height);
+    let outer_height = inner_height.saturating_add(2);
+    let outer_x = w.saturating_sub(outer_width) / 2;
+    let outer_y = h.saturating_sub(outer_height) / 2;
+    let area = Rect {
+        x: outer_x.saturating_add(1),
+        y: outer_y.saturating_add(1),
+        width: inner_width,
+        height: inner_height,
+    };
+    draw_libris_modal_border(buf, area, "Libris · research intake");
+
+    let modal_bg = style::Color::Rgb { r: 12, g: 14, b: 24 };
+    for (row_index, row) in rows.iter().take(area.height as usize).enumerate() {
+        let (fg, bg, bold) = if row.selected {
+            (
+                style::Color::Rgb { r: 17, g: 24, b: 39 },
+                style::Color::Rgb { r: 196, g: 181, b: 253 },
+                true,
+            )
+        } else {
+            match row.kind {
+                LibrisModalRowKind::Intro => (
+                    style::Color::Rgb { r: 226, g: 232, b: 240 },
+                    modal_bg,
+                    false,
+                ),
+                LibrisModalRowKind::Label => (
+                    style::Color::Rgb { r: 232, g: 213, b: 163 },
+                    modal_bg,
+                    true,
+                ),
+                LibrisModalRowKind::Body => (
+                    style::Color::Rgb { r: 203, g: 213, b: 225 },
+                    modal_bg,
+                    false,
+                ),
+                LibrisModalRowKind::Option => (
+                    style::Color::Rgb { r: 196, g: 181, b: 253 },
+                    modal_bg,
+                    false,
+                ),
+                LibrisModalRowKind::Footer => (
+                    style::Color::Rgb { r: 148, g: 163, b: 184 },
+                    modal_bg,
+                    false,
+                ),
+                LibrisModalRowKind::Spacer => (style::Color::Reset, modal_bg, false),
+            }
+        };
+        let y = area.y + row_index as u16;
+        buf.fill(y, area.x, area.x + area.width, ' ', fg, bg);
+        let text = truncate_modal_text(&row.text, area.width as usize);
+        buf.put_str(area.x, y, &text, fg, bg, bold);
     }
 }
 
@@ -408,6 +761,83 @@ fn push_chat_block(lines: &mut Vec<ChatRenderLine>, text: &str, width: usize, fg
     }
 }
 
+fn push_libris_completion_card(
+    lines: &mut Vec<ChatRenderLine>,
+    delivery: &LibrisCompletion,
+    width: usize,
+) {
+    let background = style::Color::Rgb { r: 17, g: 59, b: 43 };
+    let heading = style::Color::Rgb {
+        r: 134,
+        g: 239,
+        b: 172,
+    };
+    let body = style::Color::Rgb {
+        r: 220,
+        g: 252,
+        b: 231,
+    };
+    let muted = style::Color::Rgb {
+        r: 167,
+        g: 243,
+        b: 208,
+    };
+    push_chat_block(
+        lines,
+        " ✓ LIBRIS DELIVERY READY",
+        width,
+        heading,
+        Some(background),
+        1,
+    );
+    push_chat_block(
+        lines,
+        &format!(" operation: {}", delivery.operation_id),
+        width,
+        body,
+        Some(background),
+        1,
+    );
+    push_chat_block(
+        lines,
+        &format!(
+            " reports: {}  •  artifacts: {}",
+            delivery.topic_count, delivery.artifact_count
+        ),
+        width,
+        body,
+        Some(background),
+        1,
+    );
+    push_chat_block(
+        lines,
+        &format!(
+            " primary: {} ({})",
+            delivery.primary_label, delivery.primary_media_type
+        ),
+        width,
+        body,
+        Some(background),
+        1,
+    );
+    push_chat_block(
+        lines,
+        &format!(" {}", delivery.primary_path),
+        width,
+        heading,
+        Some(background),
+        1,
+    );
+    push_chat_block(
+        lines,
+        " Press F4, then Tab to details; ↑/↓ scrolls every artifact path.",
+        width,
+        muted,
+        Some(background),
+        1,
+    );
+}
+
 fn build_chat_visual_lines(app: &App, width: usize, variant: ChatLayoutVariant) -> Vec<ChatRenderLine> {
     let robe_bg = style::Color::Rgb { r: 42, g: 18, b: 21 };
     let robe_fg = style::Color::Rgb { r: 224, g: 208, b: 192 };
@@ -473,13 +903,25 @@ fn build_chat_visual_lines(app: &App, width: usize, variant: ChatLayoutVariant) 
             ChatMessage::ToolResult { tool, content, is_error } => {
                 let fg = if *is_error { style::Color::Rgb { r: 252, g: 165, b: 165 } } else { style::Color::Rgb { r: 165, g: 180, b: 252 } };
                 push_chat_block(&mut visual_lines, &format!(" ▶ {}", tool), width, fg, Some(tool_bg), 1);
-                for line in content.lines().take(8) { push_chat_block(&mut visual_lines, &format!("   {}", line), width, fg, Some(tool_bg), 0); }
-                if content.lines().count() > 8 { push_chat_block(&mut visual_lines, "   ...", width, style::Color::DarkGrey, Some(tool_bg), 0); }
+                let total_lines = content.lines().count();
+                let mut shortened = false;
+                for line in content.lines().take(4) {
+                    let mut preview: String = line.chars().take(200).collect();
+                    if line.chars().count() > 200 { preview.push('…'); shortened = true; }
+                    push_chat_block(&mut visual_lines, &format!("   {}", preview), width, fg, Some(tool_bg), 0);
+                }
+                if total_lines > 4 || shortened {
+                    push_chat_block(&mut visual_lines, &format!("   … preview only ({} line{})", total_lines, if total_lines == 1 { "" } else { "s" }), width, style::Color::DarkGrey, Some(tool_bg), 0);
+                }
                 visual_lines.push(single_span_line(style::Color::Reset, None, String::new()));
             }
             ChatMessage::Status { text } => push_chat_block(&mut visual_lines, &format!("  {}", text), width, style::Color::Yellow, None, 0),
             ChatMessage::Error { text } => push_chat_block(&mut visual_lines, &format!("  ✗ {}", text), width, style::Color::Rgb { r: 248, g: 113, b: 113 }, None, 0),
             ChatMessage::Stderr { text } => push_chat_block(&mut visual_lines, &format!("  stderr: {}", text), width, style::Color::Rgb { r: 248, g: 113, b: 113 }, None, 0),
+            ChatMessage::LibrisCompleted { delivery } => {
+                push_libris_completion_card(&mut visual_lines, delivery, width);
+                visual_lines.push(single_span_line(style::Color::Reset, None, String::new()));
+            }
             ChatMessage::QueuedUser { text, tag } => {
                 // Render like a user message but with a dim italic tag prefix
                 let tagged = format!("  {}: {}", tag, text);
@@ -791,8 +1233,8 @@ fn draw_chat_chrome<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::
     let mode_label = match app.chat.view_mode { ChatViewMode::Transcript => "transcript", ChatViewMode::Workspace => "workspace" };
     let mouse_mode = if app.chat.app_mouse_mode { "mouse:app" } else { "mouse:terminal" };
     let mut right2 = match app.chat.view_mode {
-        ChatViewMode::Transcript => if app.chat.streaming { format!("F5:{}  Native wheel/select/right-click  F6:{}", mode_label, mouse_mode) } else { format!("F5:{}  Native wheel/select/right-click  Ctrl+P:peek  F6:{}", mode_label, mouse_mode) },
-        ChatViewMode::Workspace => if app.chat.streaming { format!("F5:{}  Wheel:scroll  Persistent pane  F6:{}", mode_label, mouse_mode) } else { format!("F5:{}  Wheel:scroll  Persistent pane  ←/→/Ctrl+I tabs  F6:{}", mode_label, mouse_mode) },
+        ChatViewMode::Transcript => if app.chat.streaming { "Enter: steer  /queue: later".to_string() } else { format!("F5:{}  Native wheel/select/right-click  Ctrl+P:peek  F6:{}", mode_label, mouse_mode) },
+        ChatViewMode::Workspace => if app.chat.streaming { "Enter: steer  /queue: later".to_string() } else { format!("F5:{}  Wheel:scroll  Persistent pane  ←/→/Ctrl+I tabs  F6:{}", mode_label, mouse_mode) },
     };
     if let Some((notice, _ok)) = app.chat.clipboard_notice_text() { right2 = notice.to_string(); }
     if chat_rowing_active(app) && variant != ChatLayoutVariant::Tiny {
@@ -822,7 +1264,7 @@ fn draw_chat_chrome<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::
     match variant {
         ChatLayoutVariant::Full => { draw_chat_status_line(stdout, h.saturating_sub(3), left_w, &left1, &right1, style::Color::Rgb { r: 85, g: 85, b: 112 })?; draw_chat_status_line(stdout, h.saturating_sub(2), left_w, &left2, &right2, if app.chat.streaming { style::Color::Rgb { r: 180, g: 83, b: 9 } } else { style::Color::Rgb { r: 59, g: 59, b: 79 } })?; }
         ChatLayoutVariant::Mid => { let combined = format!("{}  │  {}", left2, right2); draw_chat_status_line(stdout, h.saturating_sub(2), left_w, &combined, "", style::Color::Rgb { r: 59, g: 59, b: 79 })?; }
-        ChatLayoutVariant::Tiny => { let hint = if app.chat.streaming { "Enter: steer" } else { "interactive" }; draw_chat_status_line(stdout, h.saturating_sub(1), left_w, &format!("  {}", hint), "", style::Color::Rgb { r: 59, g: 59, b: 79 })?; }
+        ChatLayoutVariant::Tiny => { let hint = if app.chat.streaming { "Enter: steer  /queue: later" } else { "interactive" }; draw_chat_status_line(stdout, h.saturating_sub(1), left_w, &format!("  {}", hint), "", style::Color::Rgb { r: 59, g: 59, b: 79 })?; }
     }
     let helper_lines = onboarding_lines(app);
     if variant != ChatLayoutVariant::Tiny && !helper_lines.is_empty() && !app.chat.menu_open() && app.chat.auth_url.is_none() && !app.chat.approval_open() {
@@ -856,4 +1298,76 @@ fn draw_chat_chrome<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn intake(selected: usize) -> LibrisIntake {
+        LibrisIntake {
+            prompt: "Compare adaptive routing policies across representative workloads."
+                .to_string(),
+            stop_condition: "Stop when confidence intervals stabilize.".to_string(),
+            options: vec![
+                "Maximize answer quality.".to_string(),
+                "Minimize inference cost.".to_string(),
+                "Balance quality, latency, and cost across every benchmark.".to_string(),
+            ],
+            selected,
+        }
+    }
+
+    #[test]
+    fn modal_text_wraps_to_the_available_width() {
+        let lines = wrap_modal_text(
+            "A deliberately long research direction with one supercalifragilistic token.",
+            12,
+        );
+        assert!(lines.len() > 1);
+        assert!(lines.iter().all(|line| line.chars().count() <= 12));
+    }
+
+    #[test]
+    fn compact_modal_keeps_selected_option_and_controls_visible() {
+        let rows = libris_intake_modal_rows(&intake(2), 42, 4);
+        assert!(rows.len() <= 4);
+        assert!(rows.iter().any(|row| {
+            row.kind == LibrisModalRowKind::Option
+                && row.selected
+                && row.text.contains("3.")
+        }));
+        assert!(rows
+            .iter()
+            .any(|row| row.kind == LibrisModalRowKind::Footer));
+    }
+
+    #[test]
+    fn libris_completion_card_names_the_artifact_and_f4_handoff() {
+        let delivery = LibrisCompletion {
+            operation_id: "op-finished".to_string(),
+            topic_count: 3,
+            artifact_count: 5,
+            primary_label: "Shareable report".to_string(),
+            primary_path: "/tmp/libris/op-finished/delivery/report.html".to_string(),
+            primary_media_type: "text/html".to_string(),
+        };
+        let mut lines = Vec::new();
+        push_libris_completion_card(&mut lines, &delivery, 120);
+        let copy_text = lines
+            .iter()
+            .map(|line| line.copy_text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(copy_text.contains("LIBRIS DELIVERY READY"));
+        assert!(copy_text.contains("operation: op-finished"));
+        assert!(copy_text.contains("reports: 3"));
+        assert!(copy_text.contains("artifacts: 5"));
+        assert!(copy_text.contains("/tmp/libris/op-finished/delivery/report.html"));
+        assert!(copy_text.contains("Press F4"));
+        assert!(copy_text.contains("Tab to details"));
+        assert!(copy_text.contains("scrolls every artifact path"));
+        assert!(lines.iter().all(|line| line.bg.is_some()));
+    }
 }

@@ -201,6 +201,44 @@ fn main() -> io::Result<()> {
 /// Frame budget for coalesced renders (~60 fps).
 const FRAME_DURATION: Duration = Duration::from_millis(16);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LibrisIntakeKeyAction {
+    MoveUp,
+    MoveDown,
+    LaunchSelected,
+    LaunchOption(usize),
+    Cancel,
+}
+
+fn libris_intake_key_action(
+    key: event::KeyEvent,
+    option_count: usize,
+) -> Option<LibrisIntakeKeyAction> {
+    match key.code {
+        KeyCode::Up => Some(LibrisIntakeKeyAction::MoveUp),
+        KeyCode::Down => Some(LibrisIntakeKeyAction::MoveDown),
+        KeyCode::Enter => Some(LibrisIntakeKeyAction::LaunchSelected),
+        KeyCode::Esc => Some(LibrisIntakeKeyAction::Cancel),
+        KeyCode::Char(ch)
+            if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            let option_index = ch.to_digit(10)?.checked_sub(1)? as usize;
+            (option_index < option_count)
+                .then_some(LibrisIntakeKeyAction::LaunchOption(option_index))
+        }
+        _ => None,
+    }
+}
+
+fn inter_agent_room_index_by_id(
+    payload: Option<&serde_json::Value>,
+    room_id: &str,
+) -> Option<usize> {
+    payload_inter_agent_rooms(payload)
+        .iter()
+        .position(|room| room.get("id").and_then(serde_json::Value::as_str) == Some(room_id))
+}
+
 /// All mutable state owned by the interactive event loop.
 ///
 /// `main()` performs one-time setup (CLI dispatch, terminal modes), builds
@@ -246,6 +284,22 @@ impl EventLoop {
     /// inline loop.
     fn run(&mut self) -> io::Result<()> {
         loop {
+            // Drain input first so keystrokes that arrived during the previous
+            // render/poll cycle are consumed before we do more work.
+            while event::poll(Duration::ZERO)? {
+                match event::read()? {
+                    Event::Key(key) => {
+                        if self.handle_key(key)? {
+                            return Ok(());
+                        }
+                    }
+                    Event::Paste(text) => self.handle_paste(text)?,
+                    Event::Mouse(mouse) => self.handle_mouse(mouse)?,
+                    Event::Resize(w, h) => self.handle_resize(w, h)?,
+                    _ => {}
+                }
+            }
+
             let flags = self.poll_and_sync()?;
             self.render_if_due(&flags)?;
             self.sync_mouse_capture()?;
@@ -256,12 +310,9 @@ impl EventLoop {
                 View::Sessions => Duration::from_millis(16),
                 _ => Duration::from_millis(33),
             };
-            // Block up to event_poll_interval for first event, then drain all queued
-            // events. This coalesces bursts (e.g. rapid scrolling) into a single
-            // render. On timeout, skip straight to the next poll/render pass.
-            if !event::poll(event_poll_interval)? { continue; }
-            loop {
-                if !event::poll(Duration::ZERO)? { break; }
+            // Block up to event_poll_interval for the next event; on timeout
+            // loop back to poll backends and check for more input.
+            if event::poll(event_poll_interval)? {
                 match event::read()? {
                     Event::Key(key) => {
                         if self.handle_key(key)? {
@@ -318,6 +369,26 @@ impl EventLoop {
         }
         let chat_dirty = self.app.chat.poll();
         if chat_dirty {
+        }
+        if let Some(room_id) = self.app.chat.pending_libris_room_focus.clone() {
+            if let Some(room_index) =
+                inter_agent_room_index_by_id(self.app.chat.refresh_payload.as_ref(), &room_id)
+            {
+                self.app.inter_agent.selected = room_index;
+                self.app.inter_agent.selected_node = 0;
+                self.app.inter_agent.event_scroll = 0;
+                self.app.inter_agent.graph_focus = false;
+                self.app.inter_agent.detail_focus = false;
+                self.app.inter_agent.detail_scroll = 0;
+                self.app.inter_agent.topic_detail = false;
+                self.app.inter_agent.transcript_anchor = None;
+                self.app.inter_agent.transcript_focus = None;
+                self.app.inter_agent.transcript_dragging = false;
+                self.app.inter_agent.room_panes.clear();
+                self.app.inter_agent.room_panes_room_id.clear();
+                self.app.chat.pending_libris_room_focus = None;
+                self.needs_full_redraw = true;
+            }
         }
         let native_input_dirty = if let Some(server) = &self.native_session {
             let commands = server.drain_commands();
@@ -413,6 +484,16 @@ impl EventLoop {
                 self.back_buf.clear();
                 draw_header_buf(&mut self.back_buf, &self.app, self.outer_w);
                 f1_mono::draw(&mut self.back_buf, &self.app, self.outer_w, self.outer_h, &self.cached_chat);
+                if !self.app.chat.approval_open() {
+                    if let Some(intake) = self.app.chat.libris_intake.as_ref() {
+                        chat_view::draw_libris_intake_modal(
+                            &mut self.back_buf,
+                            intake,
+                            self.outer_w,
+                            self.outer_h,
+                        );
+                    }
+                }
                 draw_footer_buf(&mut self.back_buf, &self.app, self.outer_w, self.outer_h);
                 screen::flush(&self.back_buf, &self.front_buf, &mut self.stdout)?;
                 std::mem::swap(&mut self.front_buf, &mut self.back_buf);
@@ -551,49 +632,6 @@ impl EventLoop {
             self.app.chat.selection_anchor = None;
             self.app.chat.selection_focus = None;
             self.needs_full_redraw = true;
-        } else if key.code == KeyCode::Esc {
-            if self.app.chat.menu_open() {
-                self.app.chat.close_menu();
-            }
-            self.app.chat.selection_anchor = None;
-            self.app.chat.selection_focus = None;
-            self.app.chat.selection_dragging = false;
-            self.local_view_dirty = true;
-        } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            let _ = f1_mono::copy_selection(&mut self.app, &self.cached_chat);
-            self.local_view_dirty = true;
-        } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p') {
-            if self.app.chat.view_mode == ChatViewMode::Transcript {
-                self.app.chat.info_pane_open = !self.app.chat.info_pane_open;
-                self.needs_full_redraw = true;
-            }
-        } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('i') {
-            self.app.chat.info_pane_tab = (self.app.chat.info_pane_tab + 1) % 4;
-            self.local_view_dirty = true;
-        } else if key.code == KeyCode::BackTab {
-            self.app.chat.info_pane_tab = (self.app.chat.info_pane_tab + 2) % 4;
-            self.local_view_dirty = true;
-        } else if self.app.chat.info_pane_open
-            && !self.app.chat.copy_mode
-            && !self.app.chat.approval_open()
-            && !self.app.chat.auth_open()
-            && !self.app.chat.menu_open()
-            && key.code == KeyCode::Right {
-            self.app.chat.info_pane_tab = (self.app.chat.info_pane_tab + 1) % 4;
-            self.local_view_dirty = true;
-        } else if self.app.chat.info_pane_open
-            && !self.app.chat.copy_mode
-            && !self.app.chat.approval_open()
-            && !self.app.chat.auth_open()
-            && !self.app.chat.menu_open()
-            && key.code == KeyCode::Left {
-            self.app.chat.info_pane_tab = (self.app.chat.info_pane_tab + 2) % 4;
-            self.local_view_dirty = true;
-        } else if self.app.chat.copy_mode {
-            if key.code == KeyCode::Esc {
-                self.app.chat.copy_mode = false;
-                self.local_view_dirty = true;
-            }
         } else if self.app.chat.approval_open() {
             match key.code {
                 KeyCode::Esc => {
@@ -610,6 +648,68 @@ impl EventLoop {
                 }
                 KeyCode::Enter => {
                     self.app.chat.approval_accept_selected();
+                    self.local_view_dirty = true;
+                }
+                _ => {}
+            }
+        } else if self.app.chat.libris_intake_open() {
+            let option_count = self
+                .app
+                .chat
+                .libris_intake
+                .as_ref()
+                .map(|intake| intake.options.len())
+                .unwrap_or(0);
+            if let Some(action) = libris_intake_key_action(key, option_count) {
+                match action {
+                    LibrisIntakeKeyAction::MoveUp => self.app.chat.libris_intake_move_up(),
+                    LibrisIntakeKeyAction::MoveDown => self.app.chat.libris_intake_move_down(),
+                    LibrisIntakeKeyAction::LaunchSelected => {
+                        self.app.chat.libris_intake_launch_selected()
+                    }
+                    LibrisIntakeKeyAction::LaunchOption(option_index) => {
+                        self.app.chat.libris_intake_launch_option(option_index)
+                    }
+                    LibrisIntakeKeyAction::Cancel => self.app.chat.libris_intake_cancel(),
+                }
+                self.local_view_dirty = true;
+            }
+        } else if self.app.chat.auth_open() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.app.chat.auth_dismiss();
+                    self.local_view_dirty = true;
+                }
+                KeyCode::Left => {
+                    self.app.chat.auth_move_prev();
+                    self.local_view_dirty = true;
+                }
+                KeyCode::Right | KeyCode::Tab => {
+                    self.app.chat.auth_move_next();
+                    self.local_view_dirty = true;
+                }
+                KeyCode::Enter => {
+                    self.app.chat.auth_activate_selected();
+                    self.local_view_dirty = true;
+                }
+                KeyCode::Char('o') | KeyCode::Char('O') => {
+                    self.app.chat.auth_action_index = 0;
+                    self.app.chat.auth_activate_selected();
+                    self.local_view_dirty = true;
+                }
+                KeyCode::Char('c') | KeyCode::Char('C') => {
+                    self.app.chat.auth_action_index = 1;
+                    self.app.chat.auth_activate_selected();
+                    self.local_view_dirty = true;
+                }
+                KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Any other typing dismisses the auth overlay and
+                    // routes the key to the input. A stale overlay (e.g.
+                    // left open after auth already succeeded) must never
+                    // trap the user into a "can't type" state.
+                    self.app.chat.auth_dismiss();
+                    self.app.chat.input.push(ch);
+                    self.app.chat.maybe_open_command_menu();
                     self.local_view_dirty = true;
                 }
                 _ => {}
@@ -652,46 +752,36 @@ impl EventLoop {
                 }
                 _ => {}
             }
-        } else if self.app.chat.auth_open() {
-            match key.code {
-                KeyCode::Esc => {
-                    self.app.chat.auth_dismiss();
-                    self.local_view_dirty = true;
-                }
-                KeyCode::Left => {
-                    self.app.chat.auth_move_prev();
-                    self.local_view_dirty = true;
-                }
-                KeyCode::Right | KeyCode::Tab => {
-                    self.app.chat.auth_move_next();
-                    self.local_view_dirty = true;
-                }
-                KeyCode::Enter => {
-                    self.app.chat.auth_activate_selected();
-                    self.local_view_dirty = true;
-                }
-                KeyCode::Char('o') | KeyCode::Char('O') => {
-                    self.app.chat.auth_action_index = 0;
-                    self.app.chat.auth_activate_selected();
-                    self.local_view_dirty = true;
-                }
-                KeyCode::Char('c') | KeyCode::Char('C') => {
-                    self.app.chat.auth_action_index = 1;
-                    self.app.chat.auth_activate_selected();
-                    self.local_view_dirty = true;
-                }
-                KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    // Any other typing dismisses the auth overlay and
-                    // routes the key to the input. A stale overlay (e.g.
-                    // left open after auth already succeeded) must never
-                    // trap the user into a "can't type" state.
-                    self.app.chat.auth_dismiss();
-                    self.app.chat.input.push(ch);
-                    self.app.chat.maybe_open_command_menu();
-                    self.local_view_dirty = true;
-                }
-                _ => {}
+        } else if self.app.chat.copy_mode {
+            if key.code == KeyCode::Esc {
+                self.app.chat.copy_mode = false;
+                self.local_view_dirty = true;
             }
+        } else if key.code == KeyCode::Esc {
+            self.app.chat.selection_anchor = None;
+            self.app.chat.selection_focus = None;
+            self.app.chat.selection_dragging = false;
+            self.local_view_dirty = true;
+        } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            let _ = f1_mono::copy_selection(&mut self.app, &self.cached_chat);
+            self.local_view_dirty = true;
+        } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('p') {
+            if self.app.chat.view_mode == ChatViewMode::Transcript {
+                self.app.chat.info_pane_open = !self.app.chat.info_pane_open;
+                self.needs_full_redraw = true;
+            }
+        } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('i') {
+            self.app.chat.info_pane_tab = (self.app.chat.info_pane_tab + 1) % 4;
+            self.local_view_dirty = true;
+        } else if key.code == KeyCode::BackTab {
+            self.app.chat.info_pane_tab = (self.app.chat.info_pane_tab + 2) % 4;
+            self.local_view_dirty = true;
+        } else if self.app.chat.info_pane_open && key.code == KeyCode::Right {
+            self.app.chat.info_pane_tab = (self.app.chat.info_pane_tab + 1) % 4;
+            self.local_view_dirty = true;
+        } else if self.app.chat.info_pane_open && key.code == KeyCode::Left {
+            self.app.chat.info_pane_tab = (self.app.chat.info_pane_tab + 2) % 4;
+            self.local_view_dirty = true;
         } else {
             match key.code {
                 KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -854,6 +944,12 @@ impl EventLoop {
         }
         match key.code {
             KeyCode::Esc => {
+                if self.app.inter_agent.detail_focus {
+                    self.app.inter_agent.detail_focus = false;
+                    self.app.inter_agent.graph_focus = true;
+                } else if self.app.inter_agent.graph_focus {
+                    self.app.inter_agent.graph_focus = false;
+                }
                 self.app.inter_agent.transcript_anchor = None;
                 self.app.inter_agent.transcript_focus = None;
                 self.app.inter_agent.transcript_dragging = false;
@@ -880,17 +976,32 @@ impl EventLoop {
             }
             KeyCode::Tab => {
                 if selected_kind == "libris" {
-                    self.app.inter_agent.graph_focus = !self.app.inter_agent.graph_focus;
+                    if self.app.inter_agent.detail_focus {
+                        self.app.inter_agent.detail_focus = false;
+                        self.app.inter_agent.graph_focus = false;
+                    } else if self.app.inter_agent.graph_focus {
+                        self.app.inter_agent.graph_focus = false;
+                        self.app.inter_agent.detail_focus = true;
+                    } else {
+                        self.app.inter_agent.graph_focus = true;
+                    }
                 }
                 self.needs_full_redraw = true;
             }
             KeyCode::Up => {
-                if self.app.inter_agent.graph_focus && selected_kind == "libris" {
-                    self.app.inter_agent.selected_node = self.app.inter_agent.selected_node.saturating_sub(1);
+                if self.app.inter_agent.detail_focus && selected_kind == "libris" {
+                    self.app.inter_agent.detail_scroll =
+                        self.app.inter_agent.detail_scroll.saturating_sub(1);
+                } else if self.app.inter_agent.graph_focus && selected_kind == "libris" {
+                    self.app.inter_agent.selected_node =
+                        self.app.inter_agent.selected_node.saturating_sub(1);
+                    self.app.inter_agent.detail_scroll = 0;
                 } else {
                     self.app.inter_agent.selected = self.app.inter_agent.selected.saturating_sub(1);
                     self.app.inter_agent.selected_node = 0;
                     self.app.inter_agent.event_scroll = 0;
+                    self.app.inter_agent.detail_focus = false;
+                    self.app.inter_agent.detail_scroll = 0;
                     self.app.inter_agent.topic_detail = false;
                     self.app.inter_agent.transcript_anchor = None;
                     self.app.inter_agent.transcript_focus = None;
@@ -899,14 +1010,21 @@ impl EventLoop {
                 self.needs_full_redraw = true;
             }
             KeyCode::Down => {
-                if self.app.inter_agent.graph_focus && selected_kind == "libris" {
-                    self.app.inter_agent.selected_node = self.app.inter_agent.selected_node.saturating_add(1);
+                if self.app.inter_agent.detail_focus && selected_kind == "libris" {
+                    self.app.inter_agent.detail_scroll =
+                        self.app.inter_agent.detail_scroll.saturating_add(1);
+                } else if self.app.inter_agent.graph_focus && selected_kind == "libris" {
+                    self.app.inter_agent.selected_node =
+                        self.app.inter_agent.selected_node.saturating_add(1);
+                    self.app.inter_agent.detail_scroll = 0;
                 } else {
                     if self.app.inter_agent.selected + 1 < room_count {
                         self.app.inter_agent.selected += 1;
                     }
                     self.app.inter_agent.selected_node = 0;
                     self.app.inter_agent.event_scroll = 0;
+                    self.app.inter_agent.detail_focus = false;
+                    self.app.inter_agent.detail_scroll = 0;
                     self.app.inter_agent.topic_detail = false;
                     self.app.inter_agent.transcript_anchor = None;
                     self.app.inter_agent.transcript_focus = None;
@@ -916,28 +1034,59 @@ impl EventLoop {
             }
             KeyCode::Left => {
                 if selected_kind == "libris" {
-                    self.app.inter_agent.graph_focus = false;
+                    if self.app.inter_agent.detail_focus {
+                        self.app.inter_agent.detail_focus = false;
+                        self.app.inter_agent.graph_focus = true;
+                    } else {
+                        self.app.inter_agent.graph_focus = false;
+                    }
                     self.needs_full_redraw = true;
                 }
             }
             KeyCode::Right => {
                 if selected_kind == "libris" {
-                    self.app.inter_agent.graph_focus = true;
+                    if self.app.inter_agent.graph_focus {
+                        self.app.inter_agent.graph_focus = false;
+                        self.app.inter_agent.detail_focus = true;
+                    } else if !self.app.inter_agent.detail_focus {
+                        self.app.inter_agent.graph_focus = true;
+                    }
                     self.needs_full_redraw = true;
                 }
             }
             KeyCode::Enter => {
                 if selected_kind == "libris" {
                     self.app.inter_agent.topic_detail = !self.app.inter_agent.topic_detail;
+                    self.app.inter_agent.detail_scroll = 0;
                 }
                 self.needs_full_redraw = true;
             }
             KeyCode::PageUp => {
-                self.app.inter_agent.event_scroll = self.app.inter_agent.event_scroll.saturating_add(10);
+                if self.app.inter_agent.detail_focus && selected_kind == "libris" {
+                    self.app.inter_agent.detail_scroll =
+                        self.app.inter_agent.detail_scroll.saturating_sub(10);
+                } else {
+                    self.app.inter_agent.event_scroll =
+                        self.app.inter_agent.event_scroll.saturating_add(10);
+                }
                 self.needs_full_redraw = true;
             }
             KeyCode::PageDown => {
-                self.app.inter_agent.event_scroll = self.app.inter_agent.event_scroll.saturating_sub(10);
+                if self.app.inter_agent.detail_focus && selected_kind == "libris" {
+                    self.app.inter_agent.detail_scroll =
+                        self.app.inter_agent.detail_scroll.saturating_add(10);
+                } else {
+                    self.app.inter_agent.event_scroll =
+                        self.app.inter_agent.event_scroll.saturating_sub(10);
+                }
+                self.needs_full_redraw = true;
+            }
+            KeyCode::Home if self.app.inter_agent.detail_focus && selected_kind == "libris" => {
+                self.app.inter_agent.detail_scroll = 0;
+                self.needs_full_redraw = true;
+            }
+            KeyCode::End if self.app.inter_agent.detail_focus && selected_kind == "libris" => {
+                self.app.inter_agent.detail_scroll = usize::MAX;
                 self.needs_full_redraw = true;
             }
             _ => {}
@@ -1425,5 +1574,75 @@ impl EventLoop {
             self.needs_full_redraw = true;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(code: KeyCode) -> event::KeyEvent {
+        event::KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn libris_intake_keys_map_to_modal_actions() {
+        assert_eq!(
+            libris_intake_key_action(key(KeyCode::Up), 3),
+            Some(LibrisIntakeKeyAction::MoveUp)
+        );
+        assert_eq!(
+            libris_intake_key_action(key(KeyCode::Down), 3),
+            Some(LibrisIntakeKeyAction::MoveDown)
+        );
+        assert_eq!(
+            libris_intake_key_action(key(KeyCode::Enter), 3),
+            Some(LibrisIntakeKeyAction::LaunchSelected)
+        );
+        assert_eq!(
+            libris_intake_key_action(key(KeyCode::Esc), 3),
+            Some(LibrisIntakeKeyAction::Cancel)
+        );
+        assert_eq!(
+            libris_intake_key_action(key(KeyCode::Char('2')), 3),
+            Some(LibrisIntakeKeyAction::LaunchOption(1))
+        );
+    }
+
+    #[test]
+    fn libris_intake_shortcuts_reject_invalid_or_modified_digits() {
+        assert_eq!(
+            libris_intake_key_action(key(KeyCode::Char('4')), 3),
+            None
+        );
+        assert_eq!(
+            libris_intake_key_action(key(KeyCode::Char('0')), 3),
+            None
+        );
+        assert_eq!(
+            libris_intake_key_action(
+                event::KeyEvent::new(KeyCode::Char('1'), KeyModifiers::CONTROL),
+                3,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn libris_room_focus_resolves_against_the_refreshed_room_list() {
+        let payload = serde_json::json!({
+            "inter_agent_rooms": [
+                {"id": "room-existing"},
+                {"id": "libris-op-new", "kind": "libris"}
+            ]
+        });
+        assert_eq!(
+            inter_agent_room_index_by_id(Some(&payload), "libris-op-new"),
+            Some(1)
+        );
+        assert_eq!(
+            inter_agent_room_index_by_id(Some(&payload), "libris-missing"),
+            None
+        );
     }
 }

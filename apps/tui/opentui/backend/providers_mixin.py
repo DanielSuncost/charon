@@ -21,6 +21,24 @@ except Exception:  # diagnostics is best-effort and must never block import
 class ProvidersMixin:
     """Engine/provider lifecycle: creation, switching, and context transfer."""
 
+    def _dispose_engine(self) -> None:
+        """Release a replaced engine's warm transports on its owning loop."""
+        engine = self.engine
+        self.engine = None
+        provider = getattr(engine, 'provider', None)
+        close_provider = getattr(provider, 'aclose', None)
+        if not callable(close_provider):
+            return
+        try:
+            runtime = getattr(self, '_async_runtime', None)
+            if runtime is not None:
+                runtime.run(close_provider())
+            else:
+                import asyncio
+                asyncio.run(close_provider())
+        except Exception as exc:
+            _diag('providers_mixin', 'replaced provider cleanup failed', error=exc)
+
     def _ensure_engine(self) -> tuple[ConversationEngine | None, str]:
         """Create or return the conversation engine.
         Returns (engine, error_message).
@@ -28,14 +46,11 @@ class ProvidersMixin:
         # Register approval callback so tool calls can ask for permission
         try:
             from charon.tools import set_approval_callback
-            def _emit_approval(tool_name, params_summary, risk, reason):
-                common.emit({
-                    'type': 'approval_request',
-                    'tool': tool_name,
-                    'params': params_summary,
-                    'risk': risk,
-                    'reason': reason,
-                })
+            def _emit_approval(event):
+                # The tool layer supplies a targeted approval_id plus agent /
+                # operation metadata. Forward the lifecycle event unchanged so
+                # concurrent background agents cannot cross-release requests.
+                common.emit(dict(event))
             set_approval_callback(_emit_approval)
         except Exception as exc:
             _diag('providers_mixin', 'tool approval callback registration failed; approval prompts disabled', error=exc)
@@ -80,8 +95,19 @@ class ProvidersMixin:
                 except Exception as exc:
                     _diag('providers_mixin', 'requested agent lookup failed; session not bound to persistent agent', error=exc, name=requested_agent)
             task_info = {'project': project}
+            prompt_tools = None
+            if config.adaptive_tools():
+                from charon.tools import ALL_TOOL_DEFS
+                from charon.tools.tool_catalog import CORE_TOOL_NAMES
+                prompt_tools = [
+                    tool for tool in ALL_TOOL_DEFS
+                    if tool.get('name') in CORE_TOOL_NAMES
+                ]
             system_prompt = build_layered_prompt(
-                state_dir=common.STATE_DIR, agent=agent_info, task=task_info,
+                state_dir=common.STATE_DIR,
+                agent=agent_info,
+                task=task_info,
+                tools=prompt_tools,
             )
         except Exception as e:
             import traceback
@@ -104,6 +130,25 @@ class ProvidersMixin:
             state_dir=common.STATE_DIR,
             max_tokens=32768,
         )
+
+        # Codex can overlap its WebSocket handshake with the user's first
+        # think/typing interval. The request itself shares the same lock and
+        # safely joins after prewarm if it starts immediately.
+        prewarm = getattr(provider, 'prewarm', None)
+        runtime = getattr(self, '_async_runtime', None)
+        if callable(prewarm) and runtime is not None:
+            try:
+                future = runtime.submit(prewarm())
+
+                def _observe_prewarm(done) -> None:
+                    try:
+                        done.result()
+                    except Exception as exc:
+                        _diag('providers_mixin', 'provider prewarm failed', error=exc)
+
+                future.add_done_callback(_observe_prewarm)
+            except Exception as exc:
+                _diag('providers_mixin', 'provider prewarm scheduling failed', error=exc)
 
         # Apply provider handoff transfer if present.
         try:

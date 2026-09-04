@@ -75,7 +75,7 @@ pub(crate) fn draw_header<W: Write>(stdout: &mut W, app: &App, w: u16) -> io::Re
         },
         View::Dashboard => "Dashboard",
         View::Sessions => "Sessions",
-        View::InterAgent => "Groups",
+        View::InterAgent => "Coordination",
     };
 
     let extra = match app.active_view {
@@ -131,7 +131,7 @@ pub(crate) fn draw_header<W: Write>(stdout: &mut W, app: &App, w: u16) -> io::Re
         String::new()
     };
     let header = format!(
-        " CHARON │ {} │ F1:chat │ F2:dash │ F3:sessions │ F4:groups │ Ctrl+Q:quit{}{} ",
+        " CHARON │ {} │ F1:chat │ F2:dash │ F3:sessions │ F4:coord │ Ctrl+Q:quit{}{} ",
         view, extra, tab_suffix
     );
     let visible: String = header.chars().take(w as usize).collect();
@@ -174,9 +174,9 @@ pub(crate) fn draw_footer<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -
         View::InterAgent => {
             let rooms = payload_inter_agent_rooms(app.chat.refresh_payload.as_ref());
             if let Some((notice, _ok)) = app.inter_agent.clipboard_notice_text() {
-                format!(" Groups │ rooms:{} │ {} ", rooms.len(), notice)
+                format!(" Coordination │ rooms:{} │ {} ", rooms.len(), notice)
             } else {
-                format!(" Groups │ rooms:{} ", rooms.len())
+                format!(" Coordination │ rooms:{} ", rooms.len())
             }
         }
     };
@@ -197,10 +197,10 @@ pub(crate) fn draw_header_buf(buf: &mut screen::ScreenBuf, app: &App, w: u16) {
         },
         View::Dashboard => "Dashboard",
         View::Sessions => "Sessions",
-        View::InterAgent => "Groups",
+        View::InterAgent => "Coordination",
     };
     let header = format!(
-        " CHARON │ {} │ F1:chat │ F2:dash │ F3:sessions │ F4:groups │ Ctrl+Q:quit ",
+        " CHARON │ {} │ F1:chat │ F2:dash │ F3:sessions │ F4:coord │ Ctrl+Q:quit ",
         view
     );
     buf.put_str(0, 0, &header, fg, style::Color::Reset, false);

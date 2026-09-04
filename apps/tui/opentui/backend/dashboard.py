@@ -74,6 +74,77 @@ def _collect_devop_rooms(state_dir: Path, project_root: Path) -> list[dict]:
     return rooms
 
 
+def _project_libris_room(
+    operation: dict,
+    swarm: dict,
+    project_root: Path,
+) -> dict:
+    """Preserve the complete Libris F4 projection at the dashboard boundary."""
+    operation_id = str(
+        swarm.get('operation_id') or operation.get('operation_id') or ''
+    ).strip()
+    return {
+        'id': f'libris-{operation_id}',
+        'kind': 'libris',
+        'title': str(operation.get('prompt') or operation_id)[:120],
+        'project': str(project_root),
+        'status': str(
+            swarm.get('status') or operation.get('status') or 'active'
+        ),
+        'created_at': str(operation.get('created_at') or ''),
+        'updated_at': str(operation.get('updated_at') or ''),
+        'last_activity': str(
+            operation.get('updated_at') or operation.get('created_at') or ''
+        ),
+        'participants': [
+            {
+                'id': str(node.get('agent_id') or ''),
+                'name': str(node.get('name') or ''),
+                'role': str(node.get('role') or ''),
+                'status': str(node.get('status') or ''),
+            }
+            for node in (swarm.get('nodes') or [])
+        ],
+        'summary': str(swarm.get('prompt') or '')[:200],
+        'operation_id': operation_id,
+        # The agent communication graph remains the established top-level F4
+        # contract. Lifecycle topology is additive and deliberately separate.
+        'nodes': swarm.get('nodes') or [],
+        'edges': swarm.get('edges') or [],
+        'lifecycle': swarm.get('lifecycle') or {},
+        'lifecycle_graph': swarm.get('lifecycle_graph') or {},
+        'workflow_graph': swarm.get('workflow_graph') or {},
+        'topics': swarm.get('topics') or [],
+        'team_grid_nodes': swarm.get('team_grid_nodes') or [],
+        'non_shade_members': swarm.get('non_shade_members') or [],
+        'views': swarm.get('views') or {},
+        'counts': swarm.get('counts') or {},
+        'budget_status': swarm.get('budget_status') or {},
+        'promising_sources': swarm.get('promising_sources') or [],
+        'executive_summary_markdown': (
+            swarm.get('executive_summary_markdown') or ''
+        ),
+        'delivery_bundle': swarm.get('delivery_bundle') or {},
+        'delivery_manifest': swarm.get('delivery_manifest') or {},
+        'final_selection_markdown': swarm.get('final_selection_markdown') or '',
+        'events': swarm.get('events_tail') or [],
+    }
+
+
+def _load_libris_index(state_dir: Path, project_root: Path) -> dict:
+    """Read the mutation-maintained index; rebuild only as a repair fallback."""
+    from charon.libris.libris_runtime import rebuild_project_index, research_root
+
+    path = research_root(state_dir, project_root) / 'index.json'
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+        if isinstance(payload, dict) and isinstance(payload.get('operations'), list):
+            return payload
+    except (OSError, ValueError, TypeError):
+        pass
+    return rebuild_project_index(state_dir, project_root)
+
+
 def _dashboard_spark_points(values: list[int], limit: int = 12) -> list[int]:
     vals = [max(0, int(v or 0)) for v in values][-limit:]
     return vals or [0]
@@ -721,8 +792,8 @@ class DashboardMixin:
         # F4 can render them with a graph-first layout later.
         project_root = Path(str(onboarding.get('project') or str(common.ROOT)).strip() or str(common.ROOT))
         try:
-            from charon.libris.libris_runtime import rebuild_project_index, get_libris_swarm_state
-            idx = rebuild_project_index(common.STATE_DIR, project_root)
+            from charon.libris.libris_runtime import get_libris_swarm_state
+            idx = _load_libris_index(common.STATE_DIR, project_root)
             for op in idx.get('operations') or []:
                 op_id = str(op.get('operation_id') or '').strip()
                 if not op_id:
@@ -730,40 +801,9 @@ class DashboardMixin:
                 swarm = get_libris_swarm_state(common.STATE_DIR, project_root, op_id)
                 if not swarm:
                     continue
-                inter_agent_rooms.append({
-                    'id': f'libris-{op_id}',
-                    'kind': 'libris',
-                    'title': str(op.get('prompt') or op_id)[:120],
-                    'project': str(project_root),
-                    'status': str(swarm.get('status') or op.get('status') or 'active'),
-                    'created_at': str(op.get('created_at') or ''),
-                    'updated_at': str(op.get('updated_at') or ''),
-                    'last_activity': str(op.get('updated_at') or op.get('created_at') or ''),
-                    'participants': [
-                        {
-                            'id': str(n.get('agent_id') or ''),
-                            'name': str(n.get('name') or ''),
-                            'role': str(n.get('role') or ''),
-                            'status': str(n.get('status') or ''),
-                        }
-                        for n in (swarm.get('nodes') or [])
-                    ],
-                    'summary': str(swarm.get('prompt') or '')[:200],
-                    'operation_id': op_id,
-                    'nodes': swarm.get('nodes') or [],
-                    'edges': swarm.get('edges') or [],
-                    'topics': swarm.get('topics') or [],
-                    'team_grid_nodes': swarm.get('team_grid_nodes') or [],
-                    'non_shade_members': swarm.get('non_shade_members') or [],
-                    'views': swarm.get('views') or {},
-                    'counts': swarm.get('counts') or {},
-                    'budget_status': swarm.get('budget_status') or {},
-                    'promising_sources': swarm.get('promising_sources') or [],
-                    'executive_summary_markdown': swarm.get('executive_summary_markdown') or '',
-                    'delivery_bundle': swarm.get('delivery_bundle') or {},
-                    'final_selection_markdown': swarm.get('final_selection_markdown') or '',
-                    'events': swarm.get('events_tail') or [],
-                })
+                inter_agent_rooms.append(
+                    _project_libris_room(op, swarm, project_root)
+                )
         except Exception as e:
             _diag('dashboard', 'libris swarm indexing failed; libris rooms omitted', error=e)
 

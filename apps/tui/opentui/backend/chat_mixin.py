@@ -17,8 +17,244 @@ except Exception:  # diagnostics is best-effort and must never block import
         return None
 
 
+_ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
+
+
+def _tool_result_preview(content: str, *, max_chars: int = 2000, max_lines: int = 10) -> tuple[str, bool, int, int]:
+    """Build a bounded transcript preview while retaining full output in memory."""
+    raw = _ANSI_ESCAPE_RE.sub('', str(content or ''))
+    lines = raw.splitlines()
+    total_chars = len(raw)
+    total_lines = len(lines)
+    if total_chars <= max_chars and total_lines <= max_lines:
+        return raw, False, total_chars, total_lines
+
+    # Preserve both the beginning (usually the command's primary result) and
+    # the tail (often a test summary or error) without allowing one minified
+    # line to occupy the whole terminal.
+    head_count = max(1, max_lines - 3)
+    selected = lines[:head_count]
+    omitted = max(0, total_lines - head_count - 2)
+    if omitted:
+        selected.append(f'… {omitted} line(s) omitted …')
+    if total_lines > head_count:
+        selected.extend(lines[-2:])
+    bounded = [line[:240] + ('…' if len(line) > 240 else '') for line in selected]
+    preview = '\n'.join(bounded)
+    if len(preview) > max_chars:
+        suffix = '… output truncated …'
+        prefix = preview[:max(0, max_chars - len(suffix) - 1)].rstrip()
+        prefix_lines = prefix.splitlines()[:max(0, max_lines - 1)]
+        preview = '\n'.join([*prefix_lines, suffix])
+    return preview, True, total_chars, total_lines
+
+
+def _orchestration_notification(
+    runtime: str,
+    event: dict,
+) -> tuple[str, str, dict] | None:
+    """Translate a terminal scheduler event into one deduplicatable UI event."""
+    action = str(event.get('action') or '')
+    status = str(event.get('status') or '')
+    error = str(event.get('error') or '')
+    if runtime == 'legacy':
+        operation_id = str(event.get('op_id') or 'unknown')
+        if action not in {'suspend', 'failed', 'fail', 'done'}:
+            return None
+        failed = action in {'failed', 'fail'}
+        label = action
+    else:
+        operation_id = str(event.get('run_id') or 'unknown')
+        failed = action in {'error', 'failed', 'quarantined'} or status == 'failed'
+        if not failed and status not in {'completed', 'suspended', 'stopped'}:
+            return None
+        label = action if failed else status
+
+    slot = f'{runtime}:{operation_id}'
+    signature = f'{action}:{status}'
+    prefix = 'Durable operation' if runtime == 'legacy' else 'Graph operation'
+    message = f'{prefix} {operation_id} {label}'
+    if error:
+        message += f': {error}'
+    if failed:
+        return slot, signature, {'type': 'error', 'error': message}
+    return slot, signature, {'type': 'status', 'message': message}
+
+
+def _tick_orchestrations_once(
+    state_dir,
+    *,
+    announced: dict[str, str] | None = None,
+    emit_fn=None,
+) -> dict[str, list[dict]]:
+    """Register and advance both durable schedulers for one TUI heartbeat.
+
+    ``announced`` belongs to the long-lived backend instance. It prevents a
+    damaged run (or a scheduler returning the same terminal event twice) from
+    flooding the transcript every two seconds.
+    """
+    seen = announced if announced is not None else {}
+    emit_event = emit_fn or common.emit
+    results: dict[str, list[dict]] = {'legacy': [], 'graph': []}
+
+    try:
+        from charon.libris.libris_durable import register as register_libris
+        from charon.orchestration.runtime import tick_operations
+
+        register_libris(state_dir)
+        results['legacy'] = list(tick_operations(state_dir, max_ops=8))
+    except Exception as exc:
+        _diag(
+            'chat_mixin',
+            'durable orchestration tick failed; Libris may not advance',
+            error=exc,
+        )
+
+    try:
+        from charon.orchestration.graph_executors import register_builtin_executors
+        from charon.orchestration.graph_runtime import tick_runs
+
+        register_builtin_executors()
+        results['graph'] = list(tick_runs(state_dir, max_runs=8))
+    except Exception as exc:
+        _diag(
+            'chat_mixin',
+            'graph orchestration tick failed; graph runs may not advance',
+            error=exc,
+        )
+
+    for runtime, events in results.items():
+        for event in events:
+            notification = _orchestration_notification(runtime, event)
+            if notification is None:
+                # A resumed run may later enter the same terminal state again.
+                # Forget its prior announcement once durable progress resumes.
+                action = str(event.get('action') or '')
+                status = str(event.get('status') or '')
+                if status == 'running' or (
+                    runtime == 'legacy'
+                    and action in {'goto', 'stay', 'retry'}
+                ):
+                    operation_id = str(
+                        event.get('op_id' if runtime == 'legacy' else 'run_id')
+                        or 'unknown'
+                    )
+                    seen.pop(f'{runtime}:{operation_id}', None)
+                continue
+            slot, signature, payload = notification
+            if seen.get(slot) == signature:
+                continue
+            seen[slot] = signature
+            emit_event(payload)
+    return results
+
+
 class ChatMixin:
     """Chat turn handling: streaming worker, abort/steer, conversation save."""
+
+    def _dispatch_post_turn(self, fn) -> None:
+        """Run ordered secondary persistence away from response completion."""
+        executor = getattr(self, '_post_turn_executor', None)
+        if executor is None:
+            # Small embedded/test backends do not own a lifecycle-managed pool.
+            fn()
+            return
+        try:
+            future = executor.submit(fn)
+
+            def report_failure(done) -> None:
+                try:
+                    done.result()
+                except Exception as exc:
+                    _diag(
+                        'chat_mixin',
+                        'background post-turn persistence failed',
+                        error=exc,
+                    )
+
+            future.add_done_callback(report_failure)
+        except RuntimeError as exc:
+            _diag('chat_mixin', 'post-turn executor unavailable', error=exc)
+
+    def _persist_post_turn_background(
+        self,
+        *,
+        session_id: str,
+        memory_agent_id: str,
+        task_id: str,
+        user_message: str,
+        summary: str,
+        tool_calls: list[dict],
+        response_text: str,
+        total_turns: int,
+        input_tokens: int,
+        output_tokens: int,
+        project_root: str,
+        provider_name: str,
+        messages: list,
+        register_session_now: bool,
+    ) -> None:
+        """Persist derived memory, backup history, and inbox notifications."""
+        if memory_agent_id:
+            try:
+                from charon.agents.agent_runtime import update_working_memory
+                update_working_memory(
+                    common.STATE_DIR,
+                    memory_agent_id,
+                    task_id=task_id,
+                    summary=summary,
+                )
+            except Exception as exc:
+                _diag('chat_mixin', 'working-memory update failed', error=exc)
+
+        try:
+            from charon.memory.execution_memory import create_task_episode
+            create_task_episode(
+                common.STATE_DIR,
+                session_id=session_id,
+                agent_id=memory_agent_id,
+                project_root=project_root,
+                provider=provider_name,
+                objective=user_message,
+                summary=summary,
+                tool_calls=tool_calls,
+                response_text=response_text,
+                total_turns=total_turns,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+        except Exception as exc:
+            _diag('chat_mixin', 'task episode recording failed', error=exc)
+
+        try:
+            from charon.conversation.conversation_store import sync_conversation_backup
+            sync_conversation_backup(common.STATE_DIR, session_id, messages)
+        except Exception as exc:
+            _diag('chat_mixin', 'conversation backup sync failed', error=exc)
+
+        if register_session_now:
+            try:
+                from charon.agents.session_registry import register_session
+                register_session(common.STATE_DIR, session_id)
+            except Exception as exc:
+                _diag('chat_mixin', 'session registration failed', error=exc)
+
+        if memory_agent_id:
+            try:
+                from charon.infra.store_adapter import get_db
+                from charon.infra.store import agent_inbox_push
+                db = get_db(common.STATE_DIR)
+                agent_inbox_push(
+                    db,
+                    memory_agent_id,
+                    event_type='task_received',
+                    payload={
+                        'instruction': user_message[:200],
+                        'summary': response_text[:200],
+                    },
+                )
+            except Exception as exc:
+                _diag('chat_mixin', 'agent inbox push failed', error=exc)
 
     def handle_chat(self, message: str, request_id: str | None):
         """Handle a chat message — run through conversation engine with streaming."""
@@ -38,6 +274,11 @@ class ChatMixin:
         if libris_match:
             topic_prompt = libris_match.group(1).strip()
             self.handle_command(f'/libris {topic_prompt}', request_id)
+            return
+
+        # Directly answer follow-up questions about a Libris run from durable
+        # swarm state. These are status lookups, not prompts for the model.
+        if self._handle_libris_natural_question(stripped, request_id):
             return
 
         # Natural-language software-dev trigger
@@ -135,11 +376,19 @@ class ChatMixin:
                                 'request_id': request_id,
                             })
                     elif event.type == 'text_delta':
+                        self._active_tool = {}
                         text = event.data.get('text', '')
                         text_parts.append(text)
                         common.emit({'type': 'chat_delta', 'text': text, 'request_id': request_id})
                     elif event.type == 'tool_call':
+                        self._active_tool = {
+                            'tool_name': event.data.get('tool_name', ''),
+                            'tool_call_id': event.data.get('tool_call_id', ''),
+                            'started_at': time.time(),
+                            'output_chars': 0,
+                        }
                         _tool_calls_record.append({
+                            'tool_call_id': event.data.get('tool_call_id', ''),
                             'tool': event.data.get('tool_name', ''),
                             'arguments': event.data.get('arguments', {}),
                         })
@@ -150,31 +399,59 @@ class ChatMixin:
                             'tool_call_id': event.data.get('tool_call_id', ''),
                             'request_id': request_id,
                         })
-                    elif event.type == 'tool_execution_output':
-                        common.emit({
-                            'type': 'tool_result_delta',
+                    elif event.type == 'tool_execution_start':
+                        self._active_tool = {
                             'tool_name': event.data.get('tool_name', ''),
-                            'content': event.data.get('content', ''),
-                            'chunk': event.data.get('chunk', ''),
                             'tool_call_id': event.data.get('tool_call_id', ''),
-                            'request_id': request_id,
-                        })
+                            'started_at': time.time(),
+                            'output_chars': 0,
+                        }
+                    elif event.type == 'tool_execution_output':
+                        # Do not mirror raw shell output into the transcript.
+                        # The engine's event contains the entire accumulated
+                        # output on every chunk, which caused quadratic pipe
+                        # traffic and overwhelmed the actual assistant reply.
+                        if self._active_tool.get('tool_call_id') == event.data.get('tool_call_id', ''):
+                            self._active_tool['output_chars'] = len(event.data.get('content', '') or '')
                     elif event.type == 'tool_execution_end':
-                        # Update the last tool call record with result
-                        if _tool_calls_record:
-                            _tool_calls_record[-1]['result'] = event.data.get('content', '')[:500]
-                            _tool_calls_record[-1]['is_error'] = event.data.get('is_error', False)
+                        # Parallel tools can finish out of order; attach the
+                        # result to its call id rather than whichever call was
+                        # announced most recently.
+                        call_id = event.data.get('tool_call_id', '')
+                        record = next(
+                            (
+                                item for item in _tool_calls_record
+                                if item.get('tool_call_id') == call_id
+                            ),
+                            None,
+                        )
+                        if record is not None:
+                            record['result'] = event.data.get('content', '')[:500]
+                            record['is_error'] = event.data.get('is_error', False)
+                        preview, ui_truncated, total_chars, total_lines = _tool_result_preview(
+                            event.data.get('content', '')
+                        )
                         common.emit({
                             'type': 'tool_result',
                             'tool_name': event.data.get('tool_name', ''),
-                            'content': event.data.get('content', ''),
+                            'content': preview,
                             'is_error': event.data.get('is_error', False),
-                            'truncated': event.data.get('truncated', False),
+                            'truncated': bool(event.data.get('truncated', False) or ui_truncated),
+                            'total_chars': total_chars,
+                            'total_lines': total_lines,
                             'tool_call_id': event.data.get('tool_call_id', ''),
                             'request_id': request_id,
                         })
+                        if self._active_tool.get('tool_call_id') == event.data.get('tool_call_id', ''):
+                            self._active_tool = {}
                     elif event.type == 'turn_end':
                         _total_turns += 1
+                        common.emit({
+                            'type': 'turn_complete',
+                            'stop_reason': event.data.get('stop_reason', ''),
+                            'turn': event.data.get('turn', 0),
+                            'request_id': request_id,
+                        })
                     elif event.type == 'message_end':
                         usage = event.data.get('usage', {})
                         input_tokens = int(usage.get('input_tokens', 0) or 0)
@@ -230,13 +507,6 @@ class ChatMixin:
                             'context_window': context_window,
                             'request_id': request_id,
                         })
-                    elif event.type == 'turn_end':
-                        common.emit({
-                            'type': 'turn_complete',
-                            'stop_reason': event.data.get('stop_reason', ''),
-                            'turn': event.data.get('turn', 0),
-                            'request_id': request_id,
-                        })
                     elif event.type == 'error':
                         common.emit({
                             'type': 'error',
@@ -271,18 +541,18 @@ class ChatMixin:
             full_text = ''.join(text_parts)
             self.chat_history.append({'role': 'assistant', 'content': full_text})
 
-            # Record task in working memory + task queue (zero LLM cost)
+            # Keep user-visible task state current, then dispatch derived
+            # memory/backup writes to the ordered post-turn lane.
             if self._active_agent_id and engine:
+                import uuid as _uuid
+
+                session_id = str(self._active_agent_id)
+                user_msg = message[:200] if message else ''
+                task_id = f'chat-{_uuid.uuid4().hex[:8]}'
+                memory_agent_id = str(getattr(self, '_bound_agent_id', None) or '')
+                summary = full_text[:500]
                 try:
                     from charon.agents.task_summarizer import summarize_fast
-                    from charon.agents.agent_runtime import update_working_memory
-                    from charon.memory.execution_memory import create_task_episode
-                    import uuid as _uuid
-
-                    task_id = f'chat-{_uuid.uuid4().hex[:8]}'
-                    # Get the user message that triggered this
-                    user_msg = message[:200] if message else ''
-
                     summary = summarize_fast(
                         instruction=user_msg,
                         tool_calls=_tool_calls_record,
@@ -290,158 +560,142 @@ class ChatMixin:
                         errors=[],
                         total_turns=_total_turns,
                     )
+                except Exception as exc:
+                    _diag('chat_mixin', 'fast task summary failed', error=exc)
 
-                    # Only write to persistent agent memory when this session
-                    # was explicitly bound to a persistent agent. Fresh sessions
-                    # should not silently share working memory.
-                    memory_agent_id = getattr(self, '_bound_agent_id', None)
-                    if memory_agent_id:
-                        update_working_memory(
-                            common.STATE_DIR, memory_agent_id,
-                            task_id=task_id, summary=summary,
-                        )
+                if not hasattr(self, '_session_tasks'):
+                    self._session_tasks = []
+                files_touched: list[str] = []
+                for tool_record in _tool_calls_record:
+                    path = (tool_record.get('arguments', {}) or {}).get('path')
+                    if isinstance(path, str) and path and path not in files_touched:
+                        files_touched.append(path)
 
-                    # Update the session outcome ledger entry for this task.
-                    if not hasattr(self, '_session_tasks'):
-                        self._session_tasks = []
-                    files_touched = []
-                    try:
-                        for tc in _tool_calls_record:
-                            args = tc.get('arguments', {}) or {}
-                            for key in ('path', 'oldText', 'newText'):
-                                val = args.get(key)
-                                if key == 'path' and isinstance(val, str) and val and val not in files_touched:
-                                    files_touched.append(val)
-                    except Exception as exc:
-                        _diag('chat_mixin', 'files-touched extraction from tool calls failed; outcome ledger omits file list', error=exc)
-                        files_touched = []
-
-                    # Determine if the agent concluded the task or is mid-flight
-                    # (e.g. asking a clarifying question). We consider a task done
-                    # if it made at least one tool call (did real work) OR if the
-                    # response text doesn't look like a question/clarification.
-                    agent_concluded = (
-                        len(_tool_calls_record) > 0
-                        or not self._is_question_message(full_text.strip())
-                    )
-                    new_status = 'completed' if agent_concluded else 'active'
-
-                    updated = False
-                    for item in reversed(self._session_tasks):
-                        if item.get('status') == 'active':
-                            item['status'] = new_status
-                            if new_status == 'completed':
-                                item['resolved_at'] = time.time()
-                            item['summary'] = summary
-                            item['detail'] = (
-                                f'Task: {user_msg[:100]}\n'
-                                f'Outcome: {item.get("title", "")}\n'
-                                f'Result: {summary}\n'
-                                f'Tools: {len(_tool_calls_record)} calls, {_total_turns} turns\n'
-                                f'Tokens: {_total_input_tokens}↑ {_total_output_tokens}↓'
-                            )
-                            item['tokens_in'] = _total_input_tokens
-                            item['tokens_out'] = _total_output_tokens
-                            item['tool_calls'] = len(_tool_calls_record)
-                            item['turns'] = _total_turns
-                            item['files_touched'] = files_touched
-                            item['ts'] = time.time()
-                            updated = True
-                            break
-                    if not updated and self._parse_intent(user_msg):
-                        self._start_outcome_for_message(user_msg)
-                        if self._session_tasks:
-                            self._session_tasks[-1]['status'] = new_status
-                            if new_status == 'completed':
-                                self._session_tasks[-1]['resolved_at'] = time.time()
-                            self._session_tasks[-1]['summary'] = summary
-                            self._session_tasks[-1]['detail'] = f'Task: {user_msg[:100]}\nResult: {summary}'
-                            self._session_tasks[-1]['tokens_in'] = _total_input_tokens
-                            self._session_tasks[-1]['tokens_out'] = _total_output_tokens
-                            self._session_tasks[-1]['tool_calls'] = len(_tool_calls_record)
-                            self._session_tasks[-1]['turns'] = _total_turns
-                            self._session_tasks[-1]['files_touched'] = files_touched
-                    self._save_session_outcomes()
-                    common.emit({
-                        'type': 'refresh',
-                        'payload': {'session_info': self._get_session_info()},
-                        'request_id': request_id,
+                agent_concluded = bool(_tool_calls_record) or not self._is_question_message(full_text.strip())
+                new_status = 'completed' if agent_concluded else 'active'
+                updated = False
+                for item in reversed(self._session_tasks):
+                    if item.get('status') != 'active':
+                        continue
+                    item.update({
+                        'status': new_status,
+                        'summary': summary,
+                        'detail': (
+                            f'Task: {user_msg[:100]}\n'
+                            f'Outcome: {item.get("title", "")}\n'
+                            f'Result: {summary}\n'
+                            f'Tools: {len(_tool_calls_record)} calls, {_total_turns} turns\n'
+                            f'Tokens: {_total_input_tokens}↑ {_total_output_tokens}↓'
+                        ),
+                        'tokens_in': _total_input_tokens,
+                        'tokens_out': _total_output_tokens,
+                        'tool_calls': len(_tool_calls_record),
+                        'turns': _total_turns,
+                        'files_touched': files_touched,
+                        'ts': time.time(),
                     })
+                    if new_status == 'completed':
+                        item['resolved_at'] = time.time()
+                    updated = True
+                    break
+                if not updated and self._parse_intent(user_msg):
+                    self._start_outcome_for_message(user_msg)
+                    if self._session_tasks:
+                        item = self._session_tasks[-1]
+                        item.update({
+                            'status': new_status,
+                            'summary': summary,
+                            'detail': f'Task: {user_msg[:100]}\nResult: {summary}',
+                            'tokens_in': _total_input_tokens,
+                            'tokens_out': _total_output_tokens,
+                            'tool_calls': len(_tool_calls_record),
+                            'turns': _total_turns,
+                            'files_touched': files_touched,
+                        })
+                        if new_status == 'completed':
+                            item['resolved_at'] = time.time()
+                self._save_session_outcomes()
+                common.emit({
+                    'type': 'refresh',
+                    'payload': {'session_info': self._get_session_info()},
+                    'request_id': request_id,
+                })
 
-                    try:
-                        create_task_episode(
-                            common.STATE_DIR,
-                            session_id=self._active_agent_id,
-                            agent_id=memory_agent_id or '',
-                            project_root=str(engine.project_root),
-                            provider=str(self._current_provider_name() or getattr(engine, 'provider_name', 'unknown')),
-                            objective=user_msg,
-                            summary=summary,
-                            tool_calls=_tool_calls_record,
-                            response_text=full_text,
-                            total_turns=_total_turns,
-                            input_tokens=_total_input_tokens,
-                            output_tokens=_total_output_tokens,
-                        )
-                    except Exception as exc:
-                        _diag('chat_mixin', 'task episode recording failed; execution memory misses this chat turn', error=exc)
-                except Exception as exc:
-                    _diag('chat_mixin', 'post-chat working-memory/outcome-ledger update failed; task not recorded', error=exc)
+                register_session_now = (
+                    getattr(self, '_registered_session_id', '') != session_id
+                )
+                if register_session_now:
+                    self._session_registered = True
+                    self._registered_session_id = session_id
 
-            # Persist conversation
-            if self._active_agent_id and engine:
-                try:
-                    # When lossless store is active, messages are already persisted
-                    # to SQLite on every turn.  Write JSONL as backup using the
-                    # FULL history from the store (not engine.messages which may
-                    # have been truncated by legacy compaction).
-                    from charon.conversation.conversation_store import save_conversation, message_to_dict
-                    msgs_to_save = None
-                    if engine.has_lossless_store:
-                        msgs_to_save = _full_messages_from_store(self._active_agent_id)
-                    if msgs_to_save is None:
-                        msgs_to_save = list(engine.messages)
-                    save_conversation(common.STATE_DIR, self._active_agent_id,
-                        [message_to_dict(m) for m in msgs_to_save])
-                    # Register session on first save (not on startup)
-                    if not hasattr(self, '_session_registered'):
-                        self._session_registered = True
-                        try:
-                            from charon.agents.session_registry import register_session
-                            register_session(common.STATE_DIR, self._active_agent_id)
-                        except Exception as exc:
-                            _diag('chat_mixin', 'session registration failed; session missing from live session list', error=exc)
-                except Exception as exc:
-                    _diag('chat_mixin', 'conversation JSONL backup save failed after chat turn', error=exc)
+                # Snapshot mutable collections before releasing the engine lock.
+                tool_snapshot = [dict(item) for item in _tool_calls_record]
+                message_snapshot = list(engine.messages)
+                provider_name = str(
+                    self._current_provider_name()
+                    or getattr(engine, 'provider_name', 'unknown')
+                )
 
+                def persist_snapshot() -> None:
+                    self._persist_post_turn_background(
+                        session_id=session_id,
+                        memory_agent_id=memory_agent_id,
+                        task_id=task_id,
+                        user_message=user_msg,
+                        summary=summary,
+                        tool_calls=tool_snapshot,
+                        response_text=full_text,
+                        total_turns=_total_turns,
+                        input_tokens=_total_input_tokens,
+                        output_tokens=_total_output_tokens,
+                        project_root=str(engine.project_root),
+                        provider_name=provider_name,
+                        messages=message_snapshot,
+                        register_session_now=register_session_now,
+                    )
+
+                self._dispatch_post_turn(persist_snapshot)
+
+            # This is the sole terminal event. The worker defers it until its
+            # busy state and engine lock have both been released. Secondary
+            # persistence is already queued and remains off the critical path.
             common.emit({
                 'type': 'chat_complete',
                 'summary': full_text[:200],
                 'request_id': request_id,
             })
 
-            # Write to persistent agent inbox only for explicitly bound agents.
-            try:
-                bound_agent_id = getattr(self, '_bound_agent_id', None)
-                if bound_agent_id:
-                    from charon.infra.store_adapter import get_db
-                    from charon.infra.store import agent_inbox_push
-                    db = get_db(common.STATE_DIR)
-                    agent_inbox_push(db, bound_agent_id,
-                        event_type='task_received',
-                        payload={'instruction': message[:200], 'summary': full_text[:200]})
-            except Exception as exc:
-                _diag('chat_mixin', 'agent inbox push failed; bound agent misses task_received event', error=exc)
-
-        asyncio.run(_run())
+        runtime = getattr(self, '_async_runtime', None)
+        if runtime is not None:
+            runtime.run(_run())
+        else:
+            # Embedded/tests that instantiate the mixin without ChatBackend keep
+            # the old self-contained behavior.
+            asyncio.run(_run())
 
     def _chat_worker(self, message: str, request_id: str | None):
         """Run handle_chat on a worker thread."""
+        self._chat_busy = True
+        self._active_chat_request_id = request_id
+        self._active_chat_message = message
+        self._active_chat_started_at = time.time()
+        self._active_tool = {}
+        deferred_completions: list[dict] = []
         try:
-            with self._engine_lock:
-                self.handle_chat(message, request_id)
+            with common.defer_chat_complete() as deferred_completions:
+                with self._engine_lock:
+                    self.handle_chat(message, request_id)
         finally:
             self._chat_busy = False
+            self._active_chat_request_id = None
+            self._active_chat_message = ''
+            self._active_chat_started_at = 0.0
+            self._active_tool = {}
+            # Let the frontend submit its next turn only after this worker no
+            # longer owns the engine. Otherwise an immediate reply can be
+            # mistaken for steering the just-finished turn.
+            for event in deferred_completions:
+                common.emit(event)
 
     def _start_background_worker(self):
         """Start a daemon thread that runs periodic background tasks.
@@ -460,6 +714,22 @@ class ChatMixin:
             while True:
                 _time.sleep(2)
                 cycle += 1
+
+                # The interactive process owns a scheduler heartbeat too. A
+                # durable run must not depend on the standalone daemon being
+                # alive in order to make progress.
+                announcements = getattr(
+                    self,
+                    '_announced_orchestration_events',
+                    None,
+                )
+                if announcements is None:
+                    announcements = {}
+                    self._announced_orchestration_events = announcements
+                _tick_orchestrations_once(
+                    common.STATE_DIR,
+                    announced=announcements,
+                )
 
                 # Heartbeat event for the run log (so dashboard activity picks it up)
                 if cycle % 30 == 0:
@@ -718,13 +988,23 @@ class ChatMixin:
 
     def handle_steer(self, message: str, request_id: str | None):
         """Interrupt the agent mid-execution with a new instruction."""
-        if self.engine:
+        if self.engine and self._chat_busy:
             self.engine.steer(message)
             common.emit({'type': 'steer_queued', 'message': message,
                   'pending': self.engine.pending_messages,
                   'request_id': request_id})
+            tool = dict(getattr(self, '_active_tool', {}) or {})
+            if tool:
+                elapsed = max(0, int(time.time() - float(tool.get('started_at') or time.time())))
+                status = (
+                    f'Still working in {tool.get("tool_name") or "a tool"} ({elapsed}s). '
+                    'I received your message and will answer it as soon as this command reaches a safe stopping point.'
+                )
+            else:
+                status = 'I received your message and am interrupting the current turn to answer it.'
+            common.emit({'type': 'status', 'message': status, 'request_id': request_id})
         else:
-            common.emit({'type': 'error', 'error': 'No active engine to steer.',
+            common.emit({'type': 'error', 'error': 'No active chat run to steer.',
                   'request_id': request_id})
 
     def handle_follow_up(self, message: str, request_id: str | None):

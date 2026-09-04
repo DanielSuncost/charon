@@ -131,6 +131,30 @@ def test_follow_up_delivered_after_agent_stops():
     assert 'second thing' in user_msgs[1].content
 
 
+def test_steer_interrupts_text_stream_and_gets_answered_immediately():
+    """A live question must not wait for a future tool call to be delivered."""
+    provider = MockTextProvider(responses=['Long answer part one', 'Status answer'])
+    engine = ConversationEngine(provider, MODEL, project_root='/tmp')
+    events = []
+
+    async def _run():
+        async for event in engine.submit('Do a long task'):
+            events.append(event)
+            if event.type == 'text_delta' and event.data.get('text') == 'Long answer part one':
+                engine.steer('What is happening right now?')
+
+    asyncio.run(_run())
+
+    delivered = [e for e in events if e.type == 'steer_delivered']
+    assert len(delivered) == 1
+    assert delivered[0].data['content'] == 'What is happening right now?'
+    assert provider.call_count == 2
+    assert any(
+        m.role == 'user' and m.content == 'What is happening right now?'
+        for m in engine.messages
+    )
+
+
 def test_follow_up_not_delivered_if_empty():
     """No follow-up means agent stops normally."""
     provider = MockTextProvider(responses=['Done'])

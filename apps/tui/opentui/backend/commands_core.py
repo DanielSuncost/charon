@@ -114,7 +114,7 @@ class CoreCommandsMixin:
                     # Direct resume — must reset the engine so it gets the
                     # correct agent_id for the target session.
                     self._active_agent_id = arg
-                    self.engine = None  # force re-creation with new agent_id
+                    self._dispose_engine()  # force re-creation with new agent_id
                     engine, _ = self._ensure_engine()
                     restored_count = 0
                     saved = None
@@ -242,8 +242,8 @@ class CoreCommandsMixin:
                     {'cmd': 'F1', 'desc': 'Switch to Chat view'},
                     {'cmd': 'F2', 'desc': 'Switch to Dashboard view'},
                     {'cmd': 'F3', 'desc': 'Switch to Session Grid view'},
-                    {'cmd': 'F4', 'desc': 'Switch to Room Controls view'},
-                    {'cmd': 'd', 'desc': 'F4 Rooms: delete selected room and close its participant sessions'},
+                    {'cmd': 'F4', 'desc': 'Switch to Coordination graph view'},
+                    {'cmd': 'd', 'desc': 'F4 Coordination: delete selected room and close its participant sessions'},
                     {'cmd': 'Tab', 'desc': 'Dashboard: switch agents/projects | Sessions: cycle panes'},
                     {'cmd': '↑↓', 'desc': 'Navigate lists, menus, grid'},
                     {'cmd': '←→', 'desc': 'Navigate session grid horizontally'},
@@ -396,10 +396,17 @@ class CoreCommandsMixin:
                 # Approval
                 try:
                     from charon.infra.tool_approval import get_approval_status
-                    status = get_approval_status(self._active_agent_id or 'default')
+                    status = get_approval_status(
+                        self._active_agent_id or 'default',
+                        state_dir=common.STATE_DIR,
+                    )
                     skip = status.get('skip_all', False)
                     approved = status.get('session_approved', [])
                     lines.append(f'Approval: {"DISABLED" if skip else "enabled"}')
+                    lines.append(
+                        'Libris research sources: '
+                        f'{status.get("research_sources", "auto")}'
+                    )
                     if approved:
                         lines.append(f'Session approved: {", ".join(approved[:5])}')
                 except Exception as exc:

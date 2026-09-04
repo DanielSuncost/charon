@@ -30,6 +30,20 @@ def test_chat_setup_provider_and_model_commands_update_onboarding(tmp_path):
     assert onboarding['model'] == 'claude-3-7-sonnet'
 
 
+def test_chat_effort_command_updates_onboarding(tmp_path):
+    state = tmp_path / 'state'
+    state.mkdir(parents=True, exist_ok=True)
+    charon_agents.STATE_DIR = state
+
+    out = io.StringIO()
+    with redirect_stdout(out):
+        assert charon_agents._handle_chat_slash_command('/effort high', agent_id='AG-1', conversation_id='conv-1', session_id='', project='', limit=20)
+
+    onboarding = json.loads((state / 'onboarding.json').read_text())
+    assert onboarding['reasoning_effort'] == 'high'
+    assert onboarding['thinking_level'] == 'high'
+
+
 def test_chat_setup_suggestions_render(tmp_path):
     state = tmp_path / 'state'
     state.mkdir(parents=True, exist_ok=True)

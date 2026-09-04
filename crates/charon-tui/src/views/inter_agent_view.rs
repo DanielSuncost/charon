@@ -282,12 +282,10 @@ pub(crate) fn inter_agent_stream_area(app: &App, w: u16, h: u16) -> Option<Rect>
     let main_w = w.saturating_sub(sidebar_w + 3);
     let kind = room.get("kind").and_then(|v| v.as_str()).unwrap_or("group");
     if kind == "libris" {
-        let graph_area = Rect { x: main_x, y: 2, width: ((main_w as f32) * 0.62) as u16, height: h.saturating_sub(4) };
-        let detail_x = graph_area.x + graph_area.width + 2;
-        let detail_w = w.saturating_sub(detail_x + 2);
-        let info_h = (h.saturating_sub(4) / 2).max(8);
-        let node_area = Rect { x: detail_x, y: 2, width: detail_w, height: info_h.saturating_sub(1) };
-        Some(Rect { x: detail_x, y: node_area.y + node_area.height + 1, width: detail_w, height: h.saturating_sub(node_area.height + 5) })
+        let summary = libris_delivery_summary(room);
+        let (_, _, event_area) =
+            libris_panel_areas(main_x, main_w, w, h, summary.state);
+        Some(event_area)
     } else {
         let sessions_h = (h.saturating_sub(6) / 2).max(8);
         let session_area = Rect { x: main_x, y: 2, width: main_w, height: sessions_h };
@@ -417,82 +415,468 @@ pub(crate) struct LibrisGraphNode {
     live_line: String,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct GraphPoint {
     x: u16,
     y: u16,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct GraphAnchors {
-    center: GraphPoint,
     top: GraphPoint,
     bottom: GraphPoint,
+    left: GraphPoint,
+    right: GraphPoint,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LibrisDeliveryState {
+    Working,
+    Ready,
+    Incomplete,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LibrisDeliveryArtifact {
+    label: String,
+    path: String,
+    media_type: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct LibrisDeliverySummary {
+    state: LibrisDeliveryState,
+    topic_count: usize,
+    primary_artifact: Option<LibrisDeliveryArtifact>,
+    artifacts: Vec<LibrisDeliveryArtifact>,
+    reason: String,
+}
+
+fn libris_delivery_artifact(value: Option<&Value>) -> Option<LibrisDeliveryArtifact> {
+    let artifact = value?.as_object()?;
+    let path = artifact
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if path.is_empty() {
+        return None;
+    }
+    let label = artifact
+        .get("label")
+        .and_then(Value::as_str)
+        .unwrap_or("Artifact")
+        .trim();
+    let media_type = artifact
+        .get("media_type")
+        .and_then(Value::as_str)
+        .unwrap_or("application/octet-stream")
+        .trim();
+    Some(LibrisDeliveryArtifact {
+        label: if label.is_empty() {
+            "Artifact".to_string()
+        } else {
+            label.to_string()
+        },
+        path: path.to_string(),
+        media_type: if media_type.is_empty() {
+            "application/octet-stream".to_string()
+        } else {
+            media_type.to_string()
+        },
+    })
+}
+
+fn libris_delivery_summary(room: &Value) -> LibrisDeliverySummary {
+    let manifest = room.get("delivery_manifest").and_then(Value::as_object);
+    let manifest_status = manifest
+        .and_then(|value| value.get("status"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let manifest_ready = manifest
+        .and_then(|value| value.get("ready"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let topic_count = manifest
+        .and_then(|value| value.get("topic_count"))
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(0);
+    let primary_artifact = manifest
+        .and_then(|value| value.get("primary_artifact"))
+        .and_then(|value| libris_delivery_artifact(Some(value)));
+    let raw_artifacts = manifest
+        .and_then(|value| value.get("artifacts"))
+        .and_then(Value::as_array);
+    let artifacts = raw_artifacts
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| libris_delivery_artifact(Some(value)))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let reason = manifest
+        .and_then(|value| value.get("reason"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    let primary_is_absolute = primary_artifact
+        .as_ref()
+        .is_some_and(|artifact| std::path::Path::new(&artifact.path).is_absolute());
+    let artifacts_are_complete_and_absolute = raw_artifacts.is_some_and(|values| {
+        !values.is_empty()
+            && artifacts.len() == values.len()
+            && artifacts
+                .iter()
+                .all(|artifact| std::path::Path::new(&artifact.path).is_absolute())
+    });
+    let valid_ready = manifest_status == "ready"
+        && manifest_ready
+        && topic_count > 0
+        && primary_is_absolute
+        && artifacts_are_complete_and_absolute;
+
+    let room_status = room.get("status").and_then(Value::as_str).unwrap_or("");
+    let terminal_without_delivery = matches!(
+        room_status,
+        "delivered" | "failed" | "delivery_failed" | "budget_exhausted" | "stopped"
+    );
+    let invalid_delivery_claim =
+        manifest_status == "ready" || manifest_ready || room_status == "delivered";
+    let state = if valid_ready {
+        LibrisDeliveryState::Ready
+    } else if manifest_status == "incomplete" || terminal_without_delivery || invalid_delivery_claim
+    {
+        LibrisDeliveryState::Incomplete
+    } else {
+        LibrisDeliveryState::Working
+    };
+
+    LibrisDeliverySummary {
+        state,
+        topic_count,
+        primary_artifact,
+        artifacts,
+        reason,
+    }
+}
+
+fn libris_panel_areas(
+    main_x: u16,
+    main_w: u16,
+    outer_w: u16,
+    outer_h: u16,
+    delivery_state: LibrisDeliveryState,
+) -> (Rect, Rect, Rect) {
+    let graph_area = Rect {
+        x: main_x,
+        y: 2,
+        width: ((main_w as f32) * 0.62) as u16,
+        height: outer_h.saturating_sub(4),
+    };
+    let detail_x = graph_area
+        .x
+        .saturating_add(graph_area.width)
+        .saturating_add(2);
+    let detail_w = outer_w.saturating_sub(detail_x.saturating_add(2));
+    let info_h = if delivery_state == LibrisDeliveryState::Working {
+        (outer_h.saturating_sub(4) / 2).max(8)
+    } else {
+        (outer_h.saturating_sub(4).saturating_mul(2) / 3).max(8)
+    };
+    let detail_area = Rect {
+        x: detail_x,
+        y: 2,
+        width: detail_w,
+        height: info_h.saturating_sub(1),
+    };
+    let event_area = Rect {
+        x: detail_x,
+        y: detail_area
+            .y
+            .saturating_add(detail_area.height)
+            .saturating_add(1),
+        width: detail_w,
+        height: outer_h.saturating_sub(detail_area.height.saturating_add(5)),
+    };
+    (graph_area, detail_area, event_area)
+}
+
+fn libris_delivery_status_label(state: LibrisDeliveryState) -> &'static str {
+    match state {
+        LibrisDeliveryState::Working => "WORKING",
+        LibrisDeliveryState::Ready => "READY",
+        LibrisDeliveryState::Incomplete => "INCOMPLETE",
+    }
+}
+
+fn libris_delivery_banner_text(summary: &LibrisDeliverySummary) -> Option<String> {
+    let report_label = if summary.topic_count == 1 {
+        "REPORT"
+    } else {
+        "REPORTS"
+    };
+    match summary.state {
+        LibrisDeliveryState::Ready => Some(format!(
+            "✓ DELIVERY READY • {} {}",
+            summary.topic_count, report_label
+        )),
+        LibrisDeliveryState::Incomplete => Some(format!(
+            "⚠ DELIVERY INCOMPLETE • {} {}",
+            summary.topic_count, report_label
+        )),
+        LibrisDeliveryState::Working => None,
+    }
+}
+
+fn libris_delivery_sidebar_marker(summary: &LibrisDeliverySummary) -> &'static str {
+    match summary.state {
+        LibrisDeliveryState::Ready => "✓",
+        LibrisDeliveryState::Incomplete => "⚠",
+        LibrisDeliveryState::Working => "",
+    }
+}
+
+fn libris_delivery_graph_area(area: Rect, summary: &LibrisDeliverySummary) -> Rect {
+    if libris_delivery_banner_text(summary).is_some() && area.height > 2 {
+        Rect {
+            height: area.height.saturating_sub(1),
+            ..area
+        }
+    } else {
+        area
+    }
+}
+
+fn libris_delivery_detail_lines(summary: &LibrisDeliverySummary, width: usize) -> Vec<String> {
+    let mut lines = vec![
+        format!("delivery: {}", libris_delivery_status_label(summary.state)),
+        format!("reports: {}", summary.topic_count),
+    ];
+
+    if summary.state == LibrisDeliveryState::Incomplete && !summary.reason.is_empty() {
+        lines.push(format!("reason: {}", summary.reason));
+    }
+
+    match summary.primary_artifact.as_ref() {
+        Some(primary) => {
+            lines.push(format!(
+                "primary: {} ({})",
+                primary.label, primary.media_type
+            ));
+            for path_line in wrap_plain_text(&primary.path, width.saturating_sub(2).max(1)) {
+                lines.push(format!("  {}", path_line));
+            }
+        }
+        None => lines.push(format!(
+            "primary: {}",
+            if summary.state == LibrisDeliveryState::Working {
+                "pending"
+            } else {
+                "missing"
+            }
+        )),
+    }
+
+    lines.push(format!("artifacts ({}):", summary.artifacts.len()));
+    if summary.artifacts.is_empty() {
+        lines.push(format!(
+            "  {}",
+            if summary.state == LibrisDeliveryState::Working {
+                "pending"
+            } else {
+                "none"
+            }
+        ));
+    } else {
+        for artifact in &summary.artifacts {
+            lines.push(format!("- {} ({})", artifact.label, artifact.media_type));
+            for path_line in wrap_plain_text(&artifact.path, width.saturating_sub(2).max(1)) {
+                lines.push(format!("  {}", path_line));
+            }
+        }
+    }
+    lines
+}
+
+fn detail_scroll_window(
+    total_lines: usize,
+    requested_scroll: usize,
+    height: usize,
+) -> (usize, usize) {
+    if total_lines == 0 || height == 0 {
+        return (0, 0);
+    }
+    let start = requested_scroll.min(total_lines.saturating_sub(height));
+    let end = start.saturating_add(height).min(total_lines);
+    (start, end)
+}
+
+fn draw_libris_delivery_banner<W: Write>(
+    stdout: &mut W,
+    area: Rect,
+    summary: &LibrisDeliverySummary,
+) -> io::Result<()> {
+    let Some(text) = libris_delivery_banner_text(summary) else {
+        return Ok(());
+    };
+    if area.width == 0 || area.height == 0 {
+        return Ok(());
+    }
+
+    let visible = truncate_columns(&text, area.width);
+    let visible_width = text_columns(&visible);
+    let left_padding = area.width.saturating_sub(visible_width) / 2;
+    let right_padding = area
+        .width
+        .saturating_sub(visible_width)
+        .saturating_sub(left_padding);
+    let (foreground, background) = match summary.state {
+        LibrisDeliveryState::Ready => (
+            style::Color::Rgb {
+                r: 220,
+                g: 252,
+                b: 231,
+            },
+            style::Color::Rgb {
+                r: 20,
+                g: 83,
+                b: 45,
+            },
+        ),
+        LibrisDeliveryState::Incomplete => (
+            style::Color::Rgb {
+                r: 254,
+                g: 243,
+                b: 199,
+            },
+            style::Color::Rgb {
+                r: 120,
+                g: 53,
+                b: 15,
+            },
+        ),
+        LibrisDeliveryState::Working => return Ok(()),
+    };
+    let y = area.y.saturating_add(area.height.saturating_sub(1));
+    stdout.queue(cursor::MoveTo(area.x, y))?;
+    stdout.queue(style::SetForegroundColor(foreground))?;
+    stdout.queue(style::SetBackgroundColor(background))?;
+    stdout.queue(style::SetAttribute(style::Attribute::Bold))?;
+    write!(
+        stdout,
+        "{}{}{}",
+        " ".repeat(left_padding as usize),
+        visible,
+        " ".repeat(right_padding as usize)
+    )?;
+    stdout.queue(style::SetAttribute(style::Attribute::Reset))?;
+    stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
+    stdout.queue(style::SetBackgroundColor(style::Color::Reset))?;
+    Ok(())
 }
 
 pub(crate) fn libris_role_color(role: &str, active: bool) -> style::Color {
     let base = match role {
-        "coordinator" => style::Color::Rgb { r: 196, g: 181, b: 253 },
-        "researcher" => style::Color::Rgb { r: 103, g: 232, b: 249 },
-        "judge" => style::Color::Rgb { r: 251, g: 191, b: 36 },
-        "shade" => style::Color::Rgb { r: 148, g: 163, b: 184 },
-        _ => style::Color::Rgb { r: 148, g: 163, b: 184 },
+        "coordinator" => style::Color::Rgb {
+            r: 196,
+            g: 181,
+            b: 253,
+        },
+        "researcher" => style::Color::Rgb {
+            r: 103,
+            g: 232,
+            b: 249,
+        },
+        "judge" => style::Color::Rgb {
+            r: 251,
+            g: 191,
+            b: 36,
+        },
+        "shade" => style::Color::Rgb {
+            r: 148,
+            g: 163,
+            b: 184,
+        },
+        _ => style::Color::Rgb {
+            r: 148,
+            g: 163,
+            b: 184,
+        },
     };
-    if active { base } else { style::Color::DarkGrey }
+    if active {
+        base
+    } else {
+        style::Color::DarkGrey
+    }
 }
 
-pub(crate) fn draw_box_text<W: Write>(stdout: &mut W, area: Rect, lines: &[String], color: style::Color) -> io::Result<()> {
+pub(crate) fn draw_box_text<W: Write>(
+    stdout: &mut W,
+    area: Rect,
+    lines: &[String],
+    color: style::Color,
+) -> io::Result<()> {
     for (i, line) in lines.iter().take(area.height as usize).enumerate() {
         stdout.queue(cursor::MoveTo(area.x, area.y + i as u16))?;
         stdout.queue(style::SetForegroundColor(color))?;
         let visible: String = line.chars().take(area.width as usize).collect();
-        write!(stdout, "{}{}", visible, " ".repeat((area.width as usize).saturating_sub(visible.chars().count())))?;
+        write!(
+            stdout,
+            "{}{}",
+            visible,
+            " ".repeat((area.width as usize).saturating_sub(visible.chars().count()))
+        )?;
         stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
     }
     Ok(())
 }
 
-pub(crate) fn draw_vline<W: Write>(stdout: &mut W, x: u16, y1: u16, y2: u16, color: style::Color) -> io::Result<()> {
-    let start = y1.min(y2);
-    let end = y1.max(y2);
-    for y in start..=end {
-        stdout.queue(cursor::MoveTo(x, y))?;
-        stdout.queue(style::SetForegroundColor(color))?;
-        write!(stdout, "│")?;
-    }
-    stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
-    Ok(())
-}
-
-pub(crate) fn draw_hline<W: Write>(stdout: &mut W, x1: u16, x2: u16, y: u16, color: style::Color) -> io::Result<()> {
-    let start = x1.min(x2);
-    let end = x1.max(x2);
-    for x in start..=end {
-        stdout.queue(cursor::MoveTo(x, y))?;
-        stdout.queue(style::SetForegroundColor(color))?;
-        write!(stdout, "─")?;
-    }
-    stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
-    Ok(())
-}
-
 pub(crate) fn graph_anchors(rect: Rect) -> GraphAnchors {
-    let cx = rect.x + rect.width / 2;
-    let cy = rect.y + rect.height / 2;
+    let cx = rect.x.saturating_add(rect.width / 2);
+    let cy = rect.y.saturating_add(rect.height / 2);
     GraphAnchors {
-        center: GraphPoint { x: cx, y: cy },
-        top: GraphPoint { x: cx, y: rect.y.saturating_sub(1) },
-        bottom: GraphPoint { x: cx, y: rect.y + rect.height },
+        top: GraphPoint {
+            x: cx,
+            y: rect.y.saturating_sub(1),
+        },
+        bottom: GraphPoint {
+            x: cx,
+            y: rect.y.saturating_add(rect.height),
+        },
+        left: GraphPoint {
+            x: rect.x.saturating_sub(1),
+            y: cy,
+        },
+        right: GraphPoint {
+            x: rect.x.saturating_add(rect.width),
+            y: cy,
+        },
     }
 }
 
 pub(crate) fn libris_edge_color(active_now: bool, activity_strength: f64) -> style::Color {
     if active_now || activity_strength >= 0.95 {
-        style::Color::Rgb { r: 96, g: 165, b: 250 }
+        style::Color::Rgb {
+            r: 96,
+            g: 165,
+            b: 250,
+        }
     } else if activity_strength >= 0.70 {
-        style::Color::Rgb { r: 59, g: 130, b: 246 }
+        style::Color::Rgb {
+            r: 59,
+            g: 130,
+            b: 246,
+        }
     } else if activity_strength >= 0.35 {
-        style::Color::Rgb { r: 100, g: 116, b: 139 }
+        style::Color::Rgb {
+            r: 100,
+            g: 116,
+            b: 139,
+        }
     } else {
         style::Color::DarkGrey
     }
@@ -502,316 +886,1329 @@ pub(crate) fn mid_u16(a: u16, b: u16) -> u16 {
     a.min(b) + (a.max(b) - a.min(b)) / 2
 }
 
-pub(crate) fn draw_libris_graph<W: Write>(stdout: &mut W, room: &Value, area: Rect, selected_node: usize) -> io::Result<Vec<LibrisGraphNode>> {
-    let nodes = room.get("nodes").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let topics = room.get("topics").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    let edges = room.get("edges").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+const NODE_MIN_CONTENT_WIDTH: u16 = 8;
+const NODE_MAX_CONTENT_WIDTH: u16 = 22;
+const COORDINATOR_MAX_CONTENT_WIDTH: u16 = 30;
+const NODE_CONTENT_HEIGHT: u16 = 1;
+const TOPIC_MIN_FULL_WIDTH: u16 = 24;
+const TOPIC_MIN_FULL_HEIGHT: u16 = 11;
+const TOPIC_MAX_COLUMNS: u16 = 3;
+const TOPIC_COLUMN_GAP: u16 = 4;
+const TOPIC_ROW_GAP: u16 = 3;
+const TOPIC_COMPACT_MIN_FULL_WIDTH: u16 = 16;
+const TOPIC_COMPACT_MIN_FULL_HEIGHT: u16 = 8;
+const TOPIC_COMPACT_COLUMN_GAP: u16 = 2;
+const TOPIC_COMPACT_ROW_GAP: u16 = 1;
 
-    let graph_nodes: Vec<LibrisGraphNode> = nodes.iter().map(|n| LibrisGraphNode {
-        agent_id: n.get("agent_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        name: n.get("name").and_then(|v| v.as_str()).unwrap_or("agent").to_string(),
-        role: n.get("role").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        status: n.get("status").and_then(|v| v.as_str()).unwrap_or("idle").to_string(),
-        phase: n.get("phase").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        topic_slug: n.get("topic_slug").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        phase_summary: n.get("phase_summary").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        live_line: n.get("live_line").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-    }).collect();
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TopicClusterDensity {
+    Full,
+    Compact,
+}
 
-    let coordinator = graph_nodes.iter().find(|n| n.role == "coordinator").cloned();
+#[derive(Clone, Copy, Debug)]
+struct TopicClusterLayout {
+    rect: Rect,
+    row: u16,
+    fanout_anchor: GraphPoint,
+    density: TopicClusterDensity,
+}
 
-    let mut node_anchors: std::collections::HashMap<String, GraphAnchors> = std::collections::HashMap::new();
-    let mut coord_bottom_y: u16 = area.y;
+#[derive(Clone, Copy, Debug)]
+struct NodePairLayout {
+    first: Option<Rect>,
+    second: Option<Rect>,
+}
 
-    // ── Coordinator box ────────────────────────────────────────────────
-    if let Some(coord) = coordinator {
-        let label = format!("coordinator • {}", coord.phase);
-        let content_w = label.len().max(coord.name.len()).max(20) + 2;
-        let box_w = (content_w as u16).min(area.width.saturating_sub(4));
-        let box_h = 2u16; // label + live_line
-        let box_x = area.x + area.width.saturating_sub(box_w) / 2;
-        let box_y = area.y;
-        let coord_idx = graph_nodes.iter().position(|n| n.agent_id == coord.agent_id).unwrap_or(usize::MAX);
-        let node_rect = Rect { x: box_x, y: box_y, width: box_w, height: box_h };
-        render::render_border_colored(stdout, node_rect, &coord.name, libris_role_color("coordinator", selected_node == coord_idx))?;
-        let live_trunc: String = coord.live_line.chars().take(box_w as usize).collect();
-        draw_box_text(stdout, node_rect, &[label, live_trunc], style::Color::Rgb { r: 226, g: 232, b: 240 })?;
-        node_anchors.insert(coord.agent_id.clone(), graph_anchors(node_rect));
-        coord_bottom_y = box_y + box_h + 2; // +2 for border bottom + gap
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OrthogonalRoute {
+    points: Vec<GraphPoint>,
+}
+
+fn text_columns(text: &str) -> u16 {
+    text.chars().count().min(u16::MAX as usize) as u16
+}
+
+fn truncate_columns(text: &str, width: u16) -> String {
+    text.chars().take(width as usize).collect()
+}
+
+fn graph_node_state_line(node: &LibrisGraphNode) -> String {
+    let state = if node.phase.trim().is_empty() {
+        node.status.as_str()
+    } else {
+        node.phase.as_str()
+    };
+    if state.trim().is_empty() {
+        node.role.clone()
+    } else {
+        format!("{} • {}", node.role, state)
+    }
+}
+
+fn compact_node_width(node: &LibrisGraphNode, cap: u16) -> u16 {
+    let title_width = text_columns(&node.name).saturating_add(4);
+    let state_width = text_columns(&graph_node_state_line(node));
+    title_width
+        .max(state_width)
+        .max(NODE_MIN_CONTENT_WIDTH)
+        .min(cap.max(1))
+}
+
+fn graph_box_fits(container: Rect, node: Rect) -> bool {
+    let container_right = container.x.saturating_add(container.width);
+    let container_bottom = container.y.saturating_add(container.height);
+    node.x.saturating_sub(1) >= container.x
+        && node.y.saturating_sub(1) >= container.y
+        && node.x.saturating_add(node.width) < container_right
+        && node.y.saturating_add(node.height) < container_bottom
+}
+
+fn centered_graph_box(
+    container: Rect,
+    border_top: u16,
+    desired_content_width: u16,
+    content_height: u16,
+) -> Option<Rect> {
+    if container.width < 3 || container.height < content_height.saturating_add(2) {
+        return None;
+    }
+    let content_width = desired_content_width
+        .max(1)
+        .min(container.width.saturating_sub(2));
+    let full_width = content_width.saturating_add(2);
+    let border_left = container
+        .x
+        .saturating_add(container.width.saturating_sub(full_width) / 2);
+    let rect = Rect {
+        x: border_left.saturating_add(1),
+        y: border_top.saturating_add(1),
+        width: content_width,
+        height: content_height,
+    };
+    graph_box_fits(container, rect).then_some(rect)
+}
+
+fn topic_grid_columns(
+    area_width: u16,
+    topic_count: usize,
+    min_full_width: u16,
+    column_gap: u16,
+) -> u16 {
+    if topic_count == 0 {
+        return 0;
+    }
+    let usable_width = area_width.saturating_sub(4);
+    let width_limited =
+        usable_width.saturating_add(column_gap) / min_full_width.saturating_add(column_gap);
+    width_limited
+        .max(1)
+        .min(TOPIC_MAX_COLUMNS)
+        .min(topic_count.min(u16::MAX as usize) as u16)
+}
+
+fn layout_topic_clusters_with_density(
+    area: Rect,
+    topic_count: usize,
+    first_border_y: u16,
+    min_full_width: u16,
+    min_full_height: u16,
+    column_gap: u16,
+    row_gap: u16,
+    density: TopicClusterDensity,
+) -> Vec<TopicClusterLayout> {
+    if topic_count > u16::MAX as usize {
+        return Vec::new();
+    }
+    let cols = topic_grid_columns(area.width, topic_count, min_full_width, column_gap);
+    if cols == 0 || area.width < 8 || area.height < 4 {
+        return Vec::new();
+    }
+    let rows = (topic_count as u16).saturating_add(cols - 1) / cols;
+    let area_bottom_exclusive = area.y.saturating_add(area.height);
+    let first_border_y = first_border_y.max(area.y);
+    let available_height = area_bottom_exclusive.saturating_sub(first_border_y);
+    let row_gaps = row_gap.saturating_mul(rows.saturating_sub(1));
+    if available_height
+        < rows
+            .saturating_mul(min_full_height)
+            .saturating_add(row_gaps)
+    {
+        return Vec::new();
     }
 
-    // ── Topic grid layout ──────────────────────────────────────────────
-    let topic_count = topics.len();
-    if topic_count == 0 {
-        stdout.queue(cursor::MoveTo(area.x + 2, area.y + 3))?;
+    // Reserve a left-side bus lane and one right-side cell so lower topic rows
+    // can fan out without sending a connector through an earlier cluster.
+    let grid_left = area.x.saturating_add(3);
+    let grid_width = area.width.saturating_sub(4);
+    let column_gaps = column_gap.saturating_mul(cols.saturating_sub(1));
+    if grid_width < cols.saturating_mul(3).saturating_add(column_gaps) {
+        return Vec::new();
+    }
+    let full_width = grid_width.saturating_sub(column_gaps) / cols;
+    let full_height = available_height.saturating_sub(row_gaps) / rows;
+    if full_width < 3 || full_height < min_full_height {
+        return Vec::new();
+    }
+
+    let mut layouts = Vec::with_capacity(topic_count);
+    for index in 0..topic_count {
+        let col = (index as u16) % cols;
+        let row = (index as u16) / cols;
+        let border_left =
+            grid_left.saturating_add(col.saturating_mul(full_width.saturating_add(column_gap)));
+        let border_top =
+            first_border_y.saturating_add(row.saturating_mul(full_height.saturating_add(row_gap)));
+        let rect = Rect {
+            x: border_left.saturating_add(1),
+            y: border_top.saturating_add(1),
+            width: full_width.saturating_sub(2),
+            height: full_height.saturating_sub(2),
+        };
+        // The right-side port is intentionally kept clear of the cluster title.
+        let fanout_anchor = GraphPoint {
+            x: rect.x.saturating_add(rect.width).saturating_sub(2),
+            y: rect.y.saturating_sub(1),
+        };
+        layouts.push(TopicClusterLayout {
+            rect,
+            row,
+            fanout_anchor,
+            density,
+        });
+    }
+    layouts
+}
+
+fn layout_topic_clusters(
+    area: Rect,
+    topic_count: usize,
+    first_border_y: u16,
+) -> Vec<TopicClusterLayout> {
+    let full = layout_topic_clusters_with_density(
+        area,
+        topic_count,
+        first_border_y,
+        TOPIC_MIN_FULL_WIDTH,
+        TOPIC_MIN_FULL_HEIGHT,
+        TOPIC_COLUMN_GAP,
+        TOPIC_ROW_GAP,
+        TopicClusterDensity::Full,
+    );
+    if full.len() == topic_count {
+        return full;
+    }
+
+    layout_topic_clusters_with_density(
+        area,
+        topic_count,
+        first_border_y,
+        TOPIC_COMPACT_MIN_FULL_WIDTH,
+        TOPIC_COMPACT_MIN_FULL_HEIGHT,
+        TOPIC_COMPACT_COLUMN_GAP,
+        TOPIC_COMPACT_ROW_GAP,
+        TopicClusterDensity::Compact,
+    )
+}
+
+fn layout_node_pair(
+    container: Rect,
+    first_desired_width: u16,
+    second_desired_width: u16,
+) -> NodePairLayout {
+    let available_full_width = container.width.saturating_sub(2);
+    let pair_gap = 3u16;
+    let max_each_content = (available_full_width.saturating_sub(pair_gap) / 2).saturating_sub(2);
+    if max_each_content >= NODE_MIN_CONTENT_WIDTH
+        && container.height >= NODE_CONTENT_HEIGHT.saturating_add(3)
+    {
+        let first_width = first_desired_width
+            .max(NODE_MIN_CONTENT_WIDTH)
+            .min(max_each_content);
+        let second_width = second_desired_width
+            .max(NODE_MIN_CONTENT_WIDTH)
+            .min(max_each_content);
+        let first_full = first_width.saturating_add(2);
+        let second_full = second_width.saturating_add(2);
+        let first_border_left = container.x.saturating_add(1);
+        let second_border_left = container
+            .x
+            .saturating_add(container.width)
+            .saturating_sub(1)
+            .saturating_sub(second_full);
+        let first = Rect {
+            x: first_border_left.saturating_add(1),
+            y: container.y.saturating_add(1),
+            width: first_width,
+            height: NODE_CONTENT_HEIGHT,
+        };
+        let second = Rect {
+            x: second_border_left.saturating_add(1),
+            y: container.y.saturating_add(1),
+            width: second_width,
+            height: NODE_CONTENT_HEIGHT,
+        };
+        if first_border_left
+            .saturating_add(first_full)
+            .saturating_add(pair_gap)
+            <= second_border_left
+            && graph_box_fits(container, first)
+            && graph_box_fits(container, second)
+        {
+            return NodePairLayout {
+                first: Some(first),
+                second: Some(second),
+            };
+        }
+    }
+
+    let first = centered_graph_box(
+        container,
+        container.y,
+        first_desired_width,
+        NODE_CONTENT_HEIGHT,
+    );
+    let second_border_top = first
+        .map(|rect| rect.y.saturating_add(rect.height).saturating_add(1))
+        .unwrap_or(container.y);
+    let second = centered_graph_box(
+        container,
+        second_border_top,
+        second_desired_width,
+        NODE_CONTENT_HEIGHT,
+    );
+    NodePairLayout { first, second }
+}
+
+fn layout_shade_tray(
+    container: Rect,
+    node_bottom_boundary: u16,
+    status_y: u16,
+    desired_content_width: u16,
+) -> Option<Rect> {
+    let tray_border_top = node_bottom_boundary.saturating_add(1);
+    centered_graph_box(
+        container,
+        tray_border_top,
+        desired_content_width,
+        NODE_CONTENT_HEIGHT,
+    )
+    .filter(|rect| rect.y.saturating_add(rect.height) < status_y)
+}
+
+fn route_between_boxes(source: GraphAnchors, target: GraphAnchors) -> Option<OrthogonalRoute> {
+    let points = if source.bottom.y < target.top.y {
+        let mid_y = mid_u16(source.bottom.y, target.top.y);
+        vec![
+            source.bottom,
+            GraphPoint {
+                x: source.bottom.x,
+                y: mid_y,
+            },
+            GraphPoint {
+                x: target.top.x,
+                y: mid_y,
+            },
+            target.top,
+        ]
+    } else if target.bottom.y < source.top.y {
+        let mid_y = mid_u16(target.bottom.y, source.top.y);
+        vec![
+            source.top,
+            GraphPoint {
+                x: source.top.x,
+                y: mid_y,
+            },
+            GraphPoint {
+                x: target.bottom.x,
+                y: mid_y,
+            },
+            target.bottom,
+        ]
+    } else if source.right.x < target.left.x {
+        let mid_x = mid_u16(source.right.x, target.left.x);
+        vec![
+            source.right,
+            GraphPoint {
+                x: mid_x,
+                y: source.right.y,
+            },
+            GraphPoint {
+                x: mid_x,
+                y: target.left.y,
+            },
+            target.left,
+        ]
+    } else if target.right.x < source.left.x {
+        let mid_x = mid_u16(target.right.x, source.left.x);
+        vec![
+            source.left,
+            GraphPoint {
+                x: mid_x,
+                y: source.left.y,
+            },
+            GraphPoint {
+                x: mid_x,
+                y: target.right.y,
+            },
+            target.right,
+        ]
+    } else {
+        return None;
+    };
+
+    let mut compact = Vec::with_capacity(points.len());
+    for point in points {
+        if compact.last() != Some(&point) {
+            compact.push(point);
+        }
+    }
+    (compact.len() >= 2).then_some(OrthogonalRoute { points: compact })
+}
+
+fn vertically_between(source: GraphAnchors, target: GraphAnchors, obstacle: Rect) -> bool {
+    let obstacle = graph_anchors(obstacle);
+    if source.bottom.y < target.top.y {
+        obstacle.top.y > source.bottom.y && obstacle.bottom.y < target.top.y
+    } else if target.bottom.y < source.top.y {
+        obstacle.top.y > target.bottom.y && obstacle.bottom.y < source.top.y
+    } else {
+        false
+    }
+}
+
+fn route_shade_pool_to_target(
+    pool: GraphAnchors,
+    target: GraphAnchors,
+    cluster: Rect,
+    obstacles: &[Rect],
+) -> Option<OrthogonalRoute> {
+    if !obstacles
+        .iter()
+        .any(|obstacle| vertically_between(pool, target, *obstacle))
+    {
+        return route_between_boxes(pool, target);
+    }
+
+    let right_lane = cluster.x.saturating_add(cluster.width.saturating_sub(1));
+    let mut points = if right_lane > pool.right.x.max(target.right.x) {
+        vec![
+            pool.right,
+            GraphPoint {
+                x: right_lane,
+                y: pool.right.y,
+            },
+            GraphPoint {
+                x: right_lane,
+                y: target.right.y,
+            },
+            target.right,
+        ]
+    } else {
+        let left_lane = cluster.x;
+        if left_lane >= pool.left.x.min(target.left.x) {
+            return None;
+        }
+        vec![
+            pool.left,
+            GraphPoint {
+                x: left_lane,
+                y: pool.left.y,
+            },
+            GraphPoint {
+                x: left_lane,
+                y: target.left.y,
+            },
+            target.left,
+        ]
+    };
+    points.dedup();
+    (points.len() >= 2).then_some(OrthogonalRoute { points })
+}
+
+fn write_graph_glyph<W: Write>(
+    stdout: &mut W,
+    point: GraphPoint,
+    glyph: char,
+    color: style::Color,
+) -> io::Result<()> {
+    stdout.queue(cursor::MoveTo(point.x, point.y))?;
+    stdout.queue(style::SetForegroundColor(color))?;
+    write!(stdout, "{}", glyph)?;
+    Ok(())
+}
+
+fn draw_heavy_vline<W: Write>(
+    stdout: &mut W,
+    x: u16,
+    y1: u16,
+    y2: u16,
+    color: style::Color,
+) -> io::Result<()> {
+    for y in y1.min(y2)..=y1.max(y2) {
+        write_graph_glyph(stdout, GraphPoint { x, y }, '┃', color)?;
+    }
+    Ok(())
+}
+
+fn draw_heavy_hline<W: Write>(
+    stdout: &mut W,
+    x1: u16,
+    x2: u16,
+    y: u16,
+    color: style::Color,
+) -> io::Result<()> {
+    for x in x1.min(x2)..=x1.max(x2) {
+        write_graph_glyph(stdout, GraphPoint { x, y }, '━', color)?;
+    }
+    Ok(())
+}
+
+fn heavy_junction_glyph(up: bool, down: bool, left: bool, right: bool) -> char {
+    match (up, down, left, right) {
+        (true, true, true, true) => '╋',
+        (true, true, false, true) => '┣',
+        (true, true, true, false) => '┫',
+        (false, true, true, true) => '┳',
+        (true, false, true, true) => '┻',
+        (false, true, false, true) => '┏',
+        (false, true, true, false) => '┓',
+        (true, false, false, true) => '┗',
+        (true, false, true, false) => '┛',
+        (true, true, false, false) => '┃',
+        (false, false, true, true) => '━',
+        (true, false, false, false) | (false, true, false, false) => '┃',
+        (false, false, true, false) | (false, false, false, true) => '━',
+        _ => '◆',
+    }
+}
+
+fn route_vertex_glyph(previous: GraphPoint, current: GraphPoint, next: GraphPoint) -> char {
+    heavy_junction_glyph(
+        previous.y < current.y || next.y < current.y,
+        previous.y > current.y || next.y > current.y,
+        previous.x < current.x || next.x < current.x,
+        previous.x > current.x || next.x > current.x,
+    )
+}
+
+fn route_endpoint_glyph(endpoint: GraphPoint, neighbor: GraphPoint) -> char {
+    if neighbor.y > endpoint.y {
+        '┳'
+    } else if neighbor.y < endpoint.y {
+        '┻'
+    } else if neighbor.x > endpoint.x {
+        '┣'
+    } else {
+        '┫'
+    }
+}
+
+fn draw_orthogonal_route<W: Write>(
+    stdout: &mut W,
+    route: &OrthogonalRoute,
+    color: style::Color,
+) -> io::Result<()> {
+    for segment in route.points.windows(2) {
+        let first = segment[0];
+        let second = segment[1];
+        if first.x == second.x {
+            draw_heavy_vline(stdout, first.x, first.y, second.y, color)?;
+        } else if first.y == second.y {
+            draw_heavy_hline(stdout, first.x, second.x, first.y, color)?;
+        }
+    }
+    if let (Some(first), Some(second)) = (route.points.first(), route.points.get(1)) {
+        write_graph_glyph(stdout, *first, route_endpoint_glyph(*first, *second), color)?;
+    }
+    if route.points.len() > 2 {
+        for index in 1..route.points.len() - 1 {
+            write_graph_glyph(
+                stdout,
+                route.points[index],
+                route_vertex_glyph(
+                    route.points[index - 1],
+                    route.points[index],
+                    route.points[index + 1],
+                ),
+                color,
+            )?;
+        }
+    }
+    if let (Some(last), Some(previous)) = (
+        route.points.last(),
+        route.points.get(route.points.len().saturating_sub(2)),
+    ) {
+        write_graph_glyph(stdout, *last, route_endpoint_glyph(*last, *previous), color)?;
+    }
+    stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
+    Ok(())
+}
+
+fn topic_fanout_lane_y(cluster: &TopicClusterLayout) -> u16 {
+    let offset = match cluster.density {
+        TopicClusterDensity::Full => 2,
+        TopicClusterDensity::Compact => 1,
+    };
+    cluster.fanout_anchor.y.saturating_sub(offset)
+}
+
+fn draw_coordinator_fanout<W: Write>(
+    stdout: &mut W,
+    coordinator: GraphAnchors,
+    clusters: &[TopicClusterLayout],
+    color: style::Color,
+) -> io::Result<()> {
+    if clusters.is_empty() {
+        return Ok(());
+    }
+    if clusters.len() == 1 {
+        let target = clusters[0].fanout_anchor;
+        let route = OrthogonalRoute {
+            points: if coordinator.bottom.x == target.x {
+                vec![coordinator.bottom, target]
+            } else {
+                let mid_y = mid_u16(coordinator.bottom.y, target.y);
+                vec![
+                    coordinator.bottom,
+                    GraphPoint {
+                        x: coordinator.bottom.x,
+                        y: mid_y,
+                    },
+                    GraphPoint {
+                        x: target.x,
+                        y: mid_y,
+                    },
+                    target,
+                ]
+            },
+        };
+        draw_orthogonal_route(stdout, &route, color)?;
+        return Ok(());
+    }
+
+    let max_row = clusters
+        .iter()
+        .map(|cluster| cluster.row)
+        .max()
+        .unwrap_or(0);
+    let first_lane_y = clusters
+        .iter()
+        .filter(|cluster| cluster.row == 0)
+        .map(topic_fanout_lane_y)
+        .min()
+        .unwrap_or(coordinator.bottom.y);
+    let bus_x = clusters
+        .iter()
+        .map(|cluster| cluster.rect.x.saturating_sub(3))
+        .min()
+        .unwrap_or(coordinator.bottom.x);
+    draw_heavy_vline(
+        stdout,
+        coordinator.bottom.x,
+        coordinator.bottom.y,
+        first_lane_y,
+        color,
+    )?;
+    write_graph_glyph(stdout, coordinator.bottom, '┳', color)?;
+
+    let mut last_lane_y = first_lane_y;
+    let mut lane_bounds = Vec::new();
+    for row in 0..=max_row {
+        let row_clusters: Vec<&TopicClusterLayout> = clusters
+            .iter()
+            .filter(|cluster| cluster.row == row)
+            .collect();
+        if row_clusters.is_empty() {
+            continue;
+        }
+        let lane_y = row_clusters
+            .iter()
+            .map(|cluster| topic_fanout_lane_y(cluster))
+            .min()
+            .unwrap_or(first_lane_y);
+        last_lane_y = lane_y;
+        let max_x = row_clusters
+            .iter()
+            .map(|cluster| cluster.fanout_anchor.x)
+            .max()
+            .unwrap_or(bus_x);
+        draw_heavy_hline(stdout, bus_x, max_x, lane_y, color)?;
+        for cluster in row_clusters {
+            let target = cluster.fanout_anchor;
+            draw_heavy_vline(stdout, target.x, lane_y, target.y, color)?;
+            write_graph_glyph(
+                stdout,
+                GraphPoint {
+                    x: target.x,
+                    y: lane_y,
+                },
+                heavy_junction_glyph(false, target.y > lane_y, target.x > bus_x, target.x < max_x),
+                color,
+            )?;
+            write_graph_glyph(stdout, target, '┻', color)?;
+        }
+        lane_bounds.push((row, lane_y, max_x));
+    }
+    if max_row > 0 {
+        draw_heavy_vline(stdout, bus_x, first_lane_y, last_lane_y, color)?;
+    }
+    for (row, lane_y, max_x) in &lane_bounds {
+        write_graph_glyph(
+            stdout,
+            GraphPoint {
+                x: bus_x,
+                y: *lane_y,
+            },
+            heavy_junction_glyph(*row > 0, *row < max_row, false, *max_x > bus_x),
+            color,
+        )?;
+    }
+    let first_max_x = lane_bounds
+        .iter()
+        .find(|(row, _, _)| *row == 0)
+        .map(|(_, _, max_x)| *max_x)
+        .unwrap_or(bus_x);
+    let coordinator_x = coordinator.bottom.x;
+    let coordinator_has_drop = clusters.iter().any(|cluster| {
+        cluster.row == 0
+            && cluster.fanout_anchor.x == coordinator_x
+            && cluster.fanout_anchor.y > first_lane_y
+    });
+    write_graph_glyph(
+        stdout,
+        GraphPoint {
+            x: coordinator_x,
+            y: first_lane_y,
+        },
+        heavy_junction_glyph(
+            first_lane_y > coordinator.bottom.y,
+            coordinator_has_drop || (coordinator_x == bus_x && max_row > 0),
+            coordinator_x > bus_x && coordinator_x <= first_max_x,
+            coordinator_x < first_max_x && coordinator_x >= bus_x,
+        ),
+        color,
+    )?;
+    stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
+    Ok(())
+}
+
+fn render_compact_node<W: Write>(
+    stdout: &mut W,
+    node: &LibrisGraphNode,
+    rect: Rect,
+    selected: bool,
+) -> io::Result<()> {
+    let title = truncate_columns(&node.name, rect.width.saturating_sub(4));
+    render::render_border_colored(
+        stdout,
+        rect,
+        &title,
+        libris_role_color(&node.role, selected),
+    )?;
+    draw_box_text(
+        stdout,
+        rect,
+        &[truncate_columns(&graph_node_state_line(node), rect.width)],
+        style::Color::Rgb {
+            r: 226,
+            g: 232,
+            b: 240,
+        },
+    )
+}
+
+pub(crate) fn draw_libris_graph<W: Write>(
+    stdout: &mut W,
+    room: &Value,
+    area: Rect,
+    selected_node: usize,
+) -> io::Result<Vec<LibrisGraphNode>> {
+    let nodes = room
+        .get("nodes")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let topics = room
+        .get("topics")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let edges = room
+        .get("edges")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let graph_nodes: Vec<LibrisGraphNode> = nodes
+        .iter()
+        .map(|n| LibrisGraphNode {
+            agent_id: n
+                .get("agent_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            name: n
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("agent")
+                .to_string(),
+            role: n
+                .get("role")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            status: n
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("idle")
+                .to_string(),
+            phase: n
+                .get("phase")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            topic_slug: n
+                .get("topic_slug")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            phase_summary: n
+                .get("phase_summary")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            live_line: n
+                .get("live_line")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        })
+        .collect();
+
+    let delivery_summary = libris_delivery_summary(room);
+    draw_libris_delivery_banner(stdout, area, &delivery_summary)?;
+    let area = libris_delivery_graph_area(area, &delivery_summary);
+    if area.width < 8 || area.height < 4 {
+        return Ok(graph_nodes);
+    }
+
+    let coordinator = graph_nodes
+        .iter()
+        .find(|node| node.role == "coordinator")
+        .cloned();
+    let mut node_anchors: std::collections::HashMap<String, GraphAnchors> =
+        std::collections::HashMap::new();
+    let mut coordinator_anchors = None;
+    let mut cluster_start_y = area.y.saturating_add(1);
+
+    if let Some(coord) = coordinator.as_ref() {
+        let width = compact_node_width(coord, COORDINATOR_MAX_CONTENT_WIDTH)
+            .min(area.width.saturating_sub(2));
+        if let Some(rect) = centered_graph_box(area, area.y, width, NODE_CONTENT_HEIGHT) {
+            let coord_idx = graph_nodes
+                .iter()
+                .position(|node| node.agent_id == coord.agent_id)
+                .unwrap_or(usize::MAX);
+            render_compact_node(stdout, coord, rect, coord_idx == selected_node)?;
+            let anchors = graph_anchors(rect);
+            node_anchors.insert(coord.agent_id.clone(), anchors);
+            coordinator_anchors = Some(anchors);
+            cluster_start_y = anchors.bottom.y.saturating_add(4);
+        }
+    }
+
+    if topics.is_empty() {
+        let message_y = cluster_start_y.min(area.y.saturating_add(area.height - 1));
+        stdout.queue(cursor::MoveTo(area.x.saturating_add(2), message_y))?;
         stdout.queue(style::SetForegroundColor(style::Color::DarkGrey))?;
-        write!(stdout, "Waiting for Libris topic clusters\u{2026}")?;
+        write!(
+            stdout,
+            "{}",
+            truncate_columns(
+                "Waiting for Libris topic clusters\u{2026}",
+                area.width.saturating_sub(3),
+            )
+        )?;
         stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
         return Ok(graph_nodes);
     }
 
-    // Decide grid columns: 1 col if narrow or single topic, 2 cols otherwise
-    let grid_cols: u16 = if topic_count <= 1 || area.width < 70 { 1 } else { 2 };
-    let grid_rows = ((topic_count as u16) + grid_cols - 1) / grid_cols;
-    let col_gap = 3u16;
-    let row_gap = 2u16;
-    let col_w = if grid_cols > 1 {
-        (area.width.saturating_sub(col_gap * (grid_cols - 1))) / grid_cols
-    } else {
-        area.width
-    };
-
-    // Height per topic cluster: distribute remaining space evenly
-    let available_h = area.height.saturating_sub(coord_bottom_y - area.y + row_gap);
-    let cluster_h = (available_h.saturating_sub(row_gap * grid_rows.saturating_sub(1))) / grid_rows;
-    let cluster_h = cluster_h.max(8); // minimum usable height
-
-    // Trunk line from coordinator down to topic row
-    let trunk_y = coord_bottom_y;
-    let topics_start_y = trunk_y + 2;
-
-    // Draw coordinator → topics trunk
-    if graph_nodes.iter().any(|n| n.role == "coordinator") {
-        let coord_cx = area.x + area.width / 2;
-        let trunk_color = style::Color::Rgb { r: 70, g: 60, b: 100 };
-
-        // Vertical from coordinator down
-        draw_vline(stdout, coord_cx, coord_bottom_y.saturating_sub(1), trunk_y, trunk_color)?;
-
-        if topic_count > 1 {
-            // Horizontal spine across topics
-            let first_cx = area.x + col_w / 2;
-            let last_col = (topic_count as u16 - 1) % grid_cols;
-            let last_cx = area.x + last_col * (col_w + col_gap) + col_w / 2;
-            draw_hline(stdout, first_cx, last_cx, trunk_y, trunk_color)?;
-
-            // Vertical drops to each topic in the first row
-            let first_row_count = topic_count.min(grid_cols as usize);
-            for ci in 0..first_row_count {
-                let cx = area.x + (ci as u16) * (col_w + col_gap) + col_w / 2;
-                draw_vline(stdout, cx, trunk_y, topics_start_y.saturating_sub(1), trunk_color)?;
-            }
-        } else {
-            draw_vline(stdout, coord_cx, trunk_y, topics_start_y.saturating_sub(1), trunk_color)?;
-        }
+    let cluster_layouts = layout_topic_clusters(area, topics.len(), cluster_start_y);
+    if cluster_layouts.len() != topics.len() {
+        let message_y = cluster_start_y.min(area.y.saturating_add(area.height - 1));
+        stdout.queue(cursor::MoveTo(area.x.saturating_add(1), message_y))?;
+        stdout.queue(style::SetForegroundColor(style::Color::DarkGrey))?;
+        write!(
+            stdout,
+            "{}",
+            truncate_columns(
+                "Graph compacted: enlarge the terminal to inspect topic nodes.",
+                area.width.saturating_sub(2),
+            )
+        )?;
+        stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
+        return Ok(graph_nodes);
     }
 
-    // ── Render each topic cluster ──────────────────────────────────────
-    for (ti, topic) in topics.iter().enumerate() {
-        let col = (ti as u16) % grid_cols;
-        let row = (ti as u16) / grid_cols;
-        let cx = area.x + col * (col_w + col_gap);
-        let cy = topics_start_y + row * (cluster_h + row_gap);
-
-        // Cluster border
-        let inner_w = col_w.saturating_sub(2);
-        let inner_h = cluster_h.saturating_sub(2);
-        let cluster_rect = Rect { x: cx + 1, y: cy + 1, width: inner_w, height: inner_h };
-        let topic_title = topic.get("title").and_then(|v| v.as_str()).unwrap_or("topic");
+    for (topic, layout) in topics.iter().zip(cluster_layouts.iter()) {
+        let cluster_rect = layout.rect;
+        let topic_title = topic
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("topic");
         let topic_status = topic.get("status").and_then(|v| v.as_str()).unwrap_or("");
         let title_display = if topic_status.is_empty() {
             topic_title.to_string()
         } else {
             format!("{} ({})", topic_title, topic_status)
         };
-        let title_trunc: String = title_display.chars().take(inner_w.saturating_sub(4) as usize).collect();
-        render::render_border_colored(stdout, cluster_rect, &title_trunc, style::Color::Rgb { r: 80, g: 70, b: 120 })?;
-
-        let slug = topic.get("topic_slug").and_then(|v| v.as_str()).unwrap_or("");
-        let researcher = graph_nodes.iter().find(|n| n.role == "researcher" && n.topic_slug == slug).cloned();
-        let judge = graph_nodes.iter().find(|n| n.role == "judge" && n.topic_slug == slug).cloned();
-        let shades: Vec<&LibrisGraphNode> = graph_nodes.iter().filter(|n| n.role == "shade" && n.topic_slug == slug).collect();
-
-        // ── Researcher + Judge: side by side within cluster ────────
-        let agent_y = cluster_rect.y;
-        let half_w = inner_w.saturating_sub(5) / 2; // leave 3-char gap + 2 padding
-        let agent_h = 2u16; // role•phase + live_line
-
-        if let Some(r) = researcher.clone() {
-            let is_sel = graph_nodes.iter().position(|n| n.agent_id == r.agent_id).unwrap_or(usize::MAX) == selected_node;
-            let rect = Rect { x: cluster_rect.x, y: agent_y, width: half_w, height: agent_h };
-            render::render_border_colored(stdout, rect, &r.name, libris_role_color("researcher", is_sel))?;
-            let phase_line = format!("researcher • {}", r.phase);
-            let phase_trunc: String = phase_line.chars().take(half_w as usize).collect();
-            let live_trunc: String = r.live_line.chars().take(half_w as usize).collect();
-            draw_box_text(stdout, rect, &[phase_trunc, live_trunc], style::Color::Rgb { r: 226, g: 232, b: 240 })?;
-            node_anchors.insert(r.agent_id.clone(), graph_anchors(rect));
-        }
-
-        if let Some(j) = judge.clone() {
-            let is_sel = graph_nodes.iter().position(|n| n.agent_id == j.agent_id).unwrap_or(usize::MAX) == selected_node;
-            let jx = cluster_rect.x + half_w + 5;
-            let rect = Rect { x: jx, y: agent_y, width: half_w, height: agent_h };
-            render::render_border_colored(stdout, rect, &j.name, libris_role_color("judge", is_sel))?;
-            let phase_line = format!("judge • {}", j.phase);
-            let phase_trunc: String = phase_line.chars().take(half_w as usize).collect();
-            let live_trunc: String = j.live_line.chars().take(half_w as usize).collect();
-            draw_box_text(stdout, rect, &[phase_trunc, live_trunc], style::Color::Rgb { r: 226, g: 232, b: 240 })?;
-            node_anchors.insert(j.agent_id.clone(), graph_anchors(rect));
-        }
-
-        // ── Researcher <=> Judge edge indicator ────────────────────
-        let rj_active = edges.iter().any(|e| {
-            e.get("topic_slug").and_then(|v| v.as_str()).unwrap_or("") == slug
-                && e.get("active_now").and_then(|v| v.as_bool()).unwrap_or(false)
-                && ((e.get("from_role").and_then(|v| v.as_str()).unwrap_or("") == "researcher" && e.get("to_role").and_then(|v| v.as_str()).unwrap_or("") == "judge")
-                    || (e.get("from_role").and_then(|v| v.as_str()).unwrap_or("") == "judge" && e.get("to_role").and_then(|v| v.as_str()).unwrap_or("") == "researcher"))
-        });
-        let rj_strength = edges.iter().filter_map(|e| {
-            if e.get("topic_slug").and_then(|v| v.as_str()).unwrap_or("") == slug
-                && ((e.get("from_role").and_then(|v| v.as_str()).unwrap_or("") == "researcher" && e.get("to_role").and_then(|v| v.as_str()).unwrap_or("") == "judge")
-                    || (e.get("from_role").and_then(|v| v.as_str()).unwrap_or("") == "judge" && e.get("to_role").and_then(|v| v.as_str()).unwrap_or("") == "researcher")) {
-                e.get("activity_strength").and_then(|v| v.as_f64())
-            } else { None }
-        }).fold(0.0f64, f64::max);
-        // Draw connecting arrow between researcher and judge boxes
-        let arrow_y = agent_y + 1; // middle of the agent boxes
-        let arrow_x1 = cluster_rect.x + half_w + 1;
-        let _arrow_x2 = cluster_rect.x + half_w + 4;
-        let arrow_color = if rj_active {
-            style::Color::Rgb { r: 96, g: 165, b: 250 }
-        } else {
-            libris_edge_color(false, rj_strength)
+        // Leave a visible connector port at the right end of the top boundary.
+        let title_reserve = match layout.density {
+            TopicClusterDensity::Full => 7,
+            TopicClusterDensity::Compact => 5,
         };
-        stdout.queue(cursor::MoveTo(arrow_x1, arrow_y))?;
-        stdout.queue(style::SetForegroundColor(arrow_color))?;
-        if rj_active {
-            write!(stdout, "<=>")?;
-        } else {
-            write!(stdout, "---")?;
+        let title_trunc = truncate_columns(
+            &title_display,
+            cluster_rect.width.saturating_sub(title_reserve),
+        );
+        render::render_border_colored(
+            stdout,
+            cluster_rect,
+            &title_trunc,
+            style::Color::Rgb {
+                r: 80,
+                g: 70,
+                b: 120,
+            },
+        )?;
+
+        let slug = topic
+            .get("topic_slug")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let researcher = graph_nodes
+            .iter()
+            .find(|node| node.role == "researcher" && node.topic_slug == slug)
+            .cloned();
+        let judge = graph_nodes
+            .iter()
+            .find(|node| node.role == "judge" && node.topic_slug == slug)
+            .cloned();
+        let shades: Vec<&LibrisGraphNode> = graph_nodes
+            .iter()
+            .filter(|node| node.role == "shade" && node.topic_slug == slug)
+            .collect();
+        let status_y = cluster_rect
+            .y
+            .saturating_add(cluster_rect.height.saturating_sub(1));
+
+        let mut node_bottom_boundary = cluster_rect.y;
+        let mut researcher_rect = None;
+        let mut judge_rect = None;
+        match (researcher.as_ref(), judge.as_ref()) {
+            (Some(researcher), Some(judge)) => {
+                let pair = layout_node_pair(
+                    cluster_rect,
+                    compact_node_width(researcher, NODE_MAX_CONTENT_WIDTH),
+                    compact_node_width(judge, NODE_MAX_CONTENT_WIDTH),
+                );
+                researcher_rect = pair.first;
+                judge_rect = pair.second;
+            }
+            (Some(researcher), None) => {
+                researcher_rect = centered_graph_box(
+                    cluster_rect,
+                    cluster_rect.y,
+                    compact_node_width(researcher, NODE_MAX_CONTENT_WIDTH),
+                    NODE_CONTENT_HEIGHT,
+                );
+            }
+            (None, Some(judge)) => {
+                judge_rect = centered_graph_box(
+                    cluster_rect,
+                    cluster_rect.y,
+                    compact_node_width(judge, NODE_MAX_CONTENT_WIDTH),
+                    NODE_CONTENT_HEIGHT,
+                );
+            }
+            (None, None) => {}
         }
-        stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
 
-        // ── Shade tray (collapsed summary) ─────────────────────────
-        let shade_y = agent_y + agent_h + 2; // below agent boxes + border + gap
-        let shade_active_count = shades.iter().filter(|s| {
-            edges.iter().any(|e| {
-                (e.get("from_agent_id").and_then(|v| v.as_str()).unwrap_or("") == s.agent_id
-                    || e.get("to_agent_id").and_then(|v| v.as_str()).unwrap_or("") == s.agent_id)
-                    && e.get("active_now").and_then(|v| v.as_bool()).unwrap_or(false)
+        if let (Some(node), Some(rect)) = (researcher.as_ref(), researcher_rect) {
+            let index = graph_nodes
+                .iter()
+                .position(|candidate| candidate.agent_id == node.agent_id)
+                .unwrap_or(usize::MAX);
+            render_compact_node(stdout, node, rect, index == selected_node)?;
+            let anchors = graph_anchors(rect);
+            node_bottom_boundary = node_bottom_boundary.max(anchors.bottom.y);
+            node_anchors.insert(node.agent_id.clone(), anchors);
+        }
+        if let (Some(node), Some(rect)) = (judge.as_ref(), judge_rect) {
+            let index = graph_nodes
+                .iter()
+                .position(|candidate| candidate.agent_id == node.agent_id)
+                .unwrap_or(usize::MAX);
+            render_compact_node(stdout, node, rect, index == selected_node)?;
+            let anchors = graph_anchors(rect);
+            node_bottom_boundary = node_bottom_boundary.max(anchors.bottom.y);
+            node_anchors.insert(node.agent_id.clone(), anchors);
+        }
+
+        let shade_active_count = shades
+            .iter()
+            .filter(|shade| {
+                edges.iter().any(|edge| {
+                    (edge
+                        .get("from_agent_id")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        == shade.agent_id
+                        || edge
+                            .get("to_agent_id")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("")
+                            == shade.agent_id)
+                        && edge
+                            .get("active_now")
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false)
+                })
             })
-        }).count();
-        let shade_total = shades.len();
-
-        if shade_total > 0 && shade_y < cluster_rect.y + inner_h {
-            // Shade summary tray
-            let tray_w = inner_w.saturating_sub(2);
-            let tray_x = cluster_rect.x + 1;
-
-            // Build shade name list for the summary
-            let shade_names: Vec<&str> = shades.iter().map(|s| s.name.as_str()).collect();
-            let names_joined = shade_names.join(", ");
-
-            let header = format!("{} shade{} ({} active)",
-                shade_total,
-                if shade_total == 1 { "" } else { "s" },
+            .count();
+        if !shades.is_empty() {
+            let header = format!(
+                "shade pool: {} • {} active",
+                shades.len(),
                 shade_active_count
             );
-            let header_trunc: String = header.chars().take(tray_w as usize).collect();
+            let names = shades
+                .iter()
+                .map(|shade| shade.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let desired_width = text_columns(&header)
+                .saturating_add(4)
+                .max(text_columns(&names))
+                .max(NODE_MIN_CONTENT_WIDTH)
+                .min(NODE_MAX_CONTENT_WIDTH.saturating_add(4));
+            let shade_tray_rect =
+                layout_shade_tray(cluster_rect, node_bottom_boundary, status_y, desired_width);
+            if let Some(rect) = shade_tray_rect {
+                let tray_color = if shade_active_count > 0 {
+                    style::Color::Rgb {
+                        r: 148,
+                        g: 163,
+                        b: 184,
+                    }
+                } else {
+                    style::Color::DarkGrey
+                };
+                render::render_border_colored(
+                    stdout,
+                    rect,
+                    &truncate_columns(&header, rect.width.saturating_sub(4)),
+                    tray_color,
+                )?;
+                draw_box_text(
+                    stdout,
+                    rect,
+                    &[truncate_columns(&names, rect.width)],
+                    style::Color::Rgb {
+                        r: 120,
+                        g: 130,
+                        b: 150,
+                    },
+                )?;
+                let anchors = graph_anchors(rect);
 
-            // Register shade nodes in anchors for edge drawing
-            for shade in &shades {
-                let shade_rect = Rect { x: tray_x, y: shade_y, width: tray_w, height: 1 };
-                node_anchors.insert(shade.agent_id.clone(), graph_anchors(shade_rect));
-            }
-
-            let tray_color = if shade_active_count > 0 {
-                style::Color::Rgb { r: 148, g: 163, b: 184 }
-            } else {
-                style::Color::DarkGrey
-            };
-
-            // Draw tray box
-            let tray_h = 2u16.min(inner_h.saturating_sub(shade_y - cluster_rect.y));
-            if tray_h >= 2 {
-                let tray_rect = Rect { x: tray_x, y: shade_y, width: tray_w, height: tray_h };
-                render::render_border_colored(stdout, tray_rect, &header_trunc, tray_color)?;
-                let names_trunc: String = names_joined.chars().take(tray_w as usize).collect();
-                draw_box_text(stdout, tray_rect, &[names_trunc], style::Color::Rgb { r: 120, g: 130, b: 150 })?;
-
-                // Show individual shade phases if there's room
-                let detail_y = shade_y + tray_h + 2;
-                let remaining = (cluster_rect.y + inner_h).saturating_sub(detail_y);
-                for (si, shade) in shades.iter().enumerate().take(remaining as usize) {
-                    let is_sel = graph_nodes.iter().position(|n| n.agent_id == shade.agent_id).unwrap_or(usize::MAX) == selected_node;
-                    let shade_line = format!("  {} {} • {}",
-                        if is_sel { "▸" } else { "·" },
+                let detail_y = anchors.bottom.y.saturating_add(2);
+                let detail_rows = status_y.saturating_sub(detail_y);
+                for (shade_index, shade) in shades.iter().enumerate().take(detail_rows as usize) {
+                    let index = graph_nodes
+                        .iter()
+                        .position(|node| node.agent_id == shade.agent_id)
+                        .unwrap_or(usize::MAX);
+                    let shade_line = format!(
+                        "{} {} • {}",
+                        if index == selected_node { "▸" } else { "·" },
                         shade.name,
-                        if shade.phase.is_empty() { &shade.status } else { &shade.phase }
+                        if shade.phase.is_empty() {
+                            shade.status.as_str()
+                        } else {
+                            shade.phase.as_str()
+                        },
                     );
-                    let shade_trunc: String = shade_line.chars().take(tray_w as usize).collect();
-                    stdout.queue(cursor::MoveTo(tray_x, detail_y + si as u16))?;
-                    stdout.queue(style::SetForegroundColor(if is_sel {
-                        style::Color::Rgb { r: 148, g: 163, b: 184 }
+                    stdout.queue(cursor::MoveTo(
+                        cluster_rect.x.saturating_add(1),
+                        detail_y.saturating_add(shade_index as u16),
+                    ))?;
+                    stdout.queue(style::SetForegroundColor(if index == selected_node {
+                        style::Color::Rgb {
+                            r: 148,
+                            g: 163,
+                            b: 184,
+                        }
                     } else {
                         style::Color::DarkGrey
                     }))?;
-                    write!(stdout, "{}", shade_trunc)?;
-                    stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
-                    // Update anchor for this shade to its actual rendered position
-                    let shade_rect = Rect { x: tray_x, y: detail_y + si as u16, width: tray_w, height: 1 };
-                    node_anchors.insert(shade.agent_id.clone(), graph_anchors(shade_rect));
+                    write!(
+                        stdout,
+                        "{}",
+                        truncate_columns(&shade_line, cluster_rect.width.saturating_sub(2))
+                    )?;
+                }
+                stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
+
+                // The tray represents the whole shade pool. Collapse all
+                // individual shade exchanges into at most one semantic route
+                // per visible target. The side-lane fallback keeps a stacked
+                // sibling out of the route without changing the endpoint.
+                for (target, target_rect, sibling_rect) in [
+                    (researcher.as_ref(), researcher_rect, judge_rect),
+                    (judge.as_ref(), judge_rect, researcher_rect),
+                ] {
+                    let (Some(target), Some(target_rect)) = (target, target_rect) else {
+                        continue;
+                    };
+                    let relevant_edges: Vec<&Value> = edges
+                        .iter()
+                        .filter(|edge| {
+                            let from_id = edge
+                                .get("from_agent_id")
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            let to_id = edge
+                                .get("to_agent_id")
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            let from_shade = shades.iter().any(|shade| shade.agent_id == from_id);
+                            let to_shade = shades.iter().any(|shade| shade.agent_id == to_id);
+                            (from_shade && to_id == target.agent_id)
+                                || (to_shade && from_id == target.agent_id)
+                        })
+                        .collect();
+                    if relevant_edges.is_empty() {
+                        continue;
+                    }
+                    let active = relevant_edges.iter().any(|edge| {
+                        edge.get("active_now")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                    });
+                    let strength = relevant_edges
+                        .iter()
+                        .filter_map(|edge| edge.get("activity_strength").and_then(Value::as_f64))
+                        .fold(0.0f64, f64::max);
+                    let obstacles: Vec<Rect> = sibling_rect.into_iter().collect();
+                    if let Some(route) = route_shade_pool_to_target(
+                        anchors,
+                        graph_anchors(target_rect),
+                        cluster_rect,
+                        &obstacles,
+                    ) {
+                        draw_orthogonal_route(stdout, &route, libris_edge_color(active, strength))?;
+                    }
                 }
             }
         }
 
-        // ── Edge/activity summary at cluster bottom ────────────────
-        let edge_summary = edges.iter().filter(|e| e.get("topic_slug").and_then(|v| v.as_str()).unwrap_or("") == slug);
-        let active_count = edge_summary.clone().filter(|e| e.get("active_now").and_then(|v| v.as_bool()).unwrap_or(false)).count();
-        let total_edges = edge_summary.count();
-        let status_line = format!("{} edges • {} active", total_edges, active_count);
-        let status_y = cluster_rect.y + inner_h.saturating_sub(1);
-        stdout.queue(cursor::MoveTo(cluster_rect.x + 1, status_y))?;
-        stdout.queue(style::SetForegroundColor(if active_count > 0 {
-            style::Color::Rgb { r: 34, g: 197, b: 94 }
-        } else {
-            style::Color::DarkGrey
-        }))?;
-        let status_trunc: String = status_line.chars().take(inner_w.saturating_sub(2) as usize).collect();
-        write!(stdout, "{}", status_trunc)?;
-        stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
+        let topic_edges: Vec<&Value> = edges
+            .iter()
+            .filter(|edge| {
+                edge.get("topic_slug")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    == slug
+            })
+            .collect();
+        let active_count = topic_edges
+            .iter()
+            .filter(|edge| {
+                edge.get("active_now")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+            })
+            .count();
+        if status_y > node_bottom_boundary {
+            let status_line = if layout.density == TopicClusterDensity::Compact {
+                if shades.is_empty() {
+                    format!("{} links • {} active", topic_edges.len(), active_count)
+                } else {
+                    format!(
+                        "{} shades • {} links • {} active",
+                        shades.len(),
+                        topic_edges.len(),
+                        active_count
+                    )
+                }
+            } else {
+                let shade_suffix = if shades.is_empty() {
+                    String::new()
+                } else {
+                    format!(" • {} shades", shades.len())
+                };
+                format!(
+                    "{} links • {} active{}",
+                    topic_edges.len(),
+                    active_count,
+                    shade_suffix
+                )
+            };
+            stdout.queue(cursor::MoveTo(cluster_rect.x.saturating_add(1), status_y))?;
+            stdout.queue(style::SetForegroundColor(if active_count > 0 {
+                style::Color::Rgb {
+                    r: 34,
+                    g: 197,
+                    b: 94,
+                }
+            } else {
+                style::Color::DarkGrey
+            }))?;
+            write!(
+                stdout,
+                "{}",
+                truncate_columns(&status_line, cluster_rect.width.saturating_sub(2))
+            )?;
+            stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
+        }
+
+        // A semantic researcher/judge link is routed from exact side or
+        // top/bottom boundary anchors; no fixed-width ASCII bridge is assumed.
+        if let (Some(_), Some(_), Some(researcher_rect), Some(judge_rect)) = (
+            researcher.as_ref(),
+            judge.as_ref(),
+            researcher_rect,
+            judge_rect,
+        ) {
+            let relevant_edges: Vec<&Value> = edges
+                .iter()
+                .filter(|edge| {
+                    edge.get("topic_slug")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or("")
+                        == slug
+                        && ((edge
+                            .get("from_role")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("")
+                            == "researcher"
+                            && edge
+                                .get("to_role")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("")
+                                == "judge")
+                            || (edge
+                                .get("from_role")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("")
+                                == "judge"
+                                && edge
+                                    .get("to_role")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or("")
+                                    == "researcher"))
+                })
+                .collect();
+            let active = relevant_edges.iter().any(|edge| {
+                edge.get("active_now")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+            });
+            let strength = relevant_edges
+                .iter()
+                .filter_map(|edge| {
+                    edge.get("activity_strength")
+                        .and_then(|value| value.as_f64())
+                })
+                .fold(0.0f64, f64::max);
+            if let Some(route) =
+                route_between_boxes(graph_anchors(researcher_rect), graph_anchors(judge_rect))
+            {
+                draw_orthogonal_route(stdout, &route, libris_edge_color(active, strength))?;
+            }
+        }
     }
 
-    // ── Draw communication edges ───────────────────────────────────────
-    for edge in &edges {
-        let src = edge.get("from_agent_id").and_then(|v| v.as_str()).unwrap_or("");
-        let dst = edge.get("to_agent_id").and_then(|v| v.as_str()).unwrap_or("");
-        let from_role = edge.get("from_role").and_then(|v| v.as_str()).unwrap_or("");
-        let to_role = edge.get("to_role").and_then(|v| v.as_str()).unwrap_or("");
-        let active_now = edge.get("active_now").and_then(|v| v.as_bool()).unwrap_or(false);
-        let activity_strength = edge.get("activity_strength").and_then(|v| v.as_f64()).unwrap_or(0.15);
+    if let Some(coordinator) = coordinator_anchors {
+        let active = edges.iter().any(|edge| {
+            edge.get("from_role")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                == "coordinator"
+                && edge
+                    .get("active_now")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+        });
+        draw_coordinator_fanout(
+            stdout,
+            coordinator,
+            &cluster_layouts,
+            if active {
+                style::Color::Rgb {
+                    r: 96,
+                    g: 165,
+                    b: 250,
+                }
+            } else {
+                style::Color::Rgb {
+                    r: 91,
+                    g: 76,
+                    b: 140,
+                }
+            },
+        )?;
+    }
 
-        // Skip researcher<=>judge edges (drawn inline as arrows)
-        if (from_role == "researcher" && to_role == "judge") || (from_role == "judge" && to_role == "researcher") {
+    // Draw remaining communication links. Coordinator links are represented by
+    // the collision-free topic fanout, and researcher/judge links were drawn
+    // within their topic cluster above.
+    for edge in &edges {
+        let source_id = edge
+            .get("from_agent_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let target_id = edge
+            .get("to_agent_id")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let source_role = edge
+            .get("from_role")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        let target_role = edge
+            .get("to_role")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if source_role == "coordinator"
+            || target_role == "coordinator"
+            || source_role == "shade"
+            || target_role == "shade"
+            || (source_role == "researcher" && target_role == "judge")
+            || (source_role == "judge" && target_role == "researcher")
+        {
             continue;
         }
-
-        let color = libris_edge_color(active_now, activity_strength);
-        let Some(src_anchor) = node_anchors.get(src).copied() else { continue; };
-        let Some(dst_anchor) = node_anchors.get(dst).copied() else { continue; };
-
-        let (start, end, mid_y) = if from_role == "shade" && to_role == "researcher" {
-            let m = dst_anchor.bottom.y + ((src_anchor.top.y.saturating_sub(dst_anchor.bottom.y)) / 2);
-            (src_anchor.top, dst_anchor.bottom, m)
-        } else if from_role == "researcher" && to_role == "shade" {
-            let m = src_anchor.bottom.y + ((dst_anchor.top.y.saturating_sub(src_anchor.bottom.y)) / 2);
-            (src_anchor.bottom, dst_anchor.top, m)
-        } else if from_role == "coordinator" {
-            (src_anchor.bottom, dst_anchor.top, topics_start_y.saturating_sub(1))
-        } else if to_role == "coordinator" {
-            (src_anchor.top, dst_anchor.bottom, topics_start_y.saturating_sub(1))
-        } else {
-            let m = mid_u16(src_anchor.center.y, dst_anchor.center.y);
-            (src_anchor.center, dst_anchor.center, m)
+        let Some(source) = node_anchors.get(source_id).copied() else {
+            continue;
         };
-
-        if start.y == end.y {
-            draw_hline(stdout, start.x, end.x, start.y, color)?;
-        } else {
-            draw_vline(stdout, start.x, start.y, mid_y, color)?;
-            draw_hline(stdout, start.x, end.x, mid_y, color)?;
-            draw_vline(stdout, end.x, mid_y, end.y, color)?;
-        }
+        let Some(target) = node_anchors.get(target_id).copied() else {
+            continue;
+        };
+        let Some(route) = route_between_boxes(source, target) else {
+            continue;
+        };
+        let active = edge
+            .get("active_now")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let strength = edge
+            .get("activity_strength")
+            .and_then(|value| value.as_f64())
+            .unwrap_or(0.15);
+        draw_orthogonal_route(stdout, &route, libris_edge_color(active, strength))?;
     }
 
     Ok(graph_nodes)
@@ -1019,7 +2416,12 @@ pub(crate) fn draw_delete_room_modal<W: Write>(stdout: &mut W, app: &App, w: u16
 pub(crate) fn draw_inter_agent<W: Write>(stdout: &mut W, app: &mut App, w: u16, h: u16) -> io::Result<()> {
     let sidebar_w = ((w as f32) * 0.22) as u16;
     let list_area = Rect { x: 1, y: 2, width: sidebar_w.saturating_sub(2), height: h.saturating_sub(4) };
-    render::render_border(stdout, list_area, "groups", true)?;
+    render::render_border(
+        stdout,
+        list_area,
+        "coordination",
+        !app.inter_agent.graph_focus && !app.inter_agent.detail_focus,
+    )?;
 
     let refresh_payload = app.chat.refresh_payload.clone();
     let rooms = payload_inter_agent_rooms(refresh_payload.as_ref());
@@ -1034,13 +2436,32 @@ pub(crate) fn draw_inter_agent<W: Write>(stdout: &mut W, app: &mut App, w: u16, 
         let title = room.get("title").and_then(|v| v.as_str()).unwrap_or("untitled");
         let project = room.get("project").and_then(|v| v.as_str()).unwrap_or("");
         let project_name = project.split('/').filter(|s| !s.is_empty()).last().unwrap_or(project);
-        let line = if project_name.is_empty() {
-            format!("{} {}: {}", if i == app.inter_agent.selected { "▸" } else { " " }, kind, title)
+        let delivery_summary = (kind == "libris").then(|| libris_delivery_summary(room));
+        let delivery_marker = delivery_summary
+            .as_ref()
+            .map(libris_delivery_sidebar_marker)
+            .unwrap_or("");
+        let kind_label = if delivery_marker.is_empty() {
+            kind.to_string()
         } else {
-            format!("{} {}: {} [{}]", if i == app.inter_agent.selected { "▸" } else { " " }, kind, title, project_name)
+            format!("{} {}", delivery_marker, kind)
+        };
+        let line = if project_name.is_empty() {
+            format!("{} {}: {}", if i == app.inter_agent.selected { "▸" } else { " " }, kind_label, title)
+        } else {
+            format!("{} {}: {} [{}]", if i == app.inter_agent.selected { "▸" } else { " " }, kind_label, title, project_name)
         };
         stdout.queue(cursor::MoveTo(list_area.x, list_area.y + row as u16))?;
-        stdout.queue(style::SetForegroundColor(if i == app.inter_agent.selected { style::Color::Rgb { r: 212, g: 196, b: 168 } } else { style::Color::DarkGrey }))?;
+        let room_color = if i == app.inter_agent.selected {
+            style::Color::Rgb { r: 212, g: 196, b: 168 }
+        } else {
+            match delivery_summary.as_ref().map(|summary| summary.state) {
+                Some(LibrisDeliveryState::Ready) => style::Color::Rgb { r: 74, g: 222, b: 128 },
+                Some(LibrisDeliveryState::Incomplete) => style::Color::Rgb { r: 251, g: 191, b: 36 },
+                _ => style::Color::DarkGrey,
+            }
+        };
+        stdout.queue(style::SetForegroundColor(room_color))?;
         let visible: String = line.chars().take(list_area.width as usize).collect();
         write!(stdout, "{}", visible)?;
         stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
@@ -1054,20 +2475,26 @@ pub(crate) fn draw_inter_agent<W: Write>(stdout: &mut W, app: &mut App, w: u16, 
             let _ = sync_inter_agent_room_panes(app, &room, main_w.saturating_sub(2), h.saturating_sub(8));
         }
         if kind == "libris" {
-            let graph_area = Rect { x: main_x, y: 2, width: ((main_w as f32) * 0.62) as u16, height: h.saturating_sub(4) };
-            let detail_x = graph_area.x + graph_area.width + 2;
-            let detail_w = w.saturating_sub(detail_x + 2);
-            let info_h = (h.saturating_sub(4) / 2).max(8);
-            let node_area = Rect { x: detail_x, y: 2, width: detail_w, height: info_h.saturating_sub(1) };
-            let event_area = Rect { x: detail_x, y: node_area.y + node_area.height + 1, width: detail_w, height: h.saturating_sub(node_area.height + 5) };
+            let delivery_summary = libris_delivery_summary(room);
+            let (graph_area, node_area, event_area) =
+                libris_panel_areas(main_x, main_w, w, h, delivery_summary.state);
             render::render_border(stdout, graph_area, if app.inter_agent.graph_focus { "graph *" } else { "graph" }, app.inter_agent.graph_focus)?;
-            render::render_border(stdout, node_area, if app.inter_agent.topic_detail { "topic" } else { "selection" }, !app.inter_agent.graph_focus)?;
+            let detail_title = match (app.inter_agent.topic_detail, app.inter_agent.detail_focus) {
+                (true, true) => "topic details *",
+                (true, false) => "topic details",
+                (false, true) => "details *",
+                (false, false) => "details",
+            };
+            render::render_border(stdout, node_area, detail_title, app.inter_agent.detail_focus)?;
             render::render_border(stdout, event_area, "events", false)?;
 
             let graph_nodes = draw_libris_graph(stdout, room, graph_area, app.inter_agent.selected_node)?;
             if app.inter_agent.selected_node >= graph_nodes.len() && !graph_nodes.is_empty() {
                 app.inter_agent.selected_node = graph_nodes.len() - 1;
             }
+            let mut detail_lines =
+                libris_delivery_detail_lines(&delivery_summary, node_area.width as usize);
+            detail_lines.push(String::new());
             if let Some(node) = graph_nodes.get(app.inter_agent.selected_node) {
                 let budget = room.get("budget_status").and_then(|v| v.as_object());
                 let topic = if node.topic_slug.is_empty() {
@@ -1076,8 +2503,6 @@ pub(crate) fn draw_inter_agent<W: Write>(stdout: &mut W, app: &mut App, w: u16, 
                     room.get("topics").and_then(|v| v.as_array()).and_then(|arr| arr.iter().find(|t| t.get("topic_slug").and_then(|v| v.as_str()) == Some(node.topic_slug.as_str())))
                 };
                 let promising_sources = room.get("promising_sources").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-                let final_selection = room.get("final_selection_markdown").and_then(|v| v.as_str()).unwrap_or("");
-                let mut detail_lines = Vec::new();
 
                 if app.inter_agent.topic_detail && topic.is_some() {
                     let topic = topic.unwrap();
@@ -1107,15 +2532,8 @@ pub(crate) fn draw_inter_agent<W: Write>(stdout: &mut W, app: &mut App, w: u16, 
                             detail_lines.push(format!("- {}", p));
                         }
                     }
-                    if !final_selection.trim().is_empty() {
-                        detail_lines.push(String::new());
-                        detail_lines.push("selection snippet:".to_string());
-                        for wrapped in wrap_plain_text(final_selection.lines().next().unwrap_or(""), node_area.width as usize) {
-                            detail_lines.push(wrapped);
-                        }
-                    }
                 } else {
-                    detail_lines.push(format!("{}", node.name));
+                    detail_lines.push(node.name.clone());
                     detail_lines.push(format!("role: {}", node.role));
                     detail_lines.push(format!("status: {}", node.status));
                     detail_lines.push(format!("phase: {}", if node.phase.is_empty() { "-" } else { &node.phase }));
@@ -1144,9 +2562,6 @@ pub(crate) fn draw_inter_agent<W: Write>(stdout: &mut W, app: &mut App, w: u16, 
                     if !promising_sources.is_empty() {
                         detail_lines.push(format!("promising sources: {}", promising_sources.len()));
                     }
-                    if !final_selection.trim().is_empty() {
-                        detail_lines.push("final selection: yes".to_string());
-                    }
                     if !node.phase_summary.is_empty() {
                         detail_lines.push(String::new());
                         detail_lines.push("summary:".to_string());
@@ -1155,16 +2570,68 @@ pub(crate) fn draw_inter_agent<W: Write>(stdout: &mut W, app: &mut App, w: u16, 
                         }
                     }
                 }
+            } else {
+                detail_lines.push("No graph node selected.".to_string());
+            }
 
-                detail_lines.push(String::new());
-                detail_lines.push(if app.inter_agent.graph_focus { "Tab: room list focus".to_string() } else { "Tab: graph focus".to_string() });
-                detail_lines.push(format!("Enter: {} detail", if app.inter_agent.topic_detail { "node" } else { "topic" }));
-                detail_lines.push("↑/↓: select node   PgUp/PgDn: event scroll".to_string());
-                for (i, line) in detail_lines.into_iter().take(node_area.height as usize).enumerate() {
-                    stdout.queue(cursor::MoveTo(node_area.x, node_area.y + i as u16))?;
-                    let visible: String = line.chars().take(node_area.width as usize).collect();
-                    write!(stdout, "{}{}", visible, " ".repeat((node_area.width as usize).saturating_sub(visible.chars().count())))?;
-                }
+            let detail_body_height = node_area.height.saturating_sub(1) as usize;
+            let (detail_start, detail_end) = detail_scroll_window(
+                detail_lines.len(),
+                app.inter_agent.detail_scroll,
+                detail_body_height,
+            );
+            app.inter_agent.detail_scroll = detail_start;
+            for (row, (line_index, line)) in detail_lines
+                .iter()
+                .enumerate()
+                .skip(detail_start)
+                .take(detail_end.saturating_sub(detail_start))
+                .enumerate()
+            {
+                stdout.queue(cursor::MoveTo(node_area.x, node_area.y + row as u16))?;
+                let delivery_color = match delivery_summary.state {
+                    LibrisDeliveryState::Ready => style::Color::Rgb { r: 74, g: 222, b: 128 },
+                    LibrisDeliveryState::Incomplete => style::Color::Rgb { r: 251, g: 191, b: 36 },
+                    LibrisDeliveryState::Working => style::Color::Rgb { r: 148, g: 163, b: 184 },
+                };
+                stdout.queue(style::SetForegroundColor(if line_index == 0 {
+                    delivery_color
+                } else {
+                    style::Color::Reset
+                }))?;
+                let visible: String = line.chars().take(node_area.width as usize).collect();
+                write!(stdout, "{}{}", visible, " ".repeat((node_area.width as usize).saturating_sub(visible.chars().count())))?;
+                stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
+            }
+            if node_area.height > 0 {
+                let range = if detail_lines.is_empty() {
+                    "0/0".to_string()
+                } else {
+                    format!("{}-{}/{}", detail_start + 1, detail_end, detail_lines.len())
+                };
+                let controls = if app.inter_agent.detail_focus {
+                    "↑/↓ scroll • PgUp/PgDn page • Tab next"
+                } else if app.inter_agent.graph_focus {
+                    "↑/↓ node • Tab details • Enter topic/node"
+                } else {
+                    "Tab graph • → graph • Enter topic/node"
+                };
+                let hint = format!("{} • {}", range, controls);
+                stdout.queue(cursor::MoveTo(
+                    node_area.x,
+                    node_area.y + node_area.height.saturating_sub(1),
+                ))?;
+                stdout.queue(style::SetForegroundColor(style::Color::DarkGrey))?;
+                let visible = truncate_columns(&hint, node_area.width);
+                write!(
+                    stdout,
+                    "{}{}",
+                    visible,
+                    " ".repeat(
+                        (node_area.width as usize).saturating_sub(visible.chars().count())
+                    )
+                )?;
+                stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
             }
 
             let lines = inter_agent_event_lines(room, app.inter_agent.event_scroll, event_area.height.saturating_sub(1) as usize, app.inter_agent.app_mouse_mode);
@@ -1200,4 +2667,566 @@ pub(crate) fn draw_inter_agent<W: Write>(stdout: &mut W, app: &mut App, w: u16, 
     }
     draw_delete_room_modal(stdout, app, w, h)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod graph_layout_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn graph_node(name: &str, role: &str, phase: &str) -> LibrisGraphNode {
+        LibrisGraphNode {
+            agent_id: format!("{role}-{name}"),
+            name: name.to_string(),
+            role: role.to_string(),
+            status: "running".to_string(),
+            phase: phase.to_string(),
+            topic_slug: "topic".to_string(),
+            phase_summary: String::new(),
+            live_line: String::new(),
+        }
+    }
+
+    fn seven_topic_room() -> Value {
+        let topics = (0..7)
+            .map(|index| {
+                json!({
+                    "topic_slug": format!("topic-{index}"),
+                    "title": format!("topic-{index}"),
+                    "status": "working"
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut nodes = vec![json!({
+            "agent_id": "coordinator",
+            "name": "Libris coordinator",
+            "role": "coordinator",
+            "status": "running",
+            "phase": "fanout"
+        })];
+        let mut edges = Vec::new();
+        for index in 0..7 {
+            let slug = format!("topic-{index}");
+            let researcher = format!("researcher-{index}");
+            let judge = format!("judge-{index}");
+            nodes.push(json!({
+                "agent_id": researcher,
+                "name": format!("researcher-{index}"),
+                "role": "researcher",
+                "status": "running",
+                "phase": "search",
+                "topic_slug": slug
+            }));
+            nodes.push(json!({
+                "agent_id": judge,
+                "name": format!("judge-{index}"),
+                "role": "judge",
+                "status": "running",
+                "phase": "review",
+                "topic_slug": slug
+            }));
+            for shade_index in 0..2 {
+                let shade = format!("shade-{index}-{shade_index}");
+                nodes.push(json!({
+                    "agent_id": shade,
+                    "name": format!("shade-{shade_index}"),
+                    "role": "shade",
+                    "status": "running",
+                    "phase": "assist",
+                    "topic_slug": slug
+                }));
+                edges.push(json!({
+                    "from_agent_id": shade,
+                    "to_agent_id": researcher,
+                    "from_role": "shade",
+                    "to_role": "researcher",
+                    "topic_slug": slug,
+                    "active_now": shade_index == 0,
+                    "activity_strength": 0.8
+                }));
+            }
+            edges.push(json!({
+                "from_agent_id": "coordinator",
+                "to_agent_id": researcher,
+                "from_role": "coordinator",
+                "to_role": "researcher",
+                "topic_slug": slug,
+                "active_now": true,
+                "activity_strength": 1.0
+            }));
+            edges.push(json!({
+                "from_agent_id": researcher,
+                "to_agent_id": judge,
+                "from_role": "researcher",
+                "to_role": "judge",
+                "topic_slug": slug,
+                "active_now": true,
+                "activity_strength": 0.9
+            }));
+        }
+        json!({
+            "kind": "libris",
+            "status": "active",
+            "topics": topics,
+            "nodes": nodes,
+            "edges": edges
+        })
+    }
+
+    #[test]
+    fn graph_anchors_land_on_exact_box_boundaries() {
+        let anchors = graph_anchors(Rect {
+            x: 10,
+            y: 5,
+            width: 12,
+            height: 1,
+        });
+
+        assert_eq!(anchors.top, GraphPoint { x: 16, y: 4 });
+        assert_eq!(anchors.bottom, GraphPoint { x: 16, y: 6 });
+        assert_eq!(anchors.left, GraphPoint { x: 9, y: 5 });
+        assert_eq!(anchors.right, GraphPoint { x: 22, y: 5 });
+    }
+
+    #[test]
+    fn compact_node_width_tracks_visible_content_and_caps_long_labels() {
+        let short = graph_node("A", "judge", "run");
+        let long = graph_node(
+            "A coordinator name that should not stretch the entire graph",
+            "coordinator",
+            "planning",
+        );
+
+        assert_eq!(compact_node_width(&short, NODE_MAX_CONTENT_WIDTH), 11);
+        assert_eq!(
+            compact_node_width(&long, COORDINATOR_MAX_CONTENT_WIDTH),
+            COORDINATOR_MAX_CONTENT_WIDTH
+        );
+    }
+
+    #[test]
+    fn common_f4_size_keeps_two_by_two_fanout_and_shade_tray() {
+        // This is the graph pane produced by the normal 120×40 F4 split.
+        let area = Rect {
+            x: 27,
+            y: 2,
+            width: 56,
+            height: 36,
+        };
+        let clusters = layout_topic_clusters(area, 4, 8);
+
+        assert_eq!(clusters.len(), 4);
+        assert_eq!(
+            clusters
+                .iter()
+                .map(|cluster| cluster.row)
+                .collect::<Vec<_>>(),
+            vec![0, 0, 1, 1]
+        );
+        assert!(clusters
+            .iter()
+            .all(|cluster| cluster.density == TopicClusterDensity::Full
+                && cluster.rect.width == 22
+                && cluster.rect.height == 11));
+
+        let cluster = clusters[0].rect;
+        let pair = layout_node_pair(cluster, 12, 12);
+        let first = pair.first.expect("researcher box");
+        let second = pair.second.expect("judge box");
+        assert!(graph_anchors(first).bottom.y < graph_anchors(second).top.y);
+
+        let node_bottom = graph_anchors(second).bottom.y;
+        let status_y = cluster.y + cluster.height - 1;
+        let tray = layout_shade_tray(cluster, node_bottom, status_y, 16)
+            .expect("shade tray should fit below a stacked pair");
+        assert!(tray.y + tray.height < status_y);
+        assert!(graph_box_fits(cluster, tray));
+
+        let route = route_shade_pool_to_target(
+            graph_anchors(tray),
+            graph_anchors(first),
+            cluster,
+            &[second],
+        )
+        .expect("aggregate shade route");
+        let judge = graph_anchors(second);
+        assert_eq!(route.points.last(), Some(&graph_anchors(first).right));
+        assert!(route.points[1].x > judge.right.x);
+    }
+
+    #[test]
+    fn seven_topic_compact_fanout_fits_120x40_and_160x48() {
+        let cases = [
+            (
+                Rect {
+                    x: 27,
+                    y: 2,
+                    width: 56,
+                    height: 36,
+                },
+                14,
+                7,
+            ),
+            (
+                Rect {
+                    x: 36,
+                    y: 2,
+                    width: 75,
+                    height: 44,
+                },
+                20,
+                10,
+            ),
+        ];
+
+        for (area, expected_width, expected_height) in cases {
+            let clusters = layout_topic_clusters(area, 7, 8);
+            assert_eq!(clusters.len(), 7, "area: {area:?}");
+            assert_eq!(
+                clusters
+                    .iter()
+                    .map(|cluster| cluster.row)
+                    .collect::<Vec<_>>(),
+                vec![0, 0, 0, 1, 1, 1, 2]
+            );
+            assert!(clusters.iter().all(|cluster| {
+                cluster.density == TopicClusterDensity::Compact
+                    && cluster.rect.width == expected_width
+                    && cluster.rect.height == expected_height
+            }));
+            for cluster in clusters {
+                let pair = layout_node_pair(cluster.rect, 12, 12);
+                let researcher = pair.first.expect("compact researcher box");
+                let judge = pair.second.expect("compact judge box");
+                assert!(graph_box_fits(cluster.rect, researcher));
+                assert!(graph_box_fits(cluster.rect, judge));
+                assert!(
+                    cluster.rect.y + cluster.rect.height - 1 > graph_anchors(judge).bottom.y,
+                    "compact status row remains visible"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn seven_topic_compact_fanout_survives_delivery_banner() {
+        let summary = LibrisDeliverySummary {
+            state: LibrisDeliveryState::Ready,
+            topic_count: 7,
+            primary_artifact: None,
+            artifacts: Vec::new(),
+            reason: String::new(),
+        };
+        for area in [
+            Rect {
+                x: 27,
+                y: 2,
+                width: 56,
+                height: 36,
+            },
+            Rect {
+                x: 36,
+                y: 2,
+                width: 75,
+                height: 44,
+            },
+        ] {
+            let graph_area = libris_delivery_graph_area(area, &summary);
+            assert_eq!(graph_area.height, area.height - 1);
+            assert_eq!(layout_topic_clusters(graph_area, 7, 8).len(), 7);
+        }
+    }
+
+    #[test]
+    fn seven_topic_graph_renders_nodes_fanout_and_compact_shade_summary() {
+        let room = seven_topic_room();
+        for area in [
+            Rect {
+                x: 27,
+                y: 2,
+                width: 56,
+                height: 36,
+            },
+            Rect {
+                x: 36,
+                y: 2,
+                width: 75,
+                height: 44,
+            },
+        ] {
+            let mut output = Vec::new();
+            draw_libris_graph(&mut output, &room, area, 0).expect("seven-topic graph renders");
+            let rendered = String::from_utf8(output).expect("terminal output is UTF-8");
+            assert!(!rendered.contains("Graph compacted"));
+            assert!(rendered.contains("Libris coordinator"));
+            assert!(rendered.contains("topic-0"));
+            assert!(rendered.contains("topic-6"));
+            assert!(rendered.contains("shades"));
+            assert!(rendered.contains('━'));
+            assert!(rendered.contains('┃'));
+        }
+    }
+
+    #[test]
+    fn narrow_graph_layout_fails_closed_without_overflowing() {
+        let area = Rect {
+            x: 2,
+            y: 2,
+            width: 18,
+            height: 8,
+        };
+        assert!(layout_topic_clusters(area, 4, 5).is_empty());
+    }
+
+    #[test]
+    fn fanout_junction_glyphs_have_only_real_arms() {
+        assert_eq!(
+            heavy_junction_glyph(false, true, true, false),
+            '┓',
+            "rightmost topic drop connects left and down"
+        );
+        assert_eq!(
+            heavy_junction_glyph(false, true, false, true),
+            '┏',
+            "first bus row connects right and down"
+        );
+        assert_eq!(
+            heavy_junction_glyph(true, false, false, true),
+            '┗',
+            "last bus row connects up and right"
+        );
+        assert_eq!(
+            heavy_junction_glyph(true, false, true, true),
+            '┻',
+            "coordinator intersects the lane from above"
+        );
+    }
+
+    #[test]
+    fn malformed_extreme_geometry_saturates_or_fails_closed() {
+        let anchors = graph_anchors(Rect {
+            x: u16::MAX - 1,
+            y: u16::MAX - 1,
+            width: 10,
+            height: 10,
+        });
+        assert_eq!(anchors.right.x, u16::MAX);
+        assert_eq!(anchors.bottom.y, u16::MAX);
+
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 40,
+        };
+        assert!(layout_topic_clusters(area, u16::MAX as usize + 1, 4).is_empty());
+    }
+
+    #[test]
+    fn orthogonal_route_starts_and_ends_on_box_boundaries() {
+        let source = graph_anchors(Rect {
+            x: 5,
+            y: 5,
+            width: 8,
+            height: 1,
+        });
+        let target = graph_anchors(Rect {
+            x: 18,
+            y: 5,
+            width: 8,
+            height: 1,
+        });
+        let route = route_between_boxes(source, target).expect("horizontal route");
+
+        assert_eq!(route.points.first(), Some(&source.right));
+        assert_eq!(route.points.last(), Some(&target.left));
+    }
+
+    #[test]
+    fn routed_edges_render_with_heavy_line_glyphs() {
+        let route = OrthogonalRoute {
+            points: vec![
+                GraphPoint { x: 1, y: 1 },
+                GraphPoint { x: 1, y: 3 },
+                GraphPoint { x: 4, y: 3 },
+            ],
+        };
+        let mut output = Vec::new();
+        draw_orthogonal_route(&mut output, &route, style::Color::Blue).expect("route renders");
+        let rendered = String::from_utf8(output).expect("terminal output is UTF-8");
+
+        assert!(rendered.contains('┃'));
+        assert!(rendered.contains('━'));
+        assert!(rendered.contains('┗'));
+        assert!(!rendered.contains("---"));
+        assert!(!rendered.contains("<=>"));
+    }
+
+    #[test]
+    fn valid_manifest_drives_ready_banner_sidebar_and_delivery_details() {
+        let room = json!({
+            "status": "delivered",
+            "delivery_manifest": {
+                "status": "ready",
+                "ready": true,
+                "topic_count": 2,
+                "primary_artifact": {
+                    "label": "Shareable report",
+                    "path": "/tmp/libris-delivery/report.html",
+                    "media_type": "text/html"
+                },
+                "artifacts": [
+                    {
+                        "label": "Shareable report",
+                        "path": "/tmp/libris-delivery/report.html",
+                        "media_type": "text/html"
+                    },
+                    {
+                        "label": "Executive summary",
+                        "path": "/tmp/libris-delivery/executive-summary.md",
+                        "media_type": "text/markdown"
+                    }
+                ]
+            }
+        });
+
+        let summary = libris_delivery_summary(&room);
+        assert_eq!(summary.state, LibrisDeliveryState::Ready);
+        assert_eq!(summary.topic_count, 2);
+        assert_eq!(libris_delivery_sidebar_marker(&summary), "✓");
+        assert_eq!(
+            libris_delivery_banner_text(&summary).as_deref(),
+            Some("✓ DELIVERY READY • 2 REPORTS")
+        );
+
+        let details = libris_delivery_detail_lines(&summary, 120).join("\n");
+        assert!(details.contains("delivery: READY"));
+        assert!(details.contains("reports: 2"));
+        assert!(details.contains("primary: Shareable report (text/html)"));
+        assert!(details.contains("/tmp/libris-delivery/report.html"));
+        assert!(details.contains("artifacts (2):"));
+        assert!(details.contains("Executive summary (text/markdown)"));
+        assert!(details.contains("/tmp/libris-delivery/executive-summary.md"));
+    }
+
+    #[test]
+    fn artifact_detail_scroll_reaches_the_last_manifest_path() {
+        let artifacts = (0..8)
+            .map(|index| LibrisDeliveryArtifact {
+                label: format!("Artifact {index}"),
+                path: if index == 7 {
+                    "/tmp/libris-delivery/final-artifact.md".to_string()
+                } else {
+                    format!("/tmp/libris-delivery/artifact-{index}.md")
+                },
+                media_type: "text/markdown".to_string(),
+            })
+            .collect::<Vec<_>>();
+        let summary = LibrisDeliverySummary {
+            state: LibrisDeliveryState::Ready,
+            topic_count: 7,
+            primary_artifact: artifacts.first().cloned(),
+            artifacts,
+            reason: String::new(),
+        };
+        let lines = libris_delivery_detail_lines(&summary, 80);
+        let body_height = 5;
+        let (first_start, first_end) = detail_scroll_window(lines.len(), 0, body_height);
+        let first_page = lines[first_start..first_end].join("\n");
+        assert!(!first_page.contains("final-artifact.md"));
+
+        let (last_start, last_end) = detail_scroll_window(lines.len(), usize::MAX, body_height);
+        let last_page = lines[last_start..last_end].join("\n");
+        assert!(last_start > 0);
+        assert_eq!(last_end, lines.len());
+        assert!(last_page.contains("/tmp/libris-delivery/final-artifact.md"));
+    }
+
+    #[test]
+    fn final_selection_alone_never_claims_a_successful_delivery() {
+        let working_room = json!({
+            "status": "active",
+            "final_selection_markdown": "# A stale selection"
+        });
+        let working = libris_delivery_summary(&working_room);
+        assert_eq!(working.state, LibrisDeliveryState::Working);
+        assert!(libris_delivery_banner_text(&working).is_none());
+        assert_eq!(libris_delivery_sidebar_marker(&working), "");
+
+        let delivered_room = json!({
+            "status": "delivered",
+            "final_selection_markdown": "# A stale selection"
+        });
+        let incomplete = libris_delivery_summary(&delivered_room);
+        assert_eq!(incomplete.state, LibrisDeliveryState::Incomplete);
+        assert_eq!(
+            libris_delivery_banner_text(&incomplete).as_deref(),
+            Some("⚠ DELIVERY INCOMPLETE • 0 REPORTS")
+        );
+        assert_eq!(libris_delivery_sidebar_marker(&incomplete), "⚠");
+    }
+
+    #[test]
+    fn ready_claim_with_relative_or_missing_artifacts_is_incomplete() {
+        let room = json!({
+            "status": "delivered",
+            "delivery_manifest": {
+                "status": "ready",
+                "ready": true,
+                "topic_count": 1,
+                "primary_artifact": {
+                    "label": "Report",
+                    "path": "delivery/report.html",
+                    "media_type": "text/html"
+                },
+                "artifacts": []
+            }
+        });
+
+        let summary = libris_delivery_summary(&room);
+        assert_eq!(summary.state, LibrisDeliveryState::Incomplete);
+        assert_eq!(libris_delivery_status_label(summary.state), "INCOMPLETE");
+    }
+
+    #[test]
+    fn delivery_banner_renders_on_reserved_graph_footer_rows() {
+        let room = json!({
+            "status": "delivered",
+            "nodes": [],
+            "topics": [],
+            "delivery_manifest": {
+                "status": "ready",
+                "ready": true,
+                "topic_count": 1,
+                "primary_artifact": {
+                    "label": "Report",
+                    "path": "/tmp/libris-delivery/report.html",
+                    "media_type": "text/html"
+                },
+                "artifacts": [{
+                    "label": "Report",
+                    "path": "/tmp/libris-delivery/report.html",
+                    "media_type": "text/html"
+                }]
+            }
+        });
+        let area = Rect {
+            x: 2,
+            y: 2,
+            width: 44,
+            height: 12,
+        };
+        let summary = libris_delivery_summary(&room);
+        let graph_area = libris_delivery_graph_area(area, &summary);
+        assert_eq!(graph_area.x, area.x);
+        assert_eq!(graph_area.y, area.y);
+        assert_eq!(graph_area.width, area.width);
+        assert_eq!(graph_area.height, area.height - 1);
+
+        let mut output = Vec::new();
+        draw_libris_graph(&mut output, &room, area, 0).expect("graph renders");
+        let rendered = String::from_utf8(output).expect("terminal output is UTF-8");
+        assert!(rendered.contains("DELIVERY READY"));
+        assert!(rendered.contains("Waiting for Libris topic clusters"));
+    }
 }
