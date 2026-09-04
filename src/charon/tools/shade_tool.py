@@ -68,6 +68,15 @@ SHADE_TOOL_DEF = {
                 'type': 'object',
                 'description': 'Optional contract metadata for specialized workflows.',
             },
+            'topology_preset': {
+                'type': 'string',
+                'enum': ['narrow', 'standard', 'wide'],
+                'description': (
+                    'Governs how deep and wide the delegation tree rooted at this call may grow '
+                    '(default: standard). Only takes effect when this call starts a new tree — a '
+                    'shade spawned by another shade inherits its tree\'s existing budget instead.'
+                ),
+            },
         },
         'required': ['goal'],
     },
@@ -108,6 +117,17 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
     except Exception as exc:
         _diag('shade_tool', 'worker-provider preflight check failed; shade spawn proceeds without provider validation', error=exc)
 
+    from charon.agents.topology_budget import effective_budget, try_reserve
+    topology_preset = str(params.get('topology_preset') or 'standard').strip().lower()
+    budget = effective_budget(ctx, preset=topology_preset)
+    depth = int(getattr(ctx, 'topology_depth', 0) or 0) + 1
+    ok, reason = try_reserve(state_dir, budget, parent_agent_id=ctx.agent_id or 'root', depth=depth)
+    if not ok:
+        return ToolResult(
+            content=f'Error: cannot spawn shade — {reason}. Complete more of this work directly instead of delegating further.',
+            is_error=True,
+        )
+
     # 1. Create shade agent
     try:
         from charon.agents.agent_lifecycle import create_agent
@@ -141,7 +161,7 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
             scope=scope,
             phase_specs=phase_specs,
             contract_type=contract_type,
-            metadata=metadata,
+            metadata={**metadata, 'topology_depth': depth, 'topology_budget': budget},
         )
         contract_id = contract['id']
     except Exception as e:
@@ -150,7 +170,7 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
     # 3. Launch shade in background thread
     thread = threading.Thread(
         target=_run_shade,
-        args=(state_dir, shade_id, contract_id, goal, scope, constraints, ctx),
+        args=(state_dir, shade_id, contract_id, goal, scope, constraints, ctx, depth, budget),
         daemon=True,
     )
     thread.start()
@@ -183,6 +203,8 @@ def _run_shade(
     scope: list[str],
     constraints: list[str],
     parent_ctx: ToolContext,
+    depth: int = 0,
+    budget: dict | None = None,
 ):
     """Run a shade agent in a background thread."""
     import asyncio
@@ -226,6 +248,10 @@ def _run_shade(
         # Enforce the contract's file scope on Read/Write/Edit (not just advise
         # it via the prompt). Empty scope means "entire project" (no restriction).
         engine.scope = list(scope) if scope else None
+        # Inherit this tree's topology budget so a shade that spawns further
+        # shades of its own stays governed by the same depth/breadth/total caps.
+        engine.topology_depth = depth
+        engine.topology_budget = budget
 
         # Process each phase
         contract = get_contract(state_dir, contract_id)

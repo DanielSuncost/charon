@@ -142,6 +142,8 @@ CREATE TABLE IF NOT EXISTS shade_contracts (
     phase_count       INTEGER NOT NULL DEFAULT 0,
     current_phase_id  TEXT,
     branch_history    TEXT NOT NULL DEFAULT '[]',
+    contract_type     TEXT NOT NULL DEFAULT '',
+    metadata          TEXT NOT NULL DEFAULT '{}',
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
     completed_at      TEXT,
@@ -327,6 +329,26 @@ class DB:
         return [dict(zip(cols, row, strict=False)) for row in cur.fetchall()]
 
 
+# Columns added after a table's initial CREATE TABLE IF NOT EXISTS shipped —
+# IF NOT EXISTS only helps brand-new databases, so an existing on-disk DB
+# needs these added explicitly. Safe to run on every open: ADD COLUMN on an
+# already-migrated table raises "duplicate column name", which we swallow.
+_COLUMN_MIGRATIONS: list[tuple[str, str, str]] = [
+    ('shade_contracts', 'contract_type', "TEXT NOT NULL DEFAULT ''"),
+    ('shade_contracts', 'metadata', "TEXT NOT NULL DEFAULT '{}'"),
+]
+
+
+def _migrate_columns(conn: sqlite3.Connection) -> None:
+    for table, column, decl in _COLUMN_MIGRATIONS:
+        try:
+            conn.execute(f'ALTER TABLE {table} ADD COLUMN {column} {decl}')
+        except sqlite3.OperationalError as e:
+            if 'duplicate column name' not in str(e).lower():
+                raise
+    conn.commit()
+
+
 def open_db(state_dir: Path, *, filename: str = 'charon.db') -> DB:
     """Open (or create) the Charon SQLite database in state_dir."""
     state_dir = Path(state_dir)
@@ -338,6 +360,7 @@ def open_db(state_dir: Path, *, filename: str = 'charon.db') -> DB:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA synchronous = NORMAL")
     conn.executescript(_SCHEMA_SQL)
+    _migrate_columns(conn)
     # stamp schema version
     conn.execute(
         "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)",
@@ -699,8 +722,9 @@ def contract_insert(db: DB, contract: dict) -> dict:
             shade_agent_id, conversation_id, project, goal,
             constraints, expected_outputs, scope,
             phases, phase_count, current_phase_id, branch_history,
+            contract_type, metadata,
             created_at, updated_at, completed_at, last_error)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             contract['id'], contract.get('status', 'running'),
             contract.get('active_branch_id', 'main'),
@@ -714,6 +738,8 @@ def contract_insert(db: DB, contract: dict) -> dict:
             int(contract.get('phase_count', 0)),
             contract.get('current_phase_id'),
             _json_dumps(contract.get('branch_history', [])),
+            contract.get('contract_type', ''),
+            _json_dumps(contract.get('metadata', {})),
             contract['created_at'], contract['updated_at'],
             contract.get('completed_at'), contract.get('last_error'),
         ),
@@ -747,7 +773,8 @@ def contract_update(db: DB, contract: dict) -> dict:
             parent_agent_id = ?, shade_agent_id = ?, conversation_id = ?,
             project = ?, goal = ?, constraints = ?, expected_outputs = ?,
             scope = ?, phases = ?, phase_count = ?, current_phase_id = ?,
-            branch_history = ?, updated_at = ?, completed_at = ?, last_error = ?
+            branch_history = ?, contract_type = ?, metadata = ?,
+            updated_at = ?, completed_at = ?, last_error = ?
            WHERE id = ?""",
         (
             contract.get('status', 'running'),
@@ -762,6 +789,8 @@ def contract_update(db: DB, contract: dict) -> dict:
             int(contract.get('phase_count', 0)),
             contract.get('current_phase_id'),
             _json_dumps(contract.get('branch_history', [])),
+            contract.get('contract_type', ''),
+            _json_dumps(contract.get('metadata', {})),
             contract['updated_at'], contract.get('completed_at'),
             contract.get('last_error'),
             contract['id'],
@@ -774,6 +803,7 @@ def contract_update(db: DB, contract: dict) -> dict:
 def _hydrate_contract(row: dict) -> dict:
     for key in ('constraints', 'expected_outputs', 'scope', 'phases', 'branch_history'):
         row[key] = _json_loads(row.get(key), [])
+    row['metadata'] = _json_loads(row.get('metadata'), {})
     return row
 
 

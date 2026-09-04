@@ -59,6 +59,15 @@ SPAWN_BATCH_TOOL_DEF = {
                 'items': {'type': 'string'},
                 'description': 'Constraints applied to ALL tasks in the batch.',
             },
+            'topology_preset': {
+                'type': 'string',
+                'enum': ['narrow', 'standard', 'wide'],
+                'description': (
+                    'Governs how deep and wide the delegation tree rooted at this call may grow '
+                    '(default: standard). Only takes effect when this call starts a new tree — a '
+                    'batch spawned by a shade inherits its tree\'s existing budget instead.'
+                ),
+            },
         },
         'required': ['goal', 'tasks'],
     },
@@ -121,6 +130,19 @@ def execute_spawn_batch(params: dict, ctx: ToolContext) -> ToolResult:
     if not clean_tasks:
         return ToolResult(content='Error: no valid tasks in the list.', is_error=True)
 
+    from charon.agents.topology_budget import effective_budget, try_reserve
+    topology_preset = str(params.get('topology_preset') or 'standard').strip().lower()
+    budget = effective_budget(ctx, preset=topology_preset)
+    depth = int(getattr(ctx, 'topology_depth', 0) or 0) + 1
+    ok, reason = try_reserve(
+        ctx.state_dir, budget, parent_agent_id=ctx.agent_id or 'root', depth=depth, count=len(clean_tasks),
+    )
+    if not ok:
+        return ToolResult(
+            content=f'Error: cannot spawn batch — {reason}. Reduce the task count or complete work directly.',
+            is_error=True,
+        )
+
     try:
         from charon.automation.batch_orchestrator import create_batch, run_batch_worker, summarize_batch
 
@@ -132,6 +154,8 @@ def execute_spawn_batch(params: dict, ctx: ToolContext) -> ToolResult:
             tasks=clean_tasks,
             max_concurrent=max_concurrent,
             constraints=constraints,
+            topology_depth=depth,
+            topology_budget=budget,
         )
 
         # Launch batch worker in background thread

@@ -64,6 +64,8 @@ def create_batch(
     max_concurrent: int = 5,
     constraints: list[str] | None = None,
     phase_name: str = 'generation',
+    topology_depth: int = 0,
+    topology_budget: dict | None = None,
 ) -> dict:
     """Create a parallel batch of independent shade tasks.
 
@@ -72,6 +74,11 @@ def create_batch(
 
     Optional per-task fields:
         scope, constraints, expected_outputs
+
+    topology_depth/topology_budget carry a delegation tree's governance
+    (see charon.agents.topology_budget) down to each task's shade engine.
+    Callers that reserve capacity themselves (the SpawnBatch tool) pass
+    these through; this function does not enforce them itself.
 
     Returns the batch record.
     """
@@ -114,6 +121,8 @@ def create_batch(
         'created_at': now,
         'updated_at': now,
         'completed_at': None,
+        'topology_depth': topology_depth,
+        'topology_budget': topology_budget,
     }
 
     batches = _load_batches(state_dir)
@@ -400,6 +409,10 @@ def run_batch_worker(
             task_scope = batch_task.get('scope') or []
             if task_scope:
                 engine.scope = task_scope
+            # Inherit this tree's topology budget so a batch task that spawns
+            # further shades of its own stays governed by the same caps.
+            engine.topology_depth = batch.get('topology_depth', 0)
+            engine.topology_budget = batch.get('topology_budget')
 
             # Build instruction
             instruction = batch_task.get('instruction', '')
