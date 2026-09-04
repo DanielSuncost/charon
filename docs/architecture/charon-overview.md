@@ -21,7 +21,7 @@
 │  │  Responsive grid · Enter: focus · type to interact     │     │
 │  └─────────────────────────────────────────────────────────┘     │
 │                                                                  │
-│  Chat (F1) · Dashboard (F2) · Libris (F4) · Inter-agent (F5)    │
+│  Chat (F1) · Dashboard (F2) · Sessions (F3) · Coordination (F4) │
 └────────────────────────────┬─────────────────────────────────────┘
                              │  WebSocket / IPC
 ┌────────────────────────────▼─────────────────────────────────────┐

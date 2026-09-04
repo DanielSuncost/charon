@@ -15,6 +15,7 @@ Documentation index for Charon.
 | [design-library-spec.md](design-library-spec.md) | Design library spec |
 | [onboarding-summary.md](onboarding-summary.md) | Onboarding design and status summary |
 | [manual-provider-switch-transfer-test-checklist.adoc](manual-provider-switch-transfer-test-checklist.adoc) | Manual test checklist for provider-switch context transfer |
+| [proposals/charon-workspace.md](proposals/charon-workspace.md) | Proposed institutional context and coordinated-delivery control plane |
 
 ## Subdirectories
 
@@ -24,6 +25,7 @@ Documentation index for Charon.
 | [adr/](adr/) | Architecture decision records |
 | [contracts/](contracts/) | JSON schemas and command/event contracts |
 | [features/](features/) | Feature specs (see [features/INDEX.md](features/INDEX.md)) |
+| [proposals/](proposals/) | Product and architecture proposals under review |
 
 ## Plans
 

@@ -112,6 +112,45 @@ Agent: [spawns 6 shades, max 6 concurrent]
 Sequential contracts for multi-step work. Parallel batches for
 independent tasks. Budget limits on tokens, time, and iterations.
 
+### Graph Control Plane
+
+*Can a multi-agent run be executable, inspectable, and measurable as one graph?*
+
+Charon Graph adds durable directed workflows alongside the existing agent,
+shade, batch, and judge-loop paths. Nodes can branch, fan out to parallel
+workers, join on evidence, loop through repair, suspend for input, and resume
+after a process restart. Queue-backed nodes dispatch ordinary Charon tasks, so
+graph workflows reuse the same agents, providers, scopes, and approvals.
+
+Every route is inspectable. The model router records the eligible candidates,
+hard-constraint rejections, calibrated quality estimate, uncertainty, expected
+latency and cost, versioned policy weights, final ranking, and the provider and
+model that actually execute a routed task. Separate model trials build
+task-family calibration profiles; matched policy runs produce
+scenario-clustered confidence intervals, pairing diagnostics, and Pareto
+analysis.
+
+![Charon Graph Studio showing a completed multi-agent workflow](docs/assets/graph-studio.png)
+
+Launch the local visual control plane:
+
+```bash
+.venv/bin/python scripts/charon_graph.py validate
+.venv/bin/python scripts/charon_graph.py serve
+```
+
+The canvas shows live topology, animated handoffs, node attempts and outputs,
+routing rationale, event history, and the calibration evidence behind a policy.
+The included software-delivery workflow uses a byte-reproducible, explicitly
+synthetic calibration/evaluation fixture and deterministic worker handlers, so
+launching the Studio never contacts a model provider. The separate
+[`routed-worker.json`](examples/graph_workflows/routed-worker.json) template
+connects the same router contract to the ordinary Charon task queue; replace its
+owner, model, and operator priors before running it against a configured worker.
+
+[Architecture](docs/architecture/graph-control-plane.md) ·
+[Evaluation method](docs/evaluation/routing-calibration.md)
+
 ### Judge Loops
 
 *Can an agent reliably improve its own work against a quality signal?*
@@ -153,6 +192,24 @@ a benchmarked agent capability.
 ```
 /libris research the role of reinforcement learning in the brain during skill vs language learning
 ```
+
+The TUI opens a research-standard selector after intake. Use <kbd>↑</kbd>/<kbd>↓</kbd>
+and <kbd>Enter</kbd> to choose and launch, or <kbd>Esc</kbd> to cancel. Press
+<kbd>F4</kbd> to inspect the live coordinator, topic fanout, agent activity,
+and communication graph.
+
+Check the latest operation directly with `/libris status`, or inspect a specific
+run with `/libris status <operation-id>`. Once a delivery is validated, F1
+shows a one-shot completion notice with the absolute path to the primary report.
+F4 keeps the delivery summary visible alongside the swarm; press <kbd>Tab</kbd>
+to focus its details, then use <kbd>↑</kbd>/<kbd>↓</kbd> or
+<kbd>Page Up</kbd>/<kbd>Page Down</kbd> to inspect every artifact path.
+
+Read-only research source access is approved automatically by default. Use
+`/libris approvals ask` to require confirmation, `/libris approvals auto` to
+restore automatic source access, or `/libris approvals` to inspect the current
+policy. This setting applies only to read-only research source retrieval;
+mutating or otherwise dangerous actions remain approval-gated.
 
 Libris is a multi-agent research swarm: a coordinator scouts topics,
 researchers investigate them against the live scholarly literature
@@ -264,6 +321,9 @@ charon/
 │   ├── judge/                     # Iterative optimization with scoring
 │   ├── shade/                     # Sequential shade contracts
 │   ├── automation/                # Schedulers, batch shade swarms, checkpoints
+│   ├── orchestration/             # Durable step and directed-graph runtimes
+│   ├── routing/                   # Calibrated multi-model routing policies
+│   ├── evaluation/                # Paired agentic benchmarks and statistics
 │   ├── devop/                     # Devop orchestration
 │   ├── fleet/                     # Remote dispatch (Harbor protocol), fleet sync
 │   ├── providers/                 # Anthropic, OpenAI, local (httpx)
@@ -288,6 +348,8 @@ as a primary working environment.
 What works:
 - Memory recall and user-model / preference consolidation
 - Shade swarms with scope enforcement
+- Durable graph workflows with routing and live projection
+- Routing calibration and paired policy evaluation
 - Judge loops with checkpoint/rollback
 - Multi-provider (Claude, Codex, local models)
 - Session grid with live VTE terminals
@@ -317,6 +379,8 @@ full list.
 | [Procedures & Judge Loops](docs/plans/procedure-learning-and-optimization-loops.md) | Iterative optimization with pluggable scoring |
 | [Autonomous Work](docs/plans/autonomous-goal-driven-work.md) | Goal-driven self-assignment |
 | [Remote Agent Teams](docs/remote-agent-teams.md) | Fleet configuration, team roles, Harbor dispatch |
+| [Graph Control Plane](docs/architecture/graph-control-plane.md) | Durable graph execution, events, adapters, and safety |
+| [Routing Calibration](docs/evaluation/routing-calibration.md) | Routing policies, benchmark statistics, and experiment discipline |
 | [Capability Roadmap](docs/plans/capability-roadmap.md) | Prioritized feature plan (P0 to P3) |
 | [Master Plan](docs/plans/MASTER_PLAN.md) | Architecture and build phases |
 

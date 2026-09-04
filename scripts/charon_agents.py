@@ -58,6 +58,7 @@ from charon.shade import shade_orchestrator  # noqa: E402
 from charon.agents import goal_runtime  # noqa: E402
 from charon.providers import llm_adapter  # noqa: E402
 from charon.providers import charon_auth  # noqa: E402
+from charon.infra.queue_io import update_queue_atomic  # noqa: E402
 
 
 def cmd_create(args):
@@ -240,25 +241,18 @@ def cmd_shade_branch(args):
         print('not found')
         raise SystemExit(1)
 
-    queue_path = STATE_DIR / 'queue.json'
-    queue = []
-    if queue_path.exists():
-        try:
-            queue = json.loads(queue_path.read_text())
-        except Exception:
-            queue = []
-    woke = False
-    for task in queue:
-        orch = task.get('shade_orchestration') or {}
-        if orch.get('contract_id') == args.contract_id:
-            task['status'] = 'pending'
-            task.pop('wait_state', None)
-            task.pop('started_at', None)
-            task['updated_at'] = task.get('updated_at') or ''
-            woke = True
-            break
-    if woke:
-        queue_path.write_text(json.dumps(queue, indent=2))
+    def wake_parent(queue):
+        for task in queue:
+            orch = task.get('shade_orchestration') or {}
+            if orch.get('contract_id') == args.contract_id:
+                task['status'] = 'pending'
+                task.pop('wait_state', None)
+                task.pop('started_at', None)
+                task['updated_at'] = task.get('updated_at') or ''
+                return True
+        return False
+
+    update_queue_atomic(STATE_DIR / 'queue.json', wake_parent)
 
     print(f"branched\t{rec.get('id')}\tfrom={args.from_phase_id}\tactive_branch={rec.get('active_branch_id')}")
 
@@ -653,6 +647,8 @@ def _chat_command_catalog() -> list[str]:
         '/setup provider api',
         '/setup auth-start',
         '/setup model <name>',
+        '/setup effort <off|minimal|low|medium|high|xhigh>',
+        '/effort <off|minimal|low|medium|high|xhigh>',
         '/setup project <name>',
         '/setup complete',
         '/clarifications',
@@ -764,6 +760,16 @@ def _handle_chat_slash_command(msg: str, *, agent_id: str, conversation_id: str,
         cmd_setup_model(argparse.Namespace(name=rest))
         return True
 
+    if text.startswith('/effort'):
+        rest = text[len('/effort'):].strip()
+        if not rest:
+            state = _load_onboarding_state()
+            print(f"current effort: {state.get('reasoning_effort') or state.get('thinking_level') or 'off'}")
+            print('use /effort <off|minimal|low|medium|high|xhigh> to change')
+            return True
+        cmd_setup_effort(argparse.Namespace(level=rest))
+        return True
+
     if text.startswith('/setup '):
         rest = text[len('/setup '):].strip()
         if rest == 'status':
@@ -789,6 +795,9 @@ def _handle_chat_slash_command(msg: str, *, agent_id: str, conversation_id: str,
             return True
         if rest.startswith('model '):
             cmd_setup_model(argparse.Namespace(name=rest.split(' ', 1)[1].strip()))
+            return True
+        if rest.startswith('effort '):
+            cmd_setup_effort(argparse.Namespace(level=rest.split(' ', 1)[1].strip()))
             return True
         if rest.startswith('project '):
             cmd_setup_project(argparse.Namespace(name=rest.split(' ', 1)[1].strip()))
@@ -931,6 +940,29 @@ def cmd_setup_model(args):
     state['step'] = 'project'
     _save_onboarding_state(state)
     print(f'setup model={model}')
+
+
+def _normalize_effort(level: str) -> str:
+    raw = str(level or '').strip().lower()
+    aliases = {'none': 'off', '0': 'off', 'min': 'minimal', 'med': 'medium', 'max': 'high'}
+    raw = aliases.get(raw, raw)
+    allowed = {'off', 'minimal', 'low', 'medium', 'high', 'xhigh'}
+    if raw not in allowed:
+        raise ValueError(f"unsupported effort: {level}; use off, minimal, low, medium, high, or xhigh")
+    return raw
+
+
+def cmd_setup_effort(args):
+    try:
+        level = _normalize_effort(getattr(args, 'level', ''))
+    except ValueError as e:
+        print(str(e))
+        raise SystemExit(2) from e
+    state = _load_onboarding_state()
+    state['reasoning_effort'] = level
+    state['thinking_level'] = level
+    _save_onboarding_state(state)
+    print(f'setup effort={level}')
 
 
 def cmd_setup_api_url(args):
@@ -1296,6 +1328,10 @@ def main():
     sm = setup_sub.add_parser('model')
     sm.add_argument('name')
     sm.set_defaults(func=cmd_setup_model)
+
+    se = setup_sub.add_parser('effort')
+    se.add_argument('level')
+    se.set_defaults(func=cmd_setup_effort)
 
     sau = setup_sub.add_parser('api-url')
     sau.add_argument('url')

@@ -107,6 +107,12 @@ instead of `os.environ`.
 | `CHARON_NO_SQLITE` | `0` | `1` disables the SQLite store; JSON-file persistence is used instead. |
 | `CHARON_STDOUT_EVENTS` | `1` | `1` mirrors loop events to stdout as JSONL; tests set `0`. |
 | `CHARON_DEBUG_TRACE` | `0` | `1` enables the high-volume JSONL trace in `<state-dir>/debug.log`. |
+| `CHARON_TIMING` | `0` | `1` appends per-turn latency and transport metrics to `<state-dir>/performance/turns.jsonl`. |
+| `CHARON_MAX_PARALLEL_TOOLS` | `4` | Maximum number of independent read-only tool calls run concurrently (clamped to 1–16). |
+| `CHARON_STREAM_COALESCE_MS` | `20` | Maximum Python-to-TUI text-delta coalescing window in milliseconds; `0` disables it. |
+| `CHARON_ADAPTIVE_TOOLS` | `1` | `1` sends a compact core tool set and activates specialized tools on demand; `0` always sends the full registry. |
+| `CHARON_CODEX_WEBSOCKET` | `1` | `1` prefers a reusable Codex Responses WebSocket and falls back to SSE before semantic output; `0` forces SSE. |
+| `CHARON_CODEX_WEBSOCKET_FIRST_EVENT_TIMEOUT` | `60` | Seconds to wait for the first Codex WebSocket event before falling back. |
 | `CHARON_LOOP_SLEEP` | `2.0` | Seconds slept between loop cycles. |
 | `CHARON_MAX_CYCLES` | `0` | Stop after N cycles; `0` = run forever. |
 | `CHARON_MAX_CONSEC_FAIL` | `5` | Consecutive cycle failures before the loop aborts. |
@@ -121,6 +127,7 @@ instead of `os.environ`.
 | `CHARON_SPEC_INTERVAL` | `300` | Seconds between specialization refreshes. |
 | `CHARON_AUTONOMOUS` | unset | `1/true/on` forces autonomous mode on; `0/false/off` forces it off; otherwise the config file decides. |
 | `CHARON_SKIP_APPROVAL` | `0` | `1/true/yes` disables all tool approval checks. |
+| `CHARON_RESEARCH_SOURCE_APPROVAL` | unset (`auto`) | `auto` allows read-only source retrieval for research operations without prompting; `ask` requires approval. Mutating and dangerous actions remain gated. |
 | `CHARON_BROWSER_HEADLESS` | `1` | Legacy, inverted: `0` shows the browser; anything else hides it. In `browser_settings` resolution the empty string means "no opinion". |
 | `CHARON_X_PROFILE_DIR` | unset | Chromium profile dir override for the X tool (default `<state-dir>/browser/x`). |
 | `CHARON_SEARXNG_URL` | unset | Base URL of a self-hosted SearXNG instance for web search. |

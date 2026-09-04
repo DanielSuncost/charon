@@ -3,6 +3,11 @@
 
 Usage:
     python scripts/charon_chat.py [--provider anthropic|openai|local] [--model MODEL_ID]
+    python scripts/charon_chat.py -q "question" [--max-steps N] [--no-approval] [--profile gaia]
+
+With -q/--query, runs one autonomous multi-step turn and prints the final
+assistant text to stdout (tool activity goes to stderr). This is the entry
+point benchmark harnesses drive.
 
 Environment variables:
     ANTHROPIC_API_KEY    - API key for Anthropic
@@ -13,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -39,6 +45,10 @@ DEFAULT_MODELS = {
     'openai': ('gpt-4o', 128000),
     'local': ('qwen3-30b-a3b', 65536),
 }
+
+# Providers resolved through provider_bridge (onboarding config + OAuth)
+# rather than get_provider(). 'auto' means the configured default route.
+BRIDGE_PROVIDERS = {'auto', 'codex', 'openai-codex', 'claude-code'}
 
 
 async def chat_loop(engine: ConversationEngine):
@@ -135,10 +145,47 @@ async def chat_loop(engine: ConversationEngine):
         print()
 
 
+async def one_shot(engine: ConversationEngine, query: str) -> int:
+    """Run one autonomous multi-step turn.
+
+    Assistant text goes to stdout; tool activity and errors go to stderr so a
+    harness can parse the reply from stdout alone.
+    """
+    saw_error = False
+    text_parts: list[str] = []
+
+    async for event in engine.submit(query):
+        if event.type == 'text_delta':
+            text = event.data.get('text', '')
+            text_parts.append(text)
+            print(text, end='', flush=True)
+        elif event.type == 'tool_call':
+            name = event.data.get('tool_name', '')
+            args = event.data.get('arguments', {})
+            print(f'[tool] {name} {str(args)[:200]}', file=sys.stderr, flush=True)
+        elif event.type == 'tool_execution_end':
+            if event.data.get('is_error'):
+                first_line = event.data.get('content', '').splitlines()[:1]
+                print(f'[tool-error] {first_line[0] if first_line else ""}', file=sys.stderr, flush=True)
+        elif event.type == 'turn_end':
+            # Separate turns so a marker line stays on its own line
+            if text_parts and not text_parts[-1].endswith('\n'):
+                text_parts.append('\n')
+                print(flush=True)
+        elif event.type == 'error':
+            saw_error = True
+            print(f'[error] {event.data.get("error", "unknown error")}', file=sys.stderr, flush=True)
+
+    if text_parts and not text_parts[-1].endswith('\n'):
+        print(flush=True)
+    return 1 if (saw_error and not ''.join(text_parts).strip()) else 0
+
+
 def main():
     parser = argparse.ArgumentParser(description='Charon interactive chat')
     parser.add_argument('--provider', default='anthropic',
-                        help='LLM provider: anthropic, openai, local (default: anthropic)')
+                        help='LLM provider: anthropic, openai, local, auto (configured default '
+                             'route incl. OAuth), codex, claude-code (default: anthropic)')
     parser.add_argument('--model', default=None,
                         help='Model ID (default depends on provider)')
     parser.add_argument('--cwd', default='.',
@@ -147,33 +194,87 @@ def main():
                         help='Context window size (default depends on model)')
     parser.add_argument('--max-tokens', type=int, default=32768,
                         help='Max output tokens per response (default: 32768)')
+    parser.add_argument('-q', '--query', default=None,
+                        help='One-shot mode: run this query autonomously, print the reply, exit')
+    parser.add_argument('--max-steps', type=int, default=None,
+                        help='One-shot mode: max reasoning turns (default: engine default of 50)')
+    parser.add_argument('--no-approval', action='store_true',
+                        help='Skip all tool approval gates (sets CHARON_SKIP_APPROVAL=1)')
+    parser.add_argument('--profile', default=None,
+                        help='Benchmark system-prompt profile (e.g. gaia)')
     args = parser.parse_args()
 
     provider_name = args.provider
-    model_defaults = DEFAULT_MODELS.get(provider_name, ('gpt-4o', 128000))
-    model_id = args.model or model_defaults[0]
-    context_window = args.context_window or model_defaults[1]
 
-    model = ModelInfo(
-        provider=provider_name,
-        model_id=model_id,
-        context_window=context_window,
-        supports_thinking=(provider_name == 'anthropic'),
-    )
+    if provider_name in BRIDGE_PROVIDERS:
+        # Route through provider_bridge: honors onboarding config + OAuth
+        # credentials (codex, claude-code). 'auto' uses the configured default.
+        from charon.infra import config as charon_config
+        from charon.providers.provider_bridge import ProviderRouteError, create_provider_and_model
 
-    try:
-        provider = get_provider(provider_name)
-    except ValueError as e:
-        print(f'{RED}Error: {e}{RESET}')
-        sys.exit(1)
+        state = charon_config.state_dir() or (ROOT / '.charon_state')
+        route = None
+        if provider_name != 'auto':
+            if not args.model:
+                print(f'{RED}Error: --provider {provider_name} requires --model{RESET}', file=sys.stderr)
+                sys.exit(2)
+            route = {'provider': provider_name, 'model_id': args.model}
+            if args.context_window:
+                route['context_window'] = args.context_window
+        try:
+            provider, model, ready = create_provider_and_model(state, route_override=route)
+        except ProviderRouteError as e:
+            print(f'{RED}Error: {e}{RESET}', file=sys.stderr)
+            sys.exit(2)
+        if not ready:
+            print(f'{YELLOW}Warning: provider not fully configured; using local fallback{RESET}', file=sys.stderr)
+    else:
+        model_defaults = DEFAULT_MODELS.get(provider_name, ('gpt-4o', 128000))
+        model_id = args.model or model_defaults[0]
+        context_window = args.context_window or model_defaults[1]
+
+        model = ModelInfo(
+            provider=provider_name,
+            model_id=model_id,
+            context_window=context_window,
+            supports_thinking=(provider_name == 'anthropic'),
+        )
+
+        try:
+            provider = get_provider(provider_name)
+        except ValueError as e:
+            print(f'{RED}Error: {e}{RESET}')
+            sys.exit(1)
+
+    if args.no_approval:
+        os.environ['CHARON_SKIP_APPROVAL'] = '1'
 
     cwd = Path(args.cwd).resolve()
+
+    system_prompt = ''
+    if args.profile:
+        from charon.evaluation.benchmark_profile import benchmark_system_prompt
+        try:
+            system_prompt = benchmark_system_prompt(args.profile, str(cwd))
+        except ValueError as e:
+            print(f'{RED}Error: {e}{RESET}', file=sys.stderr)
+            sys.exit(2)
+
+    engine_kwargs = {}
+    if args.max_steps:
+        engine_kwargs['max_turns'] = args.max_steps
+
     engine = ConversationEngine(
         provider=provider,
         model=model,
         project_root=cwd,
         max_tokens=args.max_tokens,
+        system_prompt=system_prompt,
+        **engine_kwargs,
     )
+
+    if args.query is not None:
+        sys.exit(asyncio.run(one_shot(engine, args.query)))
 
     asyncio.run(chat_loop(engine))
 

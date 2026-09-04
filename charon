@@ -19,6 +19,7 @@ while [ -L "$SOURCE" ]; do
   [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 CHARON_ROOT="$(cd "$(dirname "$SOURCE")" && pwd)"
+RUST_TUI_DIR="${CHARON_ROOT}/crates/charon-tui"
 RUST_TUI_MANIFEST="${CHARON_ROOT}/crates/charon-tui/Cargo.toml"
 RUST_TUI_BIN="${CHARON_ROOT}/crates/charon-tui/target/release/charon"
 
@@ -61,6 +62,7 @@ case "${1:-}" in
     echo "  F1  Chat view"
     echo "  F2  Dashboard"
     echo "  F3  Session Grid"
+    echo "  F4  Multi-agent graph"
     exit 0
     ;;
 esac
@@ -127,9 +129,18 @@ if ! python3 -c "import httpx" 2>/dev/null; then
   exit 1
 fi
 
-# Build Rust TUI if needed
+# Build the Rust TUI when it is missing or older than its inputs.
+RUST_TUI_NEEDS_BUILD=0
 if [ ! -x "${RUST_TUI_BIN}" ]; then
-  echo "Building Rust TUI..."
+  RUST_TUI_NEEDS_BUILD=1
+elif [ "${RUST_TUI_MANIFEST}" -nt "${RUST_TUI_BIN}" ] \
+  || [ "${RUST_TUI_DIR}/Cargo.lock" -nt "${RUST_TUI_BIN}" ] \
+  || find "${RUST_TUI_DIR}/src" -type f -newer "${RUST_TUI_BIN}" -print -quit | grep -q .; then
+  RUST_TUI_NEEDS_BUILD=1
+fi
+
+if [ "${RUST_TUI_NEEDS_BUILD}" -eq 1 ]; then
+  echo "Building updated Rust TUI..."
   cargo build --release --manifest-path "${RUST_TUI_MANIFEST}"
 fi
 
