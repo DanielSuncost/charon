@@ -1429,6 +1429,28 @@ except Exception as _e:
     _HAS_FLEET = False
     _record_tool_import_failure('Fleet', _e)
 
+# Overseer tools — optional, only loads if charon.workspace + the tool contract are available
+try:
+    from charon.tools.overseer_tool import (
+        OVERSEER_TOOL_DEFS as _OVERSEER_DEFS,
+        OVERSEER_TOOL_EXECUTORS as _OVERSEER_EXECUTORS,
+    )
+    _HAS_OVERSEER = True
+except Exception as _e:
+    _HAS_OVERSEER = False
+    _record_tool_import_failure('Overseer', _e)
+
+# System map skill (skills/system-map) as a tool — optional, only loads if charon.workspace is available
+try:
+    from charon.tools.system_map_tool import (
+        SYSTEM_MAP_TOOL_DEFS as _SYSTEM_MAP_DEFS,
+        SYSTEM_MAP_TOOL_EXECUTORS as _SYSTEM_MAP_EXECUTORS,
+    )
+    _HAS_SYSTEM_MAP = True
+except Exception as _e:
+    _HAS_SYSTEM_MAP = False
+    _record_tool_import_failure('SystemMap', _e)
+
 ALL_TOOL_DEFS = [
     READ_TOOL_DEF, BASH_TOOL_DEF, EDIT_TOOL_DEF, WRITE_TOOL_DEF, TOOL_CATALOG_DEF,
     RUN_PROCESS_TOOL_DEF, PROCESS_STATUS_TOOL_DEF, PROCESS_LOGS_TOOL_DEF, STOP_PROCESS_TOOL_DEF,
@@ -1438,7 +1460,7 @@ ALL_TOOL_DEFS = [
     SEARCH_TOOL_DEF, WEB_TOOL_DEF, PAPER_TOOL_DEF, SOURCE_DISCOVERY_TOOL_DEF, RESEARCH_TOOL_DEF, X_TOOL_DEF,
     CRON_TOOL_DEF, SKILLS_TOOL_DEF, EXECUTE_CODE_TOOL_DEF, CLARIFY_TOOL_DEF,
     PYKERNEL_TOOL_DEF, REFINE_TOOL_DEF,
-] + ([BROWSER_TOOL_DEF] if _HAS_BROWSER else []) + ([RECALL_TOOL_DEF] if _HAS_RECALL else []) + ([TIMELINE_TOOL_DEF] if _HAS_TIMELINE else []) + (_FLEET_DEFS if _HAS_FLEET else [])
+] + ([BROWSER_TOOL_DEF] if _HAS_BROWSER else []) + ([RECALL_TOOL_DEF] if _HAS_RECALL else []) + ([TIMELINE_TOOL_DEF] if _HAS_TIMELINE else []) + (_FLEET_DEFS if _HAS_FLEET else []) + (_OVERSEER_DEFS if _HAS_OVERSEER else []) + (_SYSTEM_MAP_DEFS if _HAS_SYSTEM_MAP else [])
 
 TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
     'Read': execute_read,
@@ -1473,6 +1495,8 @@ TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
     **(({'Recall': execute_recall} if _HAS_RECALL else {})),
     **(({'Timeline': execute_timeline} if _HAS_TIMELINE else {})),
     **(({'FleetStatus': execute_fleet_status, 'FleetSend': execute_fleet_send, 'FleetHistory': execute_fleet_history, 'FleetOnboard': execute_fleet_onboard} if _HAS_FLEET else {})),
+    **((_OVERSEER_EXECUTORS if _HAS_OVERSEER else {})),
+    **((_SYSTEM_MAP_EXECUTORS if _HAS_SYSTEM_MAP else {})),
 }
 
 

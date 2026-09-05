@@ -789,6 +789,65 @@ def _update_goal_context_from_task(task: dict, state_dir: Path, *, summary: str,
     )
 
 
+def _handle_overseer_cycle_task(task: dict, state_dir: Path, trace_file: Path | None = None) -> tuple[bool, dict]:
+    """`overseer_cycle`: build a digest of what changed in a workspace and deliver it to the
+    overseer (an external session via a transport, or a native Charon agent via an agent_task).
+    A held cycle (nothing new, overseer busy, cap reached) is a success, not a failure — the
+    task recurs via `interval_minutes` and the events wait for the next attempt."""
+    from charon.workspace import cycle as CYCLE
+    from charon.workspace.store import WorkspaceStore
+
+    log_file = state_dir / 'run.log'
+    root = Path(str(task.get('workspace_root') or ''))
+    if not str(task.get('workspace_root') or '') or not root.exists():
+        return False, {'status': 'task_failed', 'error': f"overseer_cycle: workspace_root missing or absent: {task.get('workspace_root')}"}
+    ws_id = None
+    try:
+        ws_id = json.loads((root / 'workspace.json').read_text()).get('id')
+    except Exception:
+        ws_id = None
+    if not ws_id:
+        return False, {'status': 'task_failed', 'error': f'overseer_cycle: no workspace.json under {root}'}
+    replica_id = str(task.get('replica_id') or 'replica.charon.loop')
+    try:
+        store = WorkspaceStore.open(root, workspace_id=ws_id, replica_id=replica_id)
+    except Exception as e:
+        return False, {'status': 'task_failed', 'error': f'overseer_cycle: cannot open workspace: {e}'}
+
+    delivery = task.get('delivery') or {}
+    kind = str(delivery.get('kind') or 'agent')
+    transport = CYCLE.build_transport(task.get('transport'))
+    if kind == 'session':
+        session_id = delivery.get('session_id')
+        if transport is None or not session_id:
+            return False, {'status': 'task_failed', 'error': 'overseer_cycle: session delivery needs a transport and delivery.session_id'}
+        deliver = CYCLE.deliver_to_session(transport, str(session_id))
+        overseer_session_id = str(session_id)
+    else:
+        owner = delivery.get('owner_agent_id') or task.get('owner_agent_id')
+        if not owner:
+            return False, {'status': 'task_failed', 'error': 'overseer_cycle: agent delivery needs delivery.owner_agent_id'}
+        # Its own correlation id: merge_queue_atomic/enqueue_unique_atomic dedupe by correlation_id,
+        # so sharing the cycle task's would drop the digest task on the next queue save.
+        deliver = CYCLE.deliver_to_agent(state_dir, str(owner), project=task.get('project'), correlation_id=None)
+        overseer_session_id = delivery.get('session_id')
+
+    result = CYCLE.run_cycle(store, deliver=deliver, transport=transport, cadence=task.get('cadence') or {},
+                             overseer_session_id=overseer_session_id, workspace_name=task.get('workspace_name'),
+                             force=bool(task.get('force')))
+    if result.get('delivered'):
+        summary = f"cycle {result['cycle']} delivered ({len(result.get('lines') or [])} events)"
+        log_event(log_file, 'overseer_cycle_delivered', task_id=task.get('id'), cycle=result['cycle'],
+                  events=len(result.get('lines') or []), delivery=kind, workspace_root=str(root))
+        trace_event(trace_file, 'overseer_cycle_delivered', task_id=task.get('id'), cycle=result['cycle'])
+    else:
+        summary = f"held: {result.get('held')}"
+        log_event(log_file, 'overseer_cycle_held', task_id=task.get('id'), reason=result.get('held'),
+                  pending=len(result.get('lines') or []), delivery=kind, workspace_root=str(root))
+        trace_event(trace_file, 'overseer_cycle_held', task_id=task.get('id'), reason=result.get('held'))
+    return True, {'status': 'task_succeeded', 'summary': summary, 'cycle': result.get('cycle'), 'held': result.get('held')}
+
+
 def process_task(task: dict, state_dir: Path, queue: list[dict], trace_file: Path | None = None):
     task_type = task.get('task_type')
     trace_event(trace_file, 'process_task_start', task_id=task.get('id'), task_type=task_type)
@@ -862,6 +921,10 @@ def process_task(task: dict, state_dir: Path, queue: list[dict], trace_file: Pat
             'attempt_id': result.get('attempt_id'),
             'tool_result': result.get('tool_result'),
         }
+
+    if task_type == 'overseer_cycle':
+        trace_event(trace_file, 'process_task_overseer_cycle', task_id=task.get('id'))
+        return _handle_overseer_cycle_task(task, state_dir, trace_file)
 
     if task_type == 'boundary_proposal':
         trace_event(trace_file, 'process_task_boundary_proposal', task_id=task.get('id'))
@@ -1149,6 +1212,10 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
                         'not_before': next_run.isoformat(),
                         'correlation_id': task.get('correlation_id'),
                     }
+                    # Task types with their own payload (overseer_cycle) keep it across recurrences
+                    for key in ('workspace_root', 'workspace_name', 'delivery', 'cadence', 'transport', 'replica_id'):
+                        if key in task:
+                            recurring_copy[key] = task[key]
                     queue.append(recurring_copy)
                     save_queue(queue_file, queue)
                     log_event(log_file, 'recurring_task_enqueued',

@@ -154,6 +154,56 @@ def enqueue_agent_task(
     return _enqueue_task(state_dir, task)
 
 
+def enqueue_overseer_cycle(
+    state_dir: Path,
+    *,
+    workspace_root: str | Path,
+    delivery: dict,
+    interval_minutes: float | None = 10,
+    cadence: dict | None = None,
+    transport: dict | None = None,
+    workspace_name: str | None = None,
+    replica_id: str | None = None,
+    project: str | None = None,
+    correlation_id: str | None = None,
+) -> dict:
+    """Schedule an overseer cycle (see charon.workspace.cycle). `delivery` is
+    {'kind': 'agent', 'owner_agent_id': ...} for a native overseer agent or
+    {'kind': 'session', 'session_id': ...} to type the digest into an external
+    overseer session through `transport` ({'kind': 'auto'|'tmux'|'charond', ...}).
+    With `interval_minutes` the loop re-enqueues it after every run."""
+    now = _utc_now_iso()
+    delivery = dict(delivery or {})
+    task_id = f"task-{uuid.uuid4().hex[:10]}"
+    task = {
+        'id': task_id,
+        'title': f"overseer cycle:{Path(str(workspace_root)).name}",
+        'instruction': 'Run an overseer cycle (digest → overseer).',
+        'status': 'pending',
+        'task_type': 'overseer_cycle',
+        'owner_agent_id': str(delivery.get('owner_agent_id') or 'overseer'),
+        'project': str(project or '').strip() or None,
+        'priority': 'normal',
+        'correlation_id': str(correlation_id) if correlation_id else task_id,
+        'created_at': now,
+        'updated_at': now,
+        'attempt_count': 0,
+        'max_attempts': 3,
+        'workspace_root': str(workspace_root),
+        'delivery': delivery,
+        'cadence': dict(cadence or {'max_cycles_per_hour': 12}),
+    }
+    if workspace_name:
+        task['workspace_name'] = str(workspace_name)
+    if transport:
+        task['transport'] = dict(transport)
+    if replica_id:
+        task['replica_id'] = str(replica_id)
+    if interval_minutes:
+        task['interval_minutes'] = float(interval_minutes)
+    return _enqueue_task(state_dir, task)
+
+
 def enqueue_agent_message_task(
     state_dir: Path,
     *,
