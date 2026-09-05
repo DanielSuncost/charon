@@ -1,0 +1,1833 @@
+{
+  "schema_version": "1.0",
+  "exported_at": "2026-09-03T21:31:18.000Z",
+  "exported_by_replica_id": "replica.acheron.fixture",
+  "workspace": {
+    "record_type": "workspace",
+    "id": "workspace.acheron.e2e-workspace-0001",
+    "workspace_id": "workspace.acheron.e2e-workspace-0001",
+    "revision": 1,
+    "created_at": "2026-09-03T21:30:01.000Z",
+    "updated_at": "2026-09-03T21:30:01.000Z",
+    "labels": {},
+    "provenance": [],
+    "extensions": {
+      "acheron": {
+        "fencing_counters": {
+          "test.sh": 1
+        }
+      }
+    },
+    "slug": "e2e",
+    "title": "E2E",
+    "state": "active",
+    "roots": [
+      {
+        "kind": "directory",
+        "locator": "/private/tmp/claude-501/ach-e2e/proj"
+      }
+    ],
+    "home_replica_id": "replica.acheron.fixture",
+    "default_policy_ids": []
+  },
+  "entities": [],
+  "relations": [],
+  "observations": [],
+  "knowledge_items": [
+    {
+      "record_type": "knowledge_item",
+      "id": "knowledge.decision.fixture1",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:31:15.000Z",
+      "updated_at": "2026-09-03T21:31:15.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "kind": "decision",
+      "title": "Verify with the command verifier, not the builder's word",
+      "body": "Builder output is canned; evidence must come from running ./test.sh.",
+      "status": "proposed",
+      "confidence": 0.8,
+      "review": {
+        "required": true,
+        "status": "pending"
+      },
+      "scopes": [],
+      "evidence_artifact_ids": [],
+      "tags": []
+    }
+  ],
+  "work_items": [
+    {
+      "record_type": "work_item",
+      "id": "work.green-test-script.fixture",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:17.000Z",
+      "updated_at": "2026-09-03T21:30:17.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "kind": "objective",
+      "title": "Green test script",
+      "status": "backlog",
+      "priority": "high",
+      "owner": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "acceptance_criteria": [],
+      "dependency_ids": [],
+      "blocked_by_ids": [],
+      "assignees": [],
+      "run_ids": [],
+      "scopes": [],
+      "description": ""
+    },
+    {
+      "record_type": "work_item",
+      "id": "work.run-test-sh.fixture",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 6,
+      "created_at": "2026-09-03T21:30:19.000Z",
+      "updated_at": "2026-09-03T21:31:10.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {
+        "owner_role": "Builder"
+      },
+      "kind": "task",
+      "title": "Run ./test.sh in the project and report its output",
+      "parent_id": "work.green-test-script.fixture",
+      "priority": "normal",
+      "owner": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "scopes": [
+        {
+          "kind": "path",
+          "selector": "test.sh",
+          "access": "write"
+        }
+      ],
+      "acceptance_criteria": [
+        {
+          "id": "criterion.test-sh-exits-0",
+          "statement": "./test.sh exits 0",
+          "required": true,
+          "verifier": {
+            "kind": "command",
+            "spec": {
+              "command": "./test.sh"
+            }
+          },
+          "status": "passed",
+          "evidence_artifact_ids": [
+            "artifact.sha256:a9d8ef78f77e721bc12869aef55ffb1340af8a782d195fccae05161f1a1c6fd4"
+          ]
+        }
+      ],
+      "status": "done",
+      "dependency_ids": [],
+      "blocked_by_ids": [],
+      "assignees": [],
+      "run_ids": [],
+      "description": ""
+    }
+  ],
+  "runs": [
+    {
+      "record_type": "run",
+      "id": "run.fixture1",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:24.000Z",
+      "updated_at": "2026-09-03T21:30:24.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "work_item_ids": [
+        "work.run-test-sh.fixture"
+      ],
+      "task_ids": [],
+      "initiated_by": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "workflow_id": "workflow.acheron.dispatch",
+      "workflow_revision": "1",
+      "status": "running",
+      "started_at": "2026-09-03T21:30:24.000Z",
+      "event_cursors": {
+        "replica.acheron.fixture": 8
+      },
+      "metrics": {}
+    }
+  ],
+  "tasks": [
+    {
+      "record_type": "task",
+      "id": "task.fixture1",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 7,
+      "created_at": "2026-09-03T21:30:28.000Z",
+      "updated_at": "2026-09-03T21:30:57.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {
+        "prompt_artifact_id": "artifact.sha256:e6d7d52ad01bdd2d61740cc858bd0df60b77bcf2cc608ca8089ce80002065c4a"
+      },
+      "work_item_id": "work.run-test-sh.fixture",
+      "run_id": "run.fixture1",
+      "title": "Run ./test.sh → Builder",
+      "instruction": "[overseer → task.fixture1 · Run ./test.sh]\nRun ./test.sh in the project and report its output.",
+      "owner": {
+        "kind": "agent",
+        "id": "agent.builder"
+      },
+      "scopes": [
+        {
+          "kind": "path",
+          "selector": "test.sh",
+          "access": "write"
+        }
+      ],
+      "session_id": "session.builder",
+      "status": "succeeded",
+      "attempt": 1,
+      "max_attempts": 3,
+      "dependency_task_ids": [],
+      "lease_ids": [
+        "lease.17f48d01-63bb-4345-9fbc-f00c49957be2"
+      ],
+      "evidence_artifact_ids": [
+        "artifact.sha256:a9d8ef78f77e721bc12869aef55ffb1340af8a782d195fccae05161f1a1c6fd4"
+      ],
+      "started_at": "2026-09-03T21:30:28.000Z",
+      "idempotency_key": "task.fixture1",
+      "context_manifest_id": "manifest.fixture1",
+      "result_summary": "Builder ran ./test.sh: 12 passed",
+      "completed_at": "2026-09-03T21:30:56.000Z"
+    }
+  ],
+  "leases": [
+    {
+      "record_type": "lease",
+      "id": "lease.17f48d01-63bb-4345-9fbc-f00c49957be2",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 2,
+      "created_at": "2026-09-03T21:30:38.000Z",
+      "updated_at": "2026-09-03T21:31:00.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "resource": {
+        "kind": "path",
+        "selector": "test.sh",
+        "access": "write",
+        "recursive": true
+      },
+      "mode": "exclusive",
+      "owner_task_id": "task.fixture1",
+      "fencing_token": 1,
+      "status": "released",
+      "acquired_at": "2026-09-03T21:30:37.000Z",
+      "heartbeat_at": "2026-09-03T21:30:37.000Z",
+      "expires_at": "2026-09-03T22:00:37.000Z",
+      "owner_session_id": "session.builder",
+      "released_at": "2026-09-03T21:30:59.000Z",
+      "release_reason": "checkpoint"
+    }
+  ],
+  "sessions": [
+    {
+      "record_type": "session",
+      "id": "session.ov",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:09.000Z",
+      "updated_at": "2026-09-03T21:30:09.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {
+        "callsign": "Overseer",
+        "title": "Overseer",
+        "agent": "claude",
+        "role": "overseer"
+      },
+      "kind": "coordinator",
+      "status": "idle",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.ov"
+      },
+      "host_ref": "local",
+      "task_ids": [],
+      "started_at": "2026-09-03T21:30:08.000Z",
+      "event_cursors": {},
+      "replica_id": "replica.acheron.fixture"
+    },
+    {
+      "record_type": "session",
+      "id": "session.builder",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:12.000Z",
+      "updated_at": "2026-09-03T21:30:12.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {
+        "callsign": "Builder",
+        "title": "Builder",
+        "agent": "claude",
+        "role": "Builder"
+      },
+      "kind": "worker",
+      "status": "idle",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.builder"
+      },
+      "host_ref": "local",
+      "task_ids": [],
+      "started_at": "2026-09-03T21:30:11.000Z",
+      "event_cursors": {},
+      "replica_id": "replica.acheron.fixture"
+    },
+    {
+      "record_type": "session",
+      "id": "session.tester",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:15.000Z",
+      "updated_at": "2026-09-03T21:30:15.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {
+        "callsign": "Tester",
+        "title": "Tester",
+        "agent": "claude",
+        "role": "Tester"
+      },
+      "kind": "worker",
+      "status": "idle",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.tester"
+      },
+      "host_ref": "local",
+      "task_ids": [],
+      "started_at": "2026-09-03T21:30:14.000Z",
+      "event_cursors": {},
+      "replica_id": "replica.acheron.fixture"
+    }
+  ],
+  "artifacts": [
+    {
+      "record_type": "artifact",
+      "id": "artifact.sha256:e6d7d52ad01bdd2d61740cc858bd0df60b77bcf2cc608ca8089ce80002065c4a",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:26.000Z",
+      "updated_at": "2026-09-03T21:30:26.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "kind": "context",
+      "title": "prompt task.fixture1",
+      "media_type": "text/plain",
+      "locator": "workspace/artifacts/sha256/e6d7d52ad01bdd2d61740cc858bd0df60b77bcf2cc608ca8089ce80002065c4a",
+      "digest": {
+        "algorithm": "sha256",
+        "value": "e6d7d52ad01bdd2d61740cc858bd0df60b77bcf2cc608ca8089ce80002065c4a"
+      },
+      "size_bytes": 97,
+      "immutable": true,
+      "status": "available",
+      "produced_by": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "metadata": {},
+      "session_id": "session.builder"
+    },
+    {
+      "record_type": "artifact",
+      "id": "artifact.sha256:a654ae2471494b9f056d20c4d641186938d9f7abafaa375c0bc0fe347a5ae2c4",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:51.000Z",
+      "updated_at": "2026-09-03T21:30:51.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "kind": "log",
+      "title": "Builder last_message",
+      "media_type": "text/plain",
+      "locator": "workspace/artifacts/sha256/a654ae2471494b9f056d20c4d641186938d9f7abafaa375c0bc0fe347a5ae2c4",
+      "digest": {
+        "algorithm": "sha256",
+        "value": "a654ae2471494b9f056d20c4d641186938d9f7abafaa375c0bc0fe347a5ae2c4"
+      },
+      "size_bytes": 76,
+      "immutable": true,
+      "status": "available",
+      "produced_by": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "metadata": {},
+      "session_id": "session.builder"
+    },
+    {
+      "record_type": "artifact",
+      "id": "artifact.sha256:a9d8ef78f77e721bc12869aef55ffb1340af8a782d195fccae05161f1a1c6fd4",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:31:02.000Z",
+      "updated_at": "2026-09-03T21:31:02.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "kind": "test_result",
+      "title": "evidence criterion.test-sh-exits-0 (passed)",
+      "media_type": "text/plain",
+      "locator": "workspace/artifacts/sha256/a9d8ef78f77e721bc12869aef55ffb1340af8a782d195fccae05161f1a1c6fd4",
+      "digest": {
+        "algorithm": "sha256",
+        "value": "a9d8ef78f77e721bc12869aef55ffb1340af8a782d195fccae05161f1a1c6fd4"
+      },
+      "size_bytes": 55,
+      "immutable": true,
+      "status": "available",
+      "produced_by": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "metadata": {},
+      "task_id": "task.fixture1"
+    }
+  ],
+  "skills": [],
+  "policies": [],
+  "context_manifests": [
+    {
+      "record_type": "context_manifest",
+      "id": "manifest.fixture1",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:31.000Z",
+      "updated_at": "2026-09-03T21:30:31.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "task_id": "task.fixture1",
+      "compiler": {
+        "name": "acheron-overseer",
+        "version": "0.1.0"
+      },
+      "workspace_revision": 1,
+      "event_cursors": {},
+      "built_at": "2026-09-03T21:30:30.000Z",
+      "query": {
+        "work_item_id": "work.run-test-sh.fixture",
+        "session_id": "session.builder"
+      },
+      "budget": {
+        "unit": "byte",
+        "limit": 65536,
+        "used": 94
+      },
+      "policy_ids": [],
+      "entries": [
+        {
+          "record_ref": {
+            "record_type": "artifact",
+            "id": "artifact.sha256:e6d7d52ad01bdd2d61740cc858bd0df60b77bcf2cc608ca8089ce80002065c4a"
+          },
+          "section": "prompt",
+          "order": 0,
+          "score": 1,
+          "score_components": {},
+          "reasons": [
+            "dispatched prompt"
+          ],
+          "representation": "inline",
+          "digest": {
+            "algorithm": "sha256",
+            "value": "e6d7d52ad01bdd2d61740cc858bd0df60b77bcf2cc608ca8089ce80002065c4a"
+          },
+          "units": 94
+        }
+      ],
+      "exclusions": [],
+      "digest": {
+        "algorithm": "sha256",
+        "value": "e6d7d52ad01bdd2d61740cc858bd0df60b77bcf2cc608ca8089ce80002065c4a"
+      }
+    }
+  ],
+  "replicas": [
+    {
+      "record_type": "replica",
+      "id": "replica.acheron.fixture",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:03.000Z",
+      "updated_at": "2026-09-03T21:30:03.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "name": "Acheron local replica",
+      "kind": "local",
+      "trust": "trusted",
+      "identity": "acheron:replica.acheron.fixture",
+      "cursors": {},
+      "capabilities": [
+        "event.append",
+        "artifact.read",
+        "artifact.write",
+        "task.dispatch"
+      ],
+      "policy_ids": []
+    }
+  ],
+  "conflicts": [],
+  "events": [
+    {
+      "record_type": "event",
+      "id": "evt.fcea9a3d-7abb-4e1d-ab2d-148d05443f33",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:02.000Z",
+      "updated_at": "2026-09-03T21:30:02.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 1,
+      "logical_time": 1,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:30:02.000Z",
+      "actor": {
+        "kind": "system",
+        "id": "system.acheron"
+      },
+      "subject_refs": [
+        {
+          "record_type": "workspace",
+          "id": "workspace.acheron.e2e-workspace-0001",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "workspace",
+        "slug": "e2e",
+        "title": "E2E"
+      },
+      "previous_digest": null,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "202224cc7cf2e4fb25f32f3a0625fcc7299d1f8b68e3be8032d9326cfd4bc4c7"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.bc3ce749-eb8e-498e-b88b-28aec5b9418c",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:04.000Z",
+      "updated_at": "2026-09-03T21:30:04.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 2,
+      "logical_time": 2,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:30:04.000Z",
+      "actor": {
+        "kind": "system",
+        "id": "system.acheron"
+      },
+      "subject_refs": [
+        {
+          "record_type": "replica",
+          "id": "replica.acheron.fixture",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "replica",
+        "kind": "local",
+        "record_digest": "a74ab67b490a9c3be2a81393d34939e5e063863e18ada8671e140d127f4d0f0d"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "202224cc7cf2e4fb25f32f3a0625fcc7299d1f8b68e3be8032d9326cfd4bc4c7"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "37b491b85bbb194238a6eaa2eb85d00491037291fd93a5d5b3ef7d596e9eb62b"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.623beb40-68ce-4ce9-a989-4b842f235725",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:10.000Z",
+      "updated_at": "2026-09-03T21:30:10.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 3,
+      "logical_time": 3,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:30:10.000Z",
+      "actor": {
+        "kind": "system",
+        "id": "system.acheron"
+      },
+      "subject_refs": [
+        {
+          "record_type": "session",
+          "id": "session.ov",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "session",
+        "kind": "coordinator",
+        "status": "idle",
+        "record_digest": "e005732aad9b11913ee113fdba8cbf8e76741c4f20c524a940d032c8eb7be71b"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "37b491b85bbb194238a6eaa2eb85d00491037291fd93a5d5b3ef7d596e9eb62b"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "d5d74890f32e5a677836246847cdd6d1beecf6024a4bc83510b3825fec6f3bd3"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.a76b5a93-ecfb-4d60-9913-0eb1f797a6f0",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:13.000Z",
+      "updated_at": "2026-09-03T21:30:13.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 4,
+      "logical_time": 4,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:30:13.000Z",
+      "actor": {
+        "kind": "system",
+        "id": "system.acheron"
+      },
+      "subject_refs": [
+        {
+          "record_type": "session",
+          "id": "session.builder",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "session",
+        "kind": "worker",
+        "status": "idle",
+        "record_digest": "df77b94c608159c572afb20342007a3a87d3a993cb3a849da9f64beb6efb3652"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "d5d74890f32e5a677836246847cdd6d1beecf6024a4bc83510b3825fec6f3bd3"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "3c1a1a0156f80e2d3a7f1bc556270e10be0b35c8b9832c8da8739502203f09de"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.68d549ad-2928-4985-bcb1-f33a7c903896",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:16.000Z",
+      "updated_at": "2026-09-03T21:30:16.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 5,
+      "logical_time": 5,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:30:16.000Z",
+      "actor": {
+        "kind": "system",
+        "id": "system.acheron"
+      },
+      "subject_refs": [
+        {
+          "record_type": "session",
+          "id": "session.tester",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "session",
+        "kind": "worker",
+        "status": "idle",
+        "record_digest": "3ad311609104678027d86f6117aca8f5f670e6265fadfe914b3816dc03fc06e2"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "3c1a1a0156f80e2d3a7f1bc556270e10be0b35c8b9832c8da8739502203f09de"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "95b308ad0ac2769335cad7aa798a5fd13dcc7dcbcb54837cd166cc85034f291b"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.833a5219-4e78-4eae-8691-0e58768625d0",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:18.000Z",
+      "updated_at": "2026-09-03T21:30:18.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 6,
+      "logical_time": 6,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:30:18.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "work_item",
+          "id": "work.green-test-script.fixture",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "work_item",
+        "kind": "objective",
+        "title": "Green test script",
+        "status": "backlog",
+        "record_digest": "eb945a7c3c1aa14675060ce53082c07f6fb72285e2b931d7c61835d28556628d"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "95b308ad0ac2769335cad7aa798a5fd13dcc7dcbcb54837cd166cc85034f291b"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "310767e6367d13a7103df799d1c45b7fa926de5ed59cf4b01449541ec0b2029f"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.95adb286-c1af-4eee-9894-1ca1561f4db3",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:20.000Z",
+      "updated_at": "2026-09-03T21:30:20.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 7,
+      "logical_time": 7,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:30:20.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "work_item",
+          "id": "work.run-test-sh.fixture",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "work_item",
+        "kind": "task",
+        "title": "Run ./test.sh in the project and report its output",
+        "status": "backlog",
+        "record_digest": "d88b9ea7884b08ff7f07c419dd8385bdf944139fed14a52e51378755917315cb"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "310767e6367d13a7103df799d1c45b7fa926de5ed59cf4b01449541ec0b2029f"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "51be406725f6c157d5ab77025bc7cc38e910b4abc7b1eb1e7147350b097a7185"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.43f1ff52-e7dc-4724-8db8-1884fa3ad072",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:23.000Z",
+      "updated_at": "2026-09-03T21:30:23.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 8,
+      "logical_time": 8,
+      "event_type": "record.transitioned",
+      "occurred_at": "2026-09-03T21:30:23.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "work_item",
+          "id": "work.run-test-sh.fixture",
+          "revision": 2
+        }
+      ],
+      "payload": {
+        "record_type": "work_item",
+        "from": "backlog",
+        "to": "ready",
+        "event": "ready",
+        "reason": null
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "51be406725f6c157d5ab77025bc7cc38e910b4abc7b1eb1e7147350b097a7185"
+      },
+      "base_revision": 1,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "f3a8109bb035de85b93e9fe7cb16df79aff13546e8516dedfa338e47bdd4c93d"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.2773809d-517d-4c0a-95e9-9b7c88b49b06",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:25.000Z",
+      "updated_at": "2026-09-03T21:30:25.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 9,
+      "logical_time": 9,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:30:25.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "run",
+          "id": "run.fixture1",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "run",
+        "status": "running",
+        "record_digest": "2a0b041361a80e639c0339fe02b004498cda934d49bf3edb15e81fd54d056ece"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "f3a8109bb035de85b93e9fe7cb16df79aff13546e8516dedfa338e47bdd4c93d"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "f0669660d4485faa8656fbdab1367ba0720b36e505852c962899e4e093107924"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.79fe1eae-5e4a-4e56-9ee2-11b51c64885a",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:27.000Z",
+      "updated_at": "2026-09-03T21:30:27.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 10,
+      "logical_time": 10,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:30:27.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "artifact",
+          "id": "artifact.sha256:e6d7d52ad01bdd2d61740cc858bd0df60b77bcf2cc608ca8089ce80002065c4a",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "artifact",
+        "kind": "context",
+        "title": "prompt task.fixture1",
+        "status": "available",
+        "session_id": "session.builder",
+        "record_digest": "4ecc7a82d691efba3a08c37286276c2ffd9e1b57746a3ade907b4aef7cb21386"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "f0669660d4485faa8656fbdab1367ba0720b36e505852c962899e4e093107924"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "fbc8075cf28f78c8825c58773e0840bec587a67cb43e020b485cbe5f68928fd6"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.d41b0d9c-f5af-4b4d-9d63-8c582550923c",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:29.000Z",
+      "updated_at": "2026-09-03T21:30:29.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 11,
+      "logical_time": 11,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:30:29.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "task",
+          "id": "task.fixture1",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "task",
+        "title": "Run ./test.sh → Builder",
+        "status": "claimed",
+        "work_item_id": "work.run-test-sh.fixture",
+        "session_id": "session.builder",
+        "record_digest": "703ec7eebe0359d9748bafc9b6eda2fe9778cfecbeab116f25e9dddec72e8f01"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "fbc8075cf28f78c8825c58773e0840bec587a67cb43e020b485cbe5f68928fd6"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "3a01b4e7602a6a3f76825f8e9f5d9c1996e1106672beef5372860c532e188c51"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.406c12bd-fc98-4e5b-b5b6-f8991a1db12c",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:32.000Z",
+      "updated_at": "2026-09-03T21:30:32.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 12,
+      "logical_time": 12,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:30:32.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "context_manifest",
+          "id": "manifest.fixture1",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "context_manifest",
+        "task_id": "task.fixture1",
+        "record_digest": "45c2d779f7eee43b58285265421cd65dcc198473d859388221b3a11996c1446b"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "3a01b4e7602a6a3f76825f8e9f5d9c1996e1106672beef5372860c532e188c51"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "a95db33edea04bc467189ad41d7d40f2619e01ae02eee201f732a7da701944e3"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.6f83e1b5-14d4-4a66-b6d2-29e618899a49",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:34.000Z",
+      "updated_at": "2026-09-03T21:30:34.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 13,
+      "logical_time": 13,
+      "event_type": "record.updated",
+      "occurred_at": "2026-09-03T21:30:34.000Z",
+      "actor": {
+        "kind": "system",
+        "id": "system.acheron"
+      },
+      "subject_refs": [
+        {
+          "record_type": "task",
+          "id": "task.fixture1",
+          "revision": 2
+        }
+      ],
+      "payload": {
+        "record_type": "task",
+        "changed": [
+          "context_manifest_id"
+        ]
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "a95db33edea04bc467189ad41d7d40f2619e01ae02eee201f732a7da701944e3"
+      },
+      "base_revision": 1,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "5ecd202ba0bd632a8a1489883471bd685d7bbfddbd887176914d4872ba8f1ece"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.24082105-e939-4d49-90c1-5632a367baea",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:39.000Z",
+      "updated_at": "2026-09-03T21:30:39.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 14,
+      "logical_time": 14,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:30:39.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "lease",
+          "id": "lease.17f48d01-63bb-4345-9fbc-f00c49957be2",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "lease",
+        "status": "active",
+        "mode": "exclusive",
+        "record_digest": "c0a0cbbedbee345ee9d1055be243aaf81e10789857986499ece15c1d64f6b965"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "5ecd202ba0bd632a8a1489883471bd685d7bbfddbd887176914d4872ba8f1ece"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "ee45001f990568b0ea07c966b20abbf0b320effd63c242a70d87b05c313046aa"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.8e41d063-89f9-44db-bd56-a3a6bb4f8604",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:41.000Z",
+      "updated_at": "2026-09-03T21:30:41.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 15,
+      "logical_time": 15,
+      "event_type": "record.updated",
+      "occurred_at": "2026-09-03T21:30:41.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "task",
+          "id": "task.fixture1",
+          "revision": 3
+        }
+      ],
+      "payload": {
+        "record_type": "task",
+        "changed": [
+          "lease_ids"
+        ]
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "ee45001f990568b0ea07c966b20abbf0b320effd63c242a70d87b05c313046aa"
+      },
+      "base_revision": 2,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "db96d78aef2304516e44c7cb83b0f4208131a575644a753bc0ef321cbb7d749f"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.25eb7c96-0549-4ccf-9bb7-00704e45faa1",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:43.000Z",
+      "updated_at": "2026-09-03T21:30:43.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 16,
+      "logical_time": 16,
+      "event_type": "record.updated",
+      "occurred_at": "2026-09-03T21:30:43.000Z",
+      "actor": {
+        "kind": "system",
+        "id": "system.acheron"
+      },
+      "subject_refs": [
+        {
+          "record_type": "task",
+          "id": "task.fixture1",
+          "revision": 4
+        }
+      ],
+      "payload": {
+        "record_type": "task",
+        "changed": [
+          "lease_ids"
+        ]
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "db96d78aef2304516e44c7cb83b0f4208131a575644a753bc0ef321cbb7d749f"
+      },
+      "base_revision": 3,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "e4d37388471eb5934941b28a083f99b2e806e5363f8b2cc7260885b923141a2f"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.ba7555c3-1b07-4a21-a93b-7ce74421f782",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:46.000Z",
+      "updated_at": "2026-09-03T21:30:46.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 17,
+      "logical_time": 17,
+      "event_type": "record.transitioned",
+      "occurred_at": "2026-09-03T21:30:46.000Z",
+      "actor": {
+        "kind": "system",
+        "id": "system.acheron"
+      },
+      "subject_refs": [
+        {
+          "record_type": "task",
+          "id": "task.fixture1",
+          "revision": 5
+        }
+      ],
+      "payload": {
+        "record_type": "task",
+        "from": "claimed",
+        "to": "running",
+        "event": "start",
+        "reason": null
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "e4d37388471eb5934941b28a083f99b2e806e5363f8b2cc7260885b923141a2f"
+      },
+      "base_revision": 4,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "1b170d5921b9af0325291ee400ddb9e882e14cfb41a0a0e4a348fc4385a0958a"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.a1164a58-f2df-42e2-b632-214da2ca8bb7",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:49.000Z",
+      "updated_at": "2026-09-03T21:30:49.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 18,
+      "logical_time": 18,
+      "event_type": "record.transitioned",
+      "occurred_at": "2026-09-03T21:30:49.000Z",
+      "actor": {
+        "kind": "system",
+        "id": "system.acheron"
+      },
+      "subject_refs": [
+        {
+          "record_type": "work_item",
+          "id": "work.run-test-sh.fixture",
+          "revision": 3
+        }
+      ],
+      "payload": {
+        "record_type": "work_item",
+        "from": "ready",
+        "to": "active",
+        "event": "start",
+        "reason": "dispatched task.fixture1"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "1b170d5921b9af0325291ee400ddb9e882e14cfb41a0a0e4a348fc4385a0958a"
+      },
+      "base_revision": 2,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "8b5e297cd39bbbc28710a8df3d24a2a1cf930ff7724c04aff744928176887812"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.747ab72f-7219-4810-9ae3-24c2efcaf154",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:50.000Z",
+      "updated_at": "2026-09-03T21:30:50.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 19,
+      "logical_time": 19,
+      "event_type": "agent_intervention",
+      "occurred_at": "2026-09-03T21:30:50.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "task",
+          "id": "task.fixture1"
+        },
+        {
+          "record_type": "session",
+          "id": "session.builder"
+        }
+      ],
+      "payload": {
+        "session_id": "session.builder",
+        "task_id": "task.fixture1",
+        "work_item_id": "work.run-test-sh.fixture",
+        "content_digest": "e6d7d52ad01bdd2d61740cc858bd0df60b77bcf2cc608ca8089ce80002065c4a",
+        "content_head": "[overseer → task.fixture1 · Run ./test.sh]\nRun ./test.sh in the project and report its output.",
+        "via": "pty",
+        "branch_label": "dispatch"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "8b5e297cd39bbbc28710a8df3d24a2a1cf930ff7724c04aff744928176887812"
+      },
+      "correlation_id": "session.builder",
+      "digest": {
+        "algorithm": "sha256",
+        "value": "690cb124249d95f740aaf57404510966049cbd42875afb6e2c0eb297b2b2baea"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.1e6345a3-6e1b-4a5f-9d10-e44b841a6304",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:52.000Z",
+      "updated_at": "2026-09-03T21:30:52.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 20,
+      "logical_time": 20,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:30:52.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "artifact",
+          "id": "artifact.sha256:a654ae2471494b9f056d20c4d641186938d9f7abafaa375c0bc0fe347a5ae2c4",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "artifact",
+        "kind": "log",
+        "title": "Builder last_message",
+        "status": "available",
+        "session_id": "session.builder",
+        "record_digest": "ae71750ba6d81aa15eb7fc473b00e1d8d511381d2a0a12695857707a526778f7"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "690cb124249d95f740aaf57404510966049cbd42875afb6e2c0eb297b2b2baea"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "17f942f0339af4e60d26c88271893e22022a5f2ba97f034213e86208655fdc5e"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.7a24fb61-d0c5-41ab-8680-28a0452ac9e3",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:55.000Z",
+      "updated_at": "2026-09-03T21:30:55.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 21,
+      "logical_time": 21,
+      "event_type": "record.updated",
+      "occurred_at": "2026-09-03T21:30:55.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "task",
+          "id": "task.fixture1",
+          "revision": 6
+        }
+      ],
+      "payload": {
+        "record_type": "task",
+        "changed": [
+          "result_summary",
+          "completed_at"
+        ]
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "17f942f0339af4e60d26c88271893e22022a5f2ba97f034213e86208655fdc5e"
+      },
+      "base_revision": 5,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "e4e26efafd5b3fde8c3b94dbf8f3827c948d24340e12a45b877a01c070a75e5f"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.8b1eb536-22ee-46d5-8835-cdfa65124656",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:30:58.000Z",
+      "updated_at": "2026-09-03T21:30:58.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 22,
+      "logical_time": 22,
+      "event_type": "record.transitioned",
+      "occurred_at": "2026-09-03T21:30:58.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "task",
+          "id": "task.fixture1",
+          "revision": 7
+        }
+      ],
+      "payload": {
+        "record_type": "task",
+        "from": "running",
+        "to": "succeeded",
+        "event": "succeed",
+        "reason": "Builder ran ./test.sh: 12 passed"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "e4e26efafd5b3fde8c3b94dbf8f3827c948d24340e12a45b877a01c070a75e5f"
+      },
+      "base_revision": 6,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "4d065f5e6bea3ad4367912badeb1e6566cfa2f45df8dc89d6613af2d6dc94c69"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.338935cd-5952-454d-b9df-9526833da05e",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:31:01.000Z",
+      "updated_at": "2026-09-03T21:31:01.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 23,
+      "logical_time": 23,
+      "event_type": "record.transitioned",
+      "occurred_at": "2026-09-03T21:31:01.000Z",
+      "actor": {
+        "kind": "system",
+        "id": "system.acheron"
+      },
+      "subject_refs": [
+        {
+          "record_type": "lease",
+          "id": "lease.17f48d01-63bb-4345-9fbc-f00c49957be2",
+          "revision": 2
+        }
+      ],
+      "payload": {
+        "record_type": "lease",
+        "from": "active",
+        "to": "released",
+        "event": "release",
+        "reason": "checkpoint"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "4d065f5e6bea3ad4367912badeb1e6566cfa2f45df8dc89d6613af2d6dc94c69"
+      },
+      "base_revision": 1,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "df5e9a3b45e2d051b341700b41ad69e6b97cdc5d47f425a6da2152efe27b0449"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.d19eee01-bf80-4ae2-aef2-201f840028dd",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:31:03.000Z",
+      "updated_at": "2026-09-03T21:31:03.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 24,
+      "logical_time": 24,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:31:03.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "artifact",
+          "id": "artifact.sha256:a9d8ef78f77e721bc12869aef55ffb1340af8a782d195fccae05161f1a1c6fd4",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "artifact",
+        "kind": "test_result",
+        "title": "evidence criterion.test-sh-exits-0 (passed)",
+        "status": "available",
+        "task_id": "task.fixture1",
+        "record_digest": "e1024b524a54ee1226effa8724a58bd1cd35dc37ef3ef4d1cfe2c1ce2c3be644"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "df5e9a3b45e2d051b341700b41ad69e6b97cdc5d47f425a6da2152efe27b0449"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "63067d04bd0412f70a241a39e69bbf03678d0d4f172faea47faef4b0f9adec3e"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.e8e200f0-a341-4ddf-a4a1-c95e9a99f632",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:31:05.000Z",
+      "updated_at": "2026-09-03T21:31:05.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 25,
+      "logical_time": 25,
+      "event_type": "evidence.attached",
+      "occurred_at": "2026-09-03T21:31:05.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "work_item",
+          "id": "work.run-test-sh.fixture",
+          "revision": 4
+        }
+      ],
+      "payload": {
+        "record_type": "work_item",
+        "criterion_id": "criterion.test-sh-exits-0",
+        "status": "passed",
+        "artifact_ids": [
+          "artifact.sha256:a9d8ef78f77e721bc12869aef55ffb1340af8a782d195fccae05161f1a1c6fd4"
+        ],
+        "task_id": "task.fixture1"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "63067d04bd0412f70a241a39e69bbf03678d0d4f172faea47faef4b0f9adec3e"
+      },
+      "base_revision": 3,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "779f2ef17a585de539efa4b004b2ba203e48422ac7522783147186785a75ed49"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.2a6556a5-dd02-4178-8c7b-767303fbbdee",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:31:08.000Z",
+      "updated_at": "2026-09-03T21:31:08.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 26,
+      "logical_time": 26,
+      "event_type": "record.transitioned",
+      "occurred_at": "2026-09-03T21:31:08.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "work_item",
+          "id": "work.run-test-sh.fixture",
+          "revision": 5
+        }
+      ],
+      "payload": {
+        "record_type": "work_item",
+        "from": "active",
+        "to": "review",
+        "event": "submit",
+        "reason": null
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "779f2ef17a585de539efa4b004b2ba203e48422ac7522783147186785a75ed49"
+      },
+      "base_revision": 4,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "93a6f282ffc1fe939c0729f42d56de5a157a04d0f7375ffb90c2d346ccb2182b"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.607765c3-e8d5-46da-bcd7-eb995b39db7a",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:31:11.000Z",
+      "updated_at": "2026-09-03T21:31:11.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 27,
+      "logical_time": 27,
+      "event_type": "record.transitioned",
+      "occurred_at": "2026-09-03T21:31:11.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "work_item",
+          "id": "work.run-test-sh.fixture",
+          "revision": 6
+        }
+      ],
+      "payload": {
+        "record_type": "work_item",
+        "from": "review",
+        "to": "done",
+        "event": "pass",
+        "reason": null
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "93a6f282ffc1fe939c0729f42d56de5a157a04d0f7375ffb90c2d346ccb2182b"
+      },
+      "base_revision": 5,
+      "digest": {
+        "algorithm": "sha256",
+        "value": "69d7c2493e28e6d78b5a23ca05054d7449a12059cf6fd08a0965b650da505ea6"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.117f9a7b-1707-4863-886d-52e633a4a83f",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:31:13.000Z",
+      "updated_at": "2026-09-03T21:31:13.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 28,
+      "logical_time": 28,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:31:13.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "gate",
+          "id": "gate.2c43fd74-6de7-449b-8e46-77d64f985969",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "gate",
+        "kind": "question",
+        "status": "open",
+        "record_digest": "4736b1ff38bdbfaa05cd86500d99dd0ba96811da0c85221f722eccc7a062f73a"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "69d7c2493e28e6d78b5a23ca05054d7449a12059cf6fd08a0965b650da505ea6"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "b65ea5cbb84d9a2a16ea62abc47d44bf09087350bccd3d7461df23a7a86c8dbd"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.4587f1ef-d14c-459c-bd6f-494f02607d45",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:31:14.000Z",
+      "updated_at": "2026-09-03T21:31:14.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 29,
+      "logical_time": 29,
+      "event_type": "gate.opened",
+      "occurred_at": "2026-09-03T21:31:14.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "gate",
+          "id": "gate.2c43fd74-6de7-449b-8e46-77d64f985969",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "kind": "question",
+        "question": "Drop mosh from scope?",
+        "options": [
+          "yes",
+          "no"
+        ]
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "b65ea5cbb84d9a2a16ea62abc47d44bf09087350bccd3d7461df23a7a86c8dbd"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "cd22e49edfff606dbe7c4810de61629c2ac42d983a62e840fd9bf8f5bb5c5657"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.f6e899d8-e197-47d7-9df9-c0dda4cf3713",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:31:16.000Z",
+      "updated_at": "2026-09-03T21:31:16.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 30,
+      "logical_time": 30,
+      "event_type": "record.created",
+      "occurred_at": "2026-09-03T21:31:16.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [
+        {
+          "record_type": "knowledge_item",
+          "id": "knowledge.decision.fixture1",
+          "revision": 1
+        }
+      ],
+      "payload": {
+        "record_type": "knowledge_item",
+        "kind": "decision",
+        "title": "Verify with the command verifier, not the builder's word",
+        "status": "proposed",
+        "record_digest": "927864216841e12fa1d309eabfc445a6eab3cc231cee9a589f98d6b187f2fc53"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "cd22e49edfff606dbe7c4810de61629c2ac42d983a62e840fd9bf8f5bb5c5657"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "07c6aa02bc2d16461c67507c23622a4d6d5c4e80574c3aafd940d73ded296494"
+      }
+    },
+    {
+      "record_type": "event",
+      "id": "evt.d1500be2-f0b3-4bcb-af71-b28ba778d551",
+      "workspace_id": "workspace.acheron.e2e-workspace-0001",
+      "revision": 1,
+      "created_at": "2026-09-03T21:31:17.000Z",
+      "updated_at": "2026-09-03T21:31:17.000Z",
+      "labels": {},
+      "provenance": [],
+      "extensions": {},
+      "replica_id": "replica.acheron.fixture",
+      "replica_sequence": 31,
+      "logical_time": 31,
+      "event_type": "cycle.report",
+      "occurred_at": "2026-09-03T21:31:17.000Z",
+      "actor": {
+        "kind": "agent",
+        "id": "agent.overseer.e2e-workspace-0001"
+      },
+      "subject_refs": [],
+      "payload": {
+        "cycle": 3,
+        "summary": "test.sh verified; item done",
+        "health": "green"
+      },
+      "previous_digest": {
+        "algorithm": "sha256",
+        "value": "07c6aa02bc2d16461c67507c23622a4d6d5c4e80574c3aafd940d73ded296494"
+      },
+      "digest": {
+        "algorithm": "sha256",
+        "value": "1c2e6be74542cc06d528f38afb0965b8a90106b6b6eb40583e5d5b198b22e9c0"
+      }
+    }
+  ],
+  "extensions": {
+    "acheron": {
+      "kernel_version": "1",
+      "proposals": [],
+      "gates": [
+        {
+          "record_type": "gate",
+          "id": "gate.2c43fd74-6de7-449b-8e46-77d64f985969",
+          "workspace_id": "workspace.acheron.e2e-workspace-0001",
+          "revision": 1,
+          "created_at": "2026-09-03T21:31:12.000Z",
+          "updated_at": "2026-09-03T21:31:12.000Z",
+          "labels": {},
+          "provenance": [],
+          "extensions": {},
+          "kind": "question",
+          "question": "Drop mosh from scope?",
+          "options": [
+            "yes",
+            "no"
+          ],
+          "refs": [],
+          "related": null,
+          "opened_by": {
+            "kind": "agent",
+            "id": "agent.overseer.e2e-workspace-0001"
+          },
+          "status": "open",
+          "answer": null
+        }
+      ]
+    }
+  }
+}

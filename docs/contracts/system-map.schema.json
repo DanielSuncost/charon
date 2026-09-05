@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acheron.dev/contracts/system-map.schema.json",
+  "title": "System Map (declared)",
+  "description": "The human/overseer-authored model of a software system: subsystems -> components -> code. Extraction observes the code and reports where this declaration and the code disagree; it never invents components. See docs/system-map-plan.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "system", "subsystems", "components"],
+  "$defs": {
+    "slug": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$", "maxLength": 128 },
+    "codeRef": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A path glob (`src/**/*.js`, `src-tauri/src/hub.rs`) or a symbol anchor `path#symbol`. Globs own files; anchors point into a file another component may own."
+    },
+    "interface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "locator"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["http", "ws", "unix-socket", "tcp", "ssh", "cli", "file", "event", "library", "custom"] },
+        "locator": { "type": "string", "minLength": 1 },
+        "protocol": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    }
+  },
+  "properties": {
+    "version": { "type": "integer", "const": 1 },
+    "system": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name"],
+      "properties": {
+        "id": { "$ref": "#/$defs/slug" },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" }
+      }
+    },
+    "subsystems": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "$ref": "#/$defs/slug" },
+          "name": { "type": "string", "minLength": 1 },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "components": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "subsystem", "name", "kind", "code"],
+        "properties": {
+          "id": { "$ref": "#/$defs/slug" },
+          "subsystem": { "$ref": "#/$defs/slug" },
+          "name": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "enum": ["module", "service", "process", "library", "datastore", "interface", "job", "ui"] },
+          "description": { "type": "string" },
+          "code": { "type": "array", "items": { "$ref": "#/$defs/codeRef" } },
+          "entrypoints": { "type": "array", "items": { "$ref": "#/$defs/codeRef" } },
+          "interfaces": { "type": "array", "items": { "$ref": "#/$defs/interface" } },
+          "depends_on": { "type": "array", "items": { "$ref": "#/$defs/slug" }, "uniqueItems": true },
+          "owner_role": { "type": "string" },
+          "docs": { "type": "array", "items": { "type": "string" } },
+          "invariants": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "externals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name"],
+        "properties": {
+          "id": { "$ref": "#/$defs/slug" },
+          "name": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "enum": ["module", "service", "process", "library", "datastore", "interface", "job", "ui"] },
+          "description": { "type": "string" },
+          "packages": { "type": "array", "items": { "type": "string" }, "description": "Import names that resolve to this external (e.g. `xterm`, `@tauri-apps/api`)" }
+        }
+      }
+    }
+  }
+}
