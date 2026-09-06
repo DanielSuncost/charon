@@ -58,6 +58,7 @@ class TopologyBudget:
     max_breadth_per_level: int = 50
     max_total_agents: int = 200
     token_budget: int = 0          # 0 = unlimited
+    cost_budget_usd: float = 0.0   # 0 = unlimited
     time_budget_minutes: int = 0   # 0 = unlimited
     started_at: float = field(default_factory=time.time)
 
@@ -83,18 +84,18 @@ def mint_budget(root_id: str, preset: str = 'standard', **overrides: Any) -> dic
     return TopologyBudget(root_id=root_id, **limits).to_dict()
 
 
-def effective_budget(ctx: Any, *, preset: str = 'standard') -> dict[str, Any]:
+def effective_budget(ctx: Any, *, preset: str = 'standard', **overrides: Any) -> dict[str, Any]:
     """Return ctx's inherited budget, or mint a fresh one if this call starts
     a new tree (ctx carries no budget of its own yet).
 
-    A descendant's `preset` argument is ignored whenever ctx already carries
-    a budget — only the root of a tree gets to pick its shape.
+    A descendant's `preset`/`overrides` are ignored whenever ctx already
+    carries a budget — only the root of a tree gets to pick its shape.
     """
     existing = getattr(ctx, 'topology_budget', None)
     if isinstance(existing, dict) and existing.get('root_id'):
         return existing
     root_id = str(getattr(ctx, 'agent_id', '') or '') or f'root-{uuid.uuid4().hex[:8]}'
-    return mint_budget(root_id, preset=preset)
+    return mint_budget(root_id, preset=preset, **overrides)
 
 
 def _state_path(state_dir: Path, root_id: str) -> Path:
@@ -111,10 +112,14 @@ def _load(path: Path) -> dict[str, Any]:
                 data.setdefault('children_by_node', {})
                 data.setdefault('total_tokens_used', 0)
                 data.setdefault('reactivations_by_node', {})
+                data.setdefault('total_cost_usd', 0.0)
                 return data
     except Exception as e:
         _diag('topology_budget', 'topology state read failed; starting fresh', error=e, path=str(path))
-    return {'total_agents': 0, 'children_by_node': {}, 'total_tokens_used': 0, 'reactivations_by_node': {}}
+    return {
+        'total_agents': 0, 'children_by_node': {}, 'total_tokens_used': 0,
+        'reactivations_by_node': {}, 'total_cost_usd': 0.0,
+    }
 
 
 def _save(path: Path, state: dict[str, Any]) -> None:
@@ -182,6 +187,14 @@ def try_reserve(
                 f'{tokens_used} used so far by this delegation tree)'
             )
 
+        cost_budget = float(budget.get('cost_budget_usd') or 0)
+        cost_used = float(state.get('total_cost_usd', 0.0))
+        if cost_budget > 0 and cost_used >= cost_budget:
+            return False, (
+                f'topology cost budget exhausted (cost_budget_usd=${cost_budget:.4f}, '
+                f'${cost_used:.4f} spent so far by this delegation tree)'
+            )
+
         children_by_node[parent_agent_id] = existing_children + count
         state['total_agents'] = total + count
         _save(path, state)
@@ -233,6 +246,39 @@ def record_usage(state_dir: Path, budget: dict[str, Any], tokens: int) -> None:
             lock_file.close()
 
 
+def record_cost(state_dir: Path, budget: dict[str, Any], cost_usd: float) -> None:
+    """Add `cost_usd` to this tree's running total-cost-spent counter.
+
+    Same shape and same caveats as record_usage(): a call's real dollar cost
+    isn't knowable until it finishes, so this is post-hoc accumulation, and
+    try_reserve()'s cost_budget_usd check is what actually gates further
+    spawning once the tree's cumulative spend reaches the budget.
+    """
+    if cost_usd <= 0:
+        return
+    root_id = str(budget.get('root_id') or 'root')
+    path = _state_path(Path(state_dir), root_id)
+    lock_file = None
+    try:
+        if _HAS_FCNTL:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            lock_file = open(path.with_suffix('.lock'), 'w')
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+
+        state = _load(path)
+        state['total_cost_usd'] = round(float(state.get('total_cost_usd', 0.0)) + float(cost_usd), 6)
+        _save(path, state)
+    except Exception as e:
+        _diag('topology_budget', 'cost recording failed; cost accounting may undercount', error=e, root_id=root_id)
+    finally:
+        if lock_file is not None:
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            lock_file.close()
+
+
 def try_reserve_reactivation(
     state_dir: Path,
     budget: dict[str, Any],
@@ -275,6 +321,14 @@ def try_reserve_reactivation(
                 f'{tokens_used} used so far by this delegation tree)'
             )
 
+        cost_budget = float(budget.get('cost_budget_usd') or 0)
+        cost_used = float(state.get('total_cost_usd', 0.0))
+        if cost_budget > 0 and cost_used >= cost_budget:
+            return False, (
+                f'topology cost budget exhausted (cost_budget_usd=${cost_budget:.4f}, '
+                f'${cost_used:.4f} spent so far by this delegation tree)'
+            )
+
         reactivations = state.setdefault('reactivations_by_node', {})
         count = int(reactivations.get(shade_id, 0))
         if max_reactivations > 0 and count >= max_reactivations:
@@ -314,3 +368,72 @@ def token_budget_utilization(state_dir: Path, budget: dict[str, Any]) -> float |
     root_id = str(budget.get('root_id') or 'root')
     state = current_state(state_dir, root_id)
     return min(1.0, int(state.get('total_tokens_used', 0)) / token_budget)
+
+
+def cost_budget_utilization(state_dir: Path, budget: dict[str, Any]) -> float | None:
+    """Fraction (0-1) of this tree's cost_budget_usd already spent, or None
+    if the budget is unlimited (cost_budget_usd <= 0). Mirrors
+    token_budget_utilization() exactly, for the dollar-cost dimension.
+    """
+    cost_budget = float(budget.get('cost_budget_usd') or 0)
+    if cost_budget <= 0:
+        return None
+    root_id = str(budget.get('root_id') or 'root')
+    state = current_state(state_dir, root_id)
+    return min(1.0, float(state.get('total_cost_usd', 0.0)) / cost_budget)
+
+
+def _peer_message_state_path(state_dir: Path) -> Path:
+    return Path(state_dir) / 'topology' / 'peer_messages.json'
+
+
+def try_reserve_peer_message(
+    state_dir: Path, *, sender_agent_id: str, peer_agent_id: str, max_messages: int = 50,
+) -> tuple[bool, str]:
+    """Cap how many messages one agent may send to a peer via
+    charon.rlm(peer_agent_id=...), to prevent two agents messaging each
+    other in an unbounded loop.
+
+    Deliberately not a TopologyBudget: messaging a peer isn't spawning a
+    child, so it has no place in a delegation tree's depth/breadth/total-
+    agent accounting. This is a separate, simple counter keyed by the
+    (sender, peer) pair, using the same atomic-file-lock pattern as
+    try_reserve() rather than a new one.
+    """
+    key = f'{sender_agent_id or "?"}->{peer_agent_id or "?"}'
+    path = _peer_message_state_path(state_dir)
+    lock_file = None
+    try:
+        if _HAS_FCNTL:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            lock_file = open(path.with_suffix('.lock'), 'w')
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+
+        try:
+            state = json.loads(path.read_text()) if path.exists() else {}
+        except Exception:
+            state = {}
+        if not isinstance(state, dict):
+            state = {}
+
+        count = int(state.get(key, 0))
+        if max_messages > 0 and count >= max_messages:
+            return False, (
+                f'peer-message cap reached ({sender_agent_id!r} -> {peer_agent_id!r}, '
+                f'max_messages={max_messages})'
+            )
+
+        state[key] = count + 1
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state))
+        return True, ''
+    except Exception as e:
+        _diag('topology_budget', 'peer-message cap check failed open; allowing message without accounting', error=e)
+        return True, ''
+    finally:
+        if lock_file is not None:
+            try:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+            except Exception:
+                pass
+            lock_file.close()

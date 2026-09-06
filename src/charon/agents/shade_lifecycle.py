@@ -28,6 +28,7 @@ longer 'idle' by the time it acquires the lock.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from charon.orchestration.fsm import MachineInstance, MachineSpec, TransitionSpec
@@ -124,3 +125,56 @@ def get_state(state_dir: Path, shade_id: str) -> str | None:
     never retained (no lifecycle instance exists)."""
     instance = _store(state_dir).get(shade_id)
     return instance.state if instance else None
+
+
+def get_instance(state_dir: Path, shade_id: str) -> MachineInstance | None:
+    """Read-only: the full lifecycle instance (state + updated_at + data),
+    or None if this shade was never retained. `updated_at` is stamped fresh
+    on every dispatched transition (orchestration/fsm.py), so for an idle
+    shade it's exactly "when this shade went idle" — the basis for TTL math
+    without needing a separate timestamp field."""
+    return _store(state_dir).get(shade_id)
+
+
+def list_idle_shade_ids(state_dir: Path) -> list[str]:
+    """All shade agent ids currently idle (retained, addressable).
+
+    DurableMachineStore has no bulk-list method, so this goes through
+    agent_lifecycle's agent registry (kept in sync by _sync_agent_status on
+    every transition) rather than the FSM store directly.
+    """
+    from charon.agents.agent_lifecycle import list_agents
+    return [
+        a['id'] for a in list_agents()
+        if a.get('role') == 'shade' and a.get('status') == 'idle' and a.get('id')
+    ]
+
+
+def reap_expired_idle_shades(state_dir: Path, *, max_idle_seconds: int) -> list[str]:
+    """Stop any retained shade that's been idle longer than max_idle_seconds.
+
+    Mirrors reconcile_stale_shade_contracts's exact shape (shade_orchestrator.py)
+    and reconcile_stale_automation_runs's before it: list candidates, parse a
+    timestamp, skip if fresh, else act + collect. Unlike those two, this is
+    meant to be called on every heartbeat tick, not just once at daemon
+    startup — a shade idle for hours inside a long-running daemon would
+    otherwise never be caught.
+    """
+    reaped: list[str] = []
+    now = datetime.now(timezone.utc).timestamp()
+    for shade_id in list_idle_shade_ids(state_dir):
+        instance = get_instance(state_dir, shade_id)
+        if instance is None or instance.state != 'idle':
+            continue
+        try:
+            idle_since = datetime.fromisoformat(instance.updated_at.replace('Z', '+00:00')).timestamp()
+        except Exception:
+            idle_since = 0.0
+        if idle_since <= 0 or (now - idle_since) < max_idle_seconds:
+            continue
+        try:
+            mark_stopped(state_dir, shade_id)
+            reaped.append(shade_id)
+        except Exception as e:
+            _diag('shade_lifecycle', 'expired idle shade failed to stop', error=e, shade_id=shade_id)
+    return reaped

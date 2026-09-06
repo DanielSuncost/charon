@@ -33,6 +33,11 @@ whether the result is a genuine, reusable finding — not just routine
 progress — before writing it into durable project memory. Never promoted
 on the shade's own say-so.
 
+`charon.rlm(objective, peer_agent_id=<id>)` messages another already-running
+agent (not a shade you spawned) and blocks for its reply, via the real task
+queue rather than the write-only agent inbox — capped so two agents can't
+message each other in an unbounded loop.
+
 Not a sandbox. Code runs as a subprocess with the daemon's own OS permissions,
 the same trust model as Bash and ExecuteCode.
 """
@@ -100,7 +105,10 @@ class _KernelWorker:
     """One persistent child process, its background stdout reader, and the
     lock that serializes request/response pairs against it."""
 
-    def __init__(self, project_root: Path, state_dir: Path | None, agent_id: str):
+    def __init__(
+        self, project_root: Path, state_dir: Path | None, agent_id: str,
+        topology_depth: int = 0, topology_budget: dict | None = None,
+    ):
         self.agent_id = agent_id
         self.created_at = time.time()
         self.calls = 0
@@ -113,11 +121,20 @@ class _KernelWorker:
         self._out_q: "queue.Queue[str]" = queue.Queue()
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
+        # topology_depth/topology_budget: inherited once, at kernel creation,
+        # from whatever ToolContext first spawned this kernel — an agent's
+        # position in a delegation tree doesn't change over its lifetime, so
+        # this isn't re-sent on later calls the way code/timeout_sec are.
+        # Without this, a shade that itself calls PyKernel would have its own
+        # kernel mint a fresh, disconnected tree instead of continuing its
+        # parent's (see docs/plans root_task_id fragmentation fix).
         self._init_args = {
             'project_root': str(project_root),
             'state_dir': str(state_dir) if state_dir else '',
             'agent_id': agent_id,
             'src_dir': _SRC_DIR,
+            'topology_depth': int(topology_depth or 0),
+            'topology_budget': topology_budget if isinstance(topology_budget, dict) else None,
         }
         self._send({'cmd': 'init', **self._init_args})
         ack = self._recv(timeout=30)
@@ -162,7 +179,7 @@ class _KernelWorker:
         with self._io_lock:
             self.calls += 1
             try:
-                self._send({'cmd': 'run', 'code': code})
+                self._send({'cmd': 'run', 'code': code, 'timeout_sec': timeout_sec})
             except Exception as e:
                 return {'ok': False, 'error': f'failed to send code to kernel: {e}'}
             resp = self._recv(timeout=timeout_sec)
@@ -223,7 +240,11 @@ def _get_or_create_kernel(ctx: ToolContext) -> _KernelWorker:
         existing = _kernels.get(key)
         if existing is not None and existing.alive():
             return existing
-        worker = _KernelWorker(ctx.project_root, ctx.state_dir, key)
+        worker = _KernelWorker(
+            ctx.project_root, ctx.state_dir, key,
+            topology_depth=getattr(ctx, 'topology_depth', 0) or 0,
+            topology_budget=getattr(ctx, 'topology_budget', None),
+        )
         _kernels[key] = worker
         return worker
 

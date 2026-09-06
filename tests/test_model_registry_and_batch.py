@@ -191,3 +191,78 @@ def test_batch_with_constraints(tmp_path):
     task = batch['tasks'][0]
     assert 'Output must be PNG' in task['constraints']
     assert 'Max 1024x1024' in task['constraints']
+
+
+def test_route_shade_model_passthrough_when_no_tiers_configured(tmp_path):
+    from charon.providers.model_registry import route_shade_model
+    assert route_shade_model(tmp_path, task_complexity='complex') == 'complex'
+    assert route_shade_model(tmp_path, task_complexity='normal') == 'normal'
+
+
+def test_route_shade_model_passthrough_when_only_one_tier_configured(tmp_path):
+    from charon.providers.model_registry import route_shade_model, save_registry, load_registry
+    reg = load_registry(tmp_path)
+    reg['tiers'] = {'fast': 'claude-haiku', 'strong': None}
+    save_registry(tmp_path, reg)
+    assert route_shade_model(tmp_path, task_complexity='complex') == 'complex'
+
+
+def test_route_shade_model_passthrough_when_billing_is_subscription(tmp_path):
+    from charon.providers.model_registry import route_shade_model, save_registry, load_registry
+    reg = load_registry(tmp_path)
+    reg['tiers'] = {'fast': 'claude-haiku', 'strong': 'claude-opus'}
+    reg['shade_provider'] = 'codex'  # a SUBSCRIPTION_PROVIDERS entry -> billing mode 'subscription'
+    save_registry(tmp_path, reg)
+    assert route_shade_model(tmp_path, task_complexity='complex') == 'complex'
+
+
+def test_route_shade_model_downgrades_complex_once_budget_scarce(tmp_path):
+    from charon.providers.model_registry import route_shade_model, save_registry, load_registry
+    from charon.agents.topology_budget import mint_budget, record_usage
+    reg = load_registry(tmp_path)
+    reg['tiers'] = {'fast': 'claude-haiku', 'strong': 'claude-opus'}
+    save_registry(tmp_path, reg)
+
+    budget = mint_budget('AG-ROOT', preset='standard', token_budget=1000)
+    record_usage(tmp_path, budget, 800)
+
+    assert route_shade_model(tmp_path, task_complexity='complex', budget=budget) == 'normal'
+
+
+def test_route_shade_model_honors_complex_when_budget_has_room(tmp_path):
+    from charon.providers.model_registry import route_shade_model, save_registry, load_registry
+    from charon.agents.topology_budget import mint_budget, record_usage
+    reg = load_registry(tmp_path)
+    reg['tiers'] = {'fast': 'claude-haiku', 'strong': 'claude-opus'}
+    save_registry(tmp_path, reg)
+
+    budget = mint_budget('AG-ROOT', preset='standard', token_budget=1000)
+    record_usage(tmp_path, budget, 100)
+
+    assert route_shade_model(tmp_path, task_complexity='complex', budget=budget) == 'complex'
+
+
+def test_route_shade_model_normal_request_unaffected_by_scarce_budget(tmp_path):
+    from charon.providers.model_registry import route_shade_model, save_registry, load_registry
+    from charon.agents.topology_budget import mint_budget, record_usage
+    reg = load_registry(tmp_path)
+    reg['tiers'] = {'fast': 'claude-haiku', 'strong': 'claude-opus'}
+    save_registry(tmp_path, reg)
+
+    budget = mint_budget('AG-ROOT', preset='standard', token_budget=1000)
+    record_usage(tmp_path, budget, 900)
+
+    assert route_shade_model(tmp_path, task_complexity='normal', budget=budget) == 'normal'
+
+
+def test_route_shade_model_never_raises_on_routing_failure(tmp_path, monkeypatch):
+    from charon.providers.model_registry import route_shade_model, save_registry, load_registry
+    reg = load_registry(tmp_path)
+    reg['tiers'] = {'fast': 'claude-haiku', 'strong': 'claude-opus'}
+    save_registry(tmp_path, reg)
+
+    monkeypatch.setattr(
+        'charon.routing.policy.route_models',
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError('routing exploded')),
+    )
+    assert route_shade_model(tmp_path, task_complexity='complex') == 'complex'

@@ -4,10 +4,11 @@ Launched by pykernel_tool.py via `sys.executable <this file>`. Speaks a tiny
 line-delimited JSON protocol over stdin/stdout:
 
     in:  {"cmd": "init", "project_root": "...", "state_dir": "...",
-          "agent_id": "...", "src_dir": "..."}
+          "agent_id": "...", "src_dir": "...", "topology_depth": 0,
+          "topology_budget": {...} or null}
     out: {"ok": true}
 
-    in:  {"cmd": "run", "code": "..."}
+    in:  {"cmd": "run", "code": "...", "timeout_sec": 60}
     out: {"ok": true, "stdout": "...", "stderr": "...", "result": "<repr or omitted>"}
       or {"ok": false, "stdout": "...", "stderr": "...", "error": "...", "traceback": "..."}
 
@@ -30,6 +31,7 @@ import contextlib
 import io
 import json
 import sys
+import time
 import traceback
 import types
 
@@ -114,7 +116,10 @@ def _maybe_promote_output(state_dir, *, objective, output, shade_id, contract_id
         return {'promoted': False, 'promotion_score': None}
 
 
-def _bridge_module(project_root: str, state_dir: str, agent_id: str) -> types.ModuleType:
+def _bridge_module(
+    project_root: str, state_dir: str, agent_id: str,
+    topology_depth: int = 0, topology_budget: dict | None = None,
+) -> types.ModuleType:
     """Build the `charon` object exposed inside kernel globals.
 
     Deliberately thin: spawn_shade and rlm both re-enter Charon's own
@@ -124,8 +129,20 @@ def _bridge_module(project_root: str, state_dir: str, agent_id: str) -> types.Mo
     (read-only) to turn that fire-and-forget spawn into a blocking call —
     see rlm()'s own docstring for why polling, not a synchronous
     reimplementation of the shade's phase loop, is the safe way to do that.
+
+    topology_depth/topology_budget: inherited from whatever ToolContext
+    first spawned this kernel (see pykernel_tool._KernelWorker) — without
+    this, every kernel-issued spawn would silently root a brand-new tree at
+    this kernel's own agent_id, even when this kernel itself belongs to a
+    shade deep in someone else's tree.
     """
     mod = types.ModuleType('charon')
+    # Mutated by main() right before each 'run' dispatch (see bottom of this
+    # file), read by rlm()'s poll loop — the one thing that legitimately
+    # changes per call rather than per kernel (unlike topology_depth/budget,
+    # a call's timeout isn't fixed for the kernel's whole lifetime).
+    call_state: dict = {'deadline': None}
+    mod._call_state = call_state
 
     def spawn_shade(goal: str, scope=None, constraints=None, expected_outputs=None) -> dict:
         """Enqueue a shade agent and return immediately with a handle.
@@ -144,6 +161,8 @@ def _bridge_module(project_root: str, state_dir: str, agent_id: str) -> types.Mo
             project_root=Path(project_root),
             agent_id=agent_id,
             state_dir=Path(state_dir) if state_dir else None,
+            topology_depth=topology_depth,
+            topology_budget=topology_budget,
         )
         result = execute_spawn_shade(
             {
@@ -158,40 +177,54 @@ def _bridge_module(project_root: str, state_dir: str, agent_id: str) -> types.Mo
             raise RuntimeError(result.content)
         return dict(result.details or {})
 
-    def rlm(objective: str, *, child_agent_id=None, scope=None, constraints=None,
-            expected_outputs=None, contract_id=None, retain: bool = False,
-            promote: bool = False, task_complexity: str = 'normal',
-            poll_interval: float = 0.5) -> dict:
-        """Call a sub-agent and block for its result, like a function call.
+    def rlm(objective: str, *, child_agent_id=None, peer_agent_id=None, scope=None,
+            constraints=None, expected_outputs=None, contract_id=None, peer_task_id=None,
+            retain: bool = False, promote: bool = False, task_complexity: str = 'normal',
+            poll_interval: float = 0.5, max_peer_messages: int = 50) -> dict:
+        """Call a sub-agent — or a peer agent — and block for its result,
+        like a function call.
 
-        Unlike spawn_shade (fire-and-forget), this waits for the child to
+        Unlike spawn_shade (fire-and-forget), this waits for the target to
         finish and returns its actual output — the real recursive-call
-        primitive: call a sub-agent the way you'd call a function.
+        primitive: call a sub-agent (or message a peer) the way you'd call
+        a function.
 
-        PyKernel clamps a single `run` call to at most 300s, so a child
-        whose work takes longer WILL make this call hit that ceiling and
-        get cut short by a soft interrupt before it can return. Because of
-        that, the contract id is printed to stdout immediately after the
-        child is spawned, before the wait begins — a raised interrupt loses
-        this function's local variables, but not what was already printed.
-        Read that line and pass it back in via contract_id= on a follow-up
-        rlm() call to keep waiting on the same child, instead of spawning a
-        duplicate.
+        PyKernel clamps a single `run` call to at most 300s. rlm() self-
+        limits its own wait to a margin under whatever timeout_sec this
+        PyKernel call was actually given, returning a clean
+        {'status': 'still_running', ...} *before* that ceiling would cut it
+        off — read the returned id (contract_id or peer_task_id) and pass it
+        back in on a follow-up call to keep waiting on the same target
+        instead of duplicating the work. The id is also printed to stdout
+        immediately, in case a caller-supplied huge poll_interval or some
+        other edge case still lets PyKernel's own SIGINT land first.
 
         child_agent_id: call an existing retained (idle) shade instead of
         spawning a fresh one. Errors — never silently spawns a fresh shade
         under that id — if it isn't found, isn't a shade, or isn't idle.
+        Mutually exclusive with peer_agent_id.
 
-        retain: only meaningful on a fresh spawn (child_agent_id omitted).
-        If true, the new shade goes idle instead of stopping once this call
-        returns, and can be called again later via
+        peer_agent_id: message another already-running, non-shade agent and
+        wait for its reply — not a spawn, so it isn't governed by
+        TopologyBudget's depth/breadth accounting. Delivered via the real
+        task queue (enqueue_agent_task), so it reaches that agent's actual
+        ConversationEngine next time the daemon gives it a turn — genuinely
+        different from the inert agent_inbox mechanism. Capped by
+        max_peer_messages per (sender, peer) pair to prevent two agents
+        messaging each other in an unbounded loop. Mutually exclusive with
+        child_agent_id.
+
+        retain: only meaningful on a fresh spawn (child_agent_id/peer_agent_id
+        omitted). If true, the new shade goes idle instead of stopping once
+        this call returns, and can be called again later via
         rlm(objective, child_agent_id=<the id from this call's result>).
 
         promote: if the call completes successfully, have an independent
         LLM judge score whether the output is a genuine, reusable finding
         worth remembering for this project (not routine or trivial) before
         writing it into durable project memory — never on the shade's own
-        say-so. See the result's 'promoted'/'promotion_score' keys.
+        say-so. See the result's 'promoted'/'promotion_score' keys. Only
+        applies to shade calls, not peer messages.
 
         task_complexity: 'simple'/'normal'/'complex' — only meaningful on a
         fresh spawn; 'complex' asks for the strong model tier. Downgraded
@@ -202,14 +235,71 @@ def _bridge_module(project_root: str, state_dir: str, agent_id: str) -> types.Mo
         from pathlib import Path
 
         from charon.tools import ToolContext
-        from charon.tools.shade_tool import execute_spawn_shade
-        from charon.shade.shade_orchestrator import get_contract
 
         ctx = ToolContext(
             project_root=Path(project_root),
             agent_id=agent_id,
             state_dir=Path(state_dir) if state_dir else None,
+            topology_depth=topology_depth,
+            topology_budget=topology_budget,
         )
+
+        fresh_targets = [t for t in (child_agent_id, peer_agent_id) if t]
+        resume_handles = [h for h in (contract_id, peer_task_id) if h]
+        if len(fresh_targets) > 1:
+            raise ValueError('child_agent_id and peer_agent_id are mutually exclusive')
+        if len(resume_handles) > 1:
+            raise ValueError('contract_id and peer_task_id are mutually exclusive')
+        if fresh_targets and resume_handles:
+            raise ValueError('cannot combine a fresh target (child_agent_id/peer_agent_id) with a resume handle (contract_id/peer_task_id)')
+
+        # Shared self-limiting margin — see the docstring above.
+        margin_sec = max(3.0, poll_interval * 5)
+
+        if peer_agent_id or peer_task_id:
+            from charon.conversation.conversation_runtime import enqueue_agent_task
+            from charon.infra.queue_io import load_queue_atomic
+
+            if peer_task_id:
+                task_id = peer_task_id
+            else:
+                from charon.agents.topology_budget import try_reserve_peer_message
+
+                ok, reason = try_reserve_peer_message(
+                    ctx.state_dir, sender_agent_id=agent_id, peer_agent_id=peer_agent_id,
+                    max_messages=max_peer_messages,
+                )
+                if not ok:
+                    raise RuntimeError(f'cannot message {peer_agent_id!r} — {reason}')
+                task = enqueue_agent_task(
+                    ctx.state_dir, owner_agent_id=peer_agent_id,
+                    instruction=f'Message from agent {agent_id}: {objective}',
+                )
+                task_id = task['id']
+
+            print(json.dumps({'rlm_peer_task_id': task_id}), flush=True)
+
+            terminal = {'completed', 'failed'}
+            while True:
+                queue = load_queue_atomic(Path(ctx.state_dir) / 'queue.json') if ctx.state_dir else []
+                task = next((t for t in queue if t.get('id') == task_id), None)
+                if not task:
+                    raise RuntimeError(f'peer task {task_id} not found')
+                if task.get('status') in terminal:
+                    break
+                deadline = call_state.get('deadline')
+                if deadline is not None and _time.time() > deadline - margin_sec:
+                    return {'status': 'still_running', 'peer_task_id': task_id}
+                _time.sleep(poll_interval)
+
+            return {
+                'status': task.get('status'),
+                'output': task.get('result_summary'),
+                'peer_task_id': task_id,
+            }
+
+        from charon.tools.shade_tool import execute_spawn_shade
+        from charon.shade.shade_orchestrator import get_contract
 
         if contract_id:
             cid = contract_id
@@ -261,14 +351,18 @@ def _bridge_module(project_root: str, state_dir: str, agent_id: str) -> types.Mo
                 raise RuntimeError(f'contract {cid} not found')
             if contract.get('status') in terminal:
                 break
+            deadline = call_state.get('deadline')
+            if deadline is not None and _time.time() > deadline - margin_sec:
+                return {'status': 'still_running', 'contract_id': cid, 'shade_id': contract.get('shade_agent_id')}
             _time.sleep(poll_interval)
 
         phases = contract.get('phases') or []
         succeeded = contract.get('status') == 'completed'
         output = phases[-1].get('result_summary') if phases else None
         meta = contract.get('metadata') or {}
+        root_task_id = (meta.get('topology_budget') or {}).get('root_id') or agent_id
         _trace_rlm_node(
-            ctx.state_dir, node_id=cid, parent_id=agent_id, root_task_id=agent_id,
+            ctx.state_dir, node_id=cid, parent_id=agent_id, root_task_id=root_task_id,
             objective=objective, depth=meta.get('topology_depth'),
             budget=meta.get('topology_budget'), status=contract.get('status'), output_ref=cid,
         )
@@ -373,6 +467,8 @@ def main() -> None:
             try:
                 namespace['charon'] = _bridge_module(
                     str(msg.get('project_root', '')), str(msg.get('state_dir', '')), str(msg.get('agent_id', '')),
+                    topology_depth=int(msg.get('topology_depth') or 0),
+                    topology_budget=msg.get('topology_budget') if isinstance(msg.get('topology_budget'), dict) else None,
                 )
                 print(json.dumps({'ok': True}), flush=True)
             except Exception as e:
@@ -391,6 +487,8 @@ def main() -> None:
                         str(init_args.get('project_root', '')),
                         str(init_args.get('state_dir', '')),
                         str(init_args.get('agent_id', '')),
+                        topology_depth=int(init_args.get('topology_depth') or 0),
+                        topology_budget=init_args.get('topology_budget') if isinstance(init_args.get('topology_budget'), dict) else None,
                     )
                 except Exception:
                     pass
@@ -400,6 +498,12 @@ def main() -> None:
         if cmd != 'run':
             print(json.dumps({'ok': False, 'error': f'unknown cmd: {cmd}'}), flush=True)
             continue
+
+        charon_mod = namespace.get('charon')
+        call_state = getattr(charon_mod, '_call_state', None)
+        if call_state is not None:
+            timeout_sec = msg.get('timeout_sec')
+            call_state['deadline'] = (time.time() + float(timeout_sec)) if timeout_sec else None
 
         response = _run_one(namespace, str(msg.get('code', '')))
         print(json.dumps(response), flush=True)

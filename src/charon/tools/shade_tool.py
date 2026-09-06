@@ -96,6 +96,22 @@ SHADE_TOOL_DEF = {
                     'is mostly spent — see topology_budget.token_budget_utilization.'
                 ),
             },
+            'token_budget': {
+                'type': 'number',
+                'description': (
+                    'Only takes effect when this call starts a new tree (see topology_preset). '
+                    'Total tokens this whole delegation tree may use across every call, including '
+                    'reactivations. Default: unlimited.'
+                ),
+            },
+            'cost_budget_usd': {
+                'type': 'number',
+                'description': (
+                    'Only takes effect when this call starts a new tree. Total real dollar cost '
+                    '(estimated from actual token usage and per-model pricing) this whole '
+                    'delegation tree may spend across every call. Default: unlimited.'
+                ),
+            },
         },
         'required': ['goal'],
     },
@@ -116,6 +132,8 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
     metadata = params.get('metadata') or {}
     retain = bool(params.get('retain', False))
     task_complexity = str(params.get('task_complexity') or 'normal').strip().lower()
+    token_budget_override = params.get('token_budget')
+    cost_budget_override = params.get('cost_budget_usd')
     state_dir = ctx.state_dir or Path('.charon_state')
 
     try:
@@ -140,7 +158,11 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
 
     from charon.agents.topology_budget import effective_budget, try_reserve
     topology_preset = str(params.get('topology_preset') or 'standard').strip().lower()
-    budget = effective_budget(ctx, preset=topology_preset)
+    budget = effective_budget(
+        ctx, preset=topology_preset,
+        token_budget=int(token_budget_override) if token_budget_override is not None else None,
+        cost_budget_usd=float(cost_budget_override) if cost_budget_override is not None else None,
+    )
     depth = int(getattr(ctx, 'topology_depth', 0) or 0) + 1
     ok, reason = try_reserve(state_dir, budget, parent_agent_id=ctx.agent_id or 'root', depth=depth)
     if not ok:
@@ -249,20 +271,20 @@ def _run_shade(
             assess_contract_outcome, save_triage_record,
         )
 
-        # Budget-aware downgrade: once this tree has spent most of its
-        # token_budget, force the cheap tier regardless of what was
-        # requested, so remaining budget stretches across more calls
-        # instead of a 'complex' request spending it on a strong model
-        # right before the tree gets cut off entirely.
-        effective_complexity = task_complexity
-        if budget:
-            try:
-                from charon.agents.topology_budget import token_budget_utilization
-                utilization = token_budget_utilization(state_dir, budget)
-                if utilization is not None and utilization >= 0.75 and effective_complexity == 'complex':
-                    effective_complexity = 'normal'
-            except Exception as exc:
-                _diag('shade_tool', 'budget-aware tier downgrade check failed; using requested tier', error=exc, contract_id=contract_id)
+        # Budget-aware, multi-objective tier choice: rank fast vs strong via
+        # the real router (routing/policy.py) using real per-model pricing,
+        # weighted toward cost once this tree's budget is running low —
+        # replaces a plain "force normal once utilization is high" downgrade
+        # with an actual quality/cost tradeoff. Falls back to the requested
+        # task_complexity unchanged whenever fewer than 2 real tiers are
+        # configured, billing isn't metered (so cost isn't real), or routing
+        # fails for any reason — see route_shade_model's own docstring.
+        try:
+            from charon.providers.model_registry import route_shade_model
+            effective_complexity = route_shade_model(state_dir, task_complexity=task_complexity, budget=budget)
+        except Exception as exc:
+            effective_complexity = task_complexity
+            _diag('shade_tool', 'budget-aware model routing failed; using requested tier', error=exc, contract_id=contract_id)
 
         # Create provider using shade-specific config (falls back to main if not set)
         provider, model, provider_meta = get_shade_provider_and_model(state_dir, task_complexity=effective_complexity)
@@ -414,12 +436,22 @@ def _run_shade(
                 )
                 if budget:
                     turn_tokens = 0
+                    turn_input_tokens = 0
+                    turn_output_tokens = 0
                     for event in events:
                         if event.type == 'message_end':
-                            turn_tokens += int((event.data.get('usage') or {}).get('total_tokens', 0) or 0)
+                            usage = event.data.get('usage') or {}
+                            turn_tokens += int(usage.get('total_tokens', 0) or 0)
+                            turn_input_tokens += int(usage.get('input_tokens', 0) or 0)
+                            turn_output_tokens += int(usage.get('output_tokens', 0) or 0)
                     if turn_tokens:
-                        from charon.agents.topology_budget import record_usage
+                        from charon.agents.topology_budget import record_usage, record_cost
                         record_usage(state_dir, budget, turn_tokens)
+                        try:
+                            from charon.infra.orchestration_trace import estimate_cost_usd
+                            record_cost(state_dir, budget, estimate_cost_usd(model.model_id, turn_input_tokens, turn_output_tokens))
+                        except Exception as exc:
+                            _diag('shade_tool', 'cost estimation/recording failed; cost accounting may undercount', error=exc, contract_id=contract_id)
                 summary = response[:500] if response else 'Completed (no output)'
                 mark_phase_completed(
                     state_dir, contract_id, phase_id,
@@ -574,3 +606,50 @@ def execute_reactivate_shade(
     thread.start()
 
     return {'shade_id': shade_id, 'contract_id': contract_id, 'status': 'running'}
+
+
+LIST_RETAINED_SHADES_TOOL_DEF = {
+    'name': 'ListRetainedShades',
+    'description': (
+        'List your currently retained shades — ones spawned with retain=True that have '
+        'finished their last instruction and are sitting idle, addressable again via '
+        'charon.rlm(objective, child_agent_id=...) in PyKernel. Shows how long each has '
+        'been idle; a shade idle longer than CHARON_RETAINED_SHADE_MAX_IDLE_SECONDS '
+        '(default 24h) will be stopped automatically by the daemon heartbeat.'
+    ),
+    'input_schema': {'type': 'object', 'properties': {}, 'required': []},
+}
+
+
+def execute_list_retained_shades(params: dict, ctx: ToolContext) -> ToolResult:
+    """List every currently-idle retained shade with how long it's been idle."""
+    if not ctx.state_dir:
+        return ToolResult(content='Error: state_dir not available', is_error=True)
+
+    from datetime import datetime, timezone
+    from charon.agents import shade_lifecycle
+    from charon.agents.agent_lifecycle import list_agents
+
+    shade_ids = shade_lifecycle.list_idle_shade_ids(ctx.state_dir)
+    if not shade_ids:
+        return ToolResult(content='No retained shades are currently idle.', details={'shades': []})
+
+    agents_by_id = {a.get('id'): a for a in list_agents()}
+    now = datetime.now(timezone.utc).timestamp()
+    rows = []
+    lines = [f'Retained shades ({len(shade_ids)}):']
+    for shade_id in shade_ids:
+        instance = shade_lifecycle.get_instance(ctx.state_dir, shade_id)
+        idle_seconds = None
+        if instance is not None:
+            try:
+                idle_since = datetime.fromisoformat(instance.updated_at.replace('Z', '+00:00')).timestamp()
+                idle_seconds = max(0, int(now - idle_since))
+            except Exception:
+                idle_seconds = None
+        goal = str((agents_by_id.get(shade_id) or {}).get('goal') or '')
+        idle_display = f'{idle_seconds}s' if idle_seconds is not None else 'unknown'
+        lines.append(f'- {shade_id}: idle {idle_display} — {goal[:120]}')
+        rows.append({'shade_id': shade_id, 'goal': goal, 'idle_seconds': idle_seconds})
+
+    return ToolResult(content='\n'.join(lines), details={'shades': rows})

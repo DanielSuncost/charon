@@ -1051,6 +1051,19 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
             except Exception as e:
                 _diag('charon_loop', 'soft specialization refresh failed; agent labels not updated', error=e)  # Specialization is best-effort
 
+            # Retained-shade TTL: stop any shade that's been idle longer than
+            # CHARON_RETAINED_SHADE_MAX_IDLE_SECONDS. Unlike reconcile_stale_*
+            # (startup-only), this runs every heartbeat — a shade retained
+            # inside a long-running daemon could otherwise sit idle forever.
+            try:
+                from charon.agents.shade_lifecycle import reap_expired_idle_shades
+                reaped = reap_expired_idle_shades(state_dir, max_idle_seconds=config.retained_shade_max_idle_seconds())
+                for shade_id in reaped:
+                    log_event(log_file, 'retained_shade_expired', cycle=cycles, shade_id=shade_id)
+                    trace_event(trace_file, 'retained_shade_expired', cycle=cycles, shade_id=shade_id)
+            except Exception as e:
+                _diag('charon_loop', 'retained-shade TTL reap failed; idle shades may accumulate', error=e)  # Reaping is best-effort
+
             # Judge-loop driver: advance running optimization loops one step
             try:
                 from charon.infra import config as _cfg

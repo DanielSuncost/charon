@@ -1398,7 +1398,7 @@ try:
 except Exception as _e:
     _HAS_BROWSER = False
     _record_tool_import_failure('Browser', _e)
-from charon.tools.shade_tool import SHADE_TOOL_DEF, execute_spawn_shade
+from charon.tools.shade_tool import SHADE_TOOL_DEF, execute_spawn_shade, LIST_RETAINED_SHADES_TOOL_DEF, execute_list_retained_shades
 from charon.tools.judge_loop_tool import JUDGE_LOOP_TOOL_DEF, execute_judge_loop
 from charon.tools.tool_catalog import TOOL_CATALOG_DEF, execute_tool_catalog
 
@@ -1456,7 +1456,7 @@ ALL_TOOL_DEFS = [
     RUN_PROCESS_TOOL_DEF, PROCESS_STATUS_TOOL_DEF, PROCESS_LOGS_TOOL_DEF, STOP_PROCESS_TOOL_DEF,
     USER_MODEL_TOOL_DEF, PROJECT_KNOWLEDGE_TOOL_DEF,
     HTTP_TOOL_DEF, GIT_TOOL_DEF,
-    SHADE_TOOL_DEF, SPAWN_BATCH_TOOL_DEF, JUDGE_LOOP_TOOL_DEF,
+    SHADE_TOOL_DEF, LIST_RETAINED_SHADES_TOOL_DEF, SPAWN_BATCH_TOOL_DEF, JUDGE_LOOP_TOOL_DEF,
     SEARCH_TOOL_DEF, WEB_TOOL_DEF, PAPER_TOOL_DEF, SOURCE_DISCOVERY_TOOL_DEF, RESEARCH_TOOL_DEF, X_TOOL_DEF,
     CRON_TOOL_DEF, SKILLS_TOOL_DEF, EXECUTE_CODE_TOOL_DEF, CLARIFY_TOOL_DEF,
     PYKERNEL_TOOL_DEF, REFINE_TOOL_DEF,
@@ -1477,6 +1477,7 @@ TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
     'Http': execute_http,
     'Git': execute_git,
     'SpawnShade': execute_spawn_shade,
+    'ListRetainedShades': execute_list_retained_shades,
     'SpawnBatch': execute_spawn_batch,
     'SpawnJudgeLoop': execute_judge_loop,
     'Search': execute_search,

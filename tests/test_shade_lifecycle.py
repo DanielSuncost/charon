@@ -5,7 +5,9 @@ to hit the real global agents.json — these tests are about the FSM's own
 transitions and the projection-sync side effect, not agent_lifecycle's
 storage.
 """
+import json
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -101,3 +103,69 @@ def test_concurrent_reactivation_only_one_winner(tmp_path, status_calls):
 
     assert results.count('ok') == 1
     assert results.count('rejected') == 7
+
+
+def _backdate_instance(tmp_path, shade_id, *, seconds_ago):
+    """No public API lets a transition stamp an arbitrary updated_at (fsm.py's
+    low-level dispatch() takes now=, but DurableMachineStore doesn't expose
+    it) — patch the on-disk snapshot directly, same trick used for
+    reconcile_stale_shade_contracts's tests."""
+    path = tmp_path / 'orchestration' / 'machines' / 'shade.lifecycle' / shade_id / 'instance.json'
+    data = json.loads(path.read_text())
+    data['updated_at'] = (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).isoformat()
+    path.write_text(json.dumps(data))
+
+
+def test_get_instance_returns_full_instance_with_updated_at(tmp_path, status_calls):
+    sl.initialize(tmp_path, 'AG-SHADE-1')
+    sl.mark_idle(tmp_path, 'AG-SHADE-1')
+    instance = sl.get_instance(tmp_path, 'AG-SHADE-1')
+    assert instance.state == 'idle'
+    assert instance.updated_at
+
+
+def test_get_instance_none_for_unknown_shade(tmp_path):
+    assert sl.get_instance(tmp_path, 'AG-NEVER-SPAWNED') is None
+
+
+def test_list_idle_shade_ids_filters_by_role_and_status(tmp_path, monkeypatch):
+    monkeypatch.setattr('charon.agents.agent_lifecycle.list_agents', lambda: [
+        {'id': 'AG-1', 'role': 'shade', 'status': 'idle'},
+        {'id': 'AG-2', 'role': 'shade', 'status': 'running'},
+        {'id': 'AG-3', 'role': 'charon', 'status': 'idle'},
+        {'id': 'AG-4', 'role': 'shade', 'status': 'idle'},
+    ])
+    assert sl.list_idle_shade_ids(tmp_path) == ['AG-1', 'AG-4']
+
+
+def test_reap_expired_idle_shades_stops_stale_and_leaves_fresh(tmp_path, status_calls, monkeypatch):
+    sl.initialize(tmp_path, 'AG-STALE')
+    sl.mark_idle(tmp_path, 'AG-STALE')
+    _backdate_instance(tmp_path, 'AG-STALE', seconds_ago=1000)
+
+    sl.initialize(tmp_path, 'AG-FRESH')
+    sl.mark_idle(tmp_path, 'AG-FRESH')
+
+    monkeypatch.setattr('charon.agents.agent_lifecycle.list_agents', lambda: [
+        {'id': 'AG-STALE', 'role': 'shade', 'status': 'idle'},
+        {'id': 'AG-FRESH', 'role': 'shade', 'status': 'idle'},
+    ])
+
+    reaped = sl.reap_expired_idle_shades(tmp_path, max_idle_seconds=300)
+
+    assert reaped == ['AG-STALE']
+    assert sl.get_state(tmp_path, 'AG-STALE') == 'stopped'
+    assert sl.get_state(tmp_path, 'AG-FRESH') == 'idle'
+
+
+def test_reap_expired_idle_shades_noop_when_none_stale(tmp_path, status_calls, monkeypatch):
+    sl.initialize(tmp_path, 'AG-FRESH')
+    sl.mark_idle(tmp_path, 'AG-FRESH')
+    monkeypatch.setattr('charon.agents.agent_lifecycle.list_agents', lambda: [
+        {'id': 'AG-FRESH', 'role': 'shade', 'status': 'idle'},
+    ])
+
+    reaped = sl.reap_expired_idle_shades(tmp_path, max_idle_seconds=300)
+
+    assert reaped == []
+    assert sl.get_state(tmp_path, 'AG-FRESH') == 'idle'

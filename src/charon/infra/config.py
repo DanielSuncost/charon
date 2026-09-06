@@ -143,6 +143,12 @@ def heartbeat_interval() -> int:
     return _get_int('CHARON_HEARTBEAT_INTERVAL', 30)
 
 
+def retained_shade_max_idle_seconds() -> int:
+    """CHARON_RETAINED_SHADE_MAX_IDLE_SECONDS (default 86400, 24h): how long
+    a retained shade may sit idle before the heartbeat reaper stops it."""
+    return _get_int('CHARON_RETAINED_SHADE_MAX_IDLE_SECONDS', 86400)
+
+
 # ── Agents ───────────────────────────────────────────────────────────────────
 
 def require_tmux() -> bool:

@@ -6,7 +6,9 @@ import pytest
 
 from charon.tools import ToolContext
 from charon.tools import shade_tool
-from charon.tools.shade_tool import execute_spawn_shade, execute_reactivate_shade, _run_shade
+from charon.tools.shade_tool import (
+    execute_spawn_shade, execute_reactivate_shade, execute_list_retained_shades, _run_shade,
+)
 from charon.agents import shade_lifecycle
 from charon.agents.topology_budget import mint_budget, current_state
 from charon.orchestration.fsm import TransitionRejected
@@ -277,3 +279,36 @@ def test_reactivate_shade_refused_once_reactivation_cap_hit(tmp_path, monkeypatc
         execute_reactivate_shade(ctx.state_dir, 'AG-SHADE', 'do it', ctx, depth=1, budget=budget)
     # Refused before the FSM was ever touched — the shade is still idle, not running.
     assert shade_lifecycle.get_state(ctx.state_dir, 'AG-SHADE') == 'idle'
+
+
+# ---------------------------------------------------------------------------
+# ListRetainedShades
+# ---------------------------------------------------------------------------
+
+def test_list_retained_shades_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr('charon.agents.agent_lifecycle.list_agents', lambda: [])
+    ctx = _ctx(tmp_path)
+    result = execute_list_retained_shades({}, ctx)
+    assert not result.is_error
+    assert result.details['shades'] == []
+    assert 'No retained shades' in result.content
+
+
+def test_list_retained_shades_reports_idle_ones(tmp_path, monkeypatch):
+    monkeypatch.setattr('charon.agents.agent_lifecycle.set_status', lambda a, s: None)
+    ctx = _ctx(tmp_path)
+    shade_lifecycle.initialize(ctx.state_dir, 'AG-SHADE-1')
+    shade_lifecycle.mark_idle(ctx.state_dir, 'AG-SHADE-1')
+
+    monkeypatch.setattr('charon.agents.agent_lifecycle.list_agents', lambda: [
+        {'id': 'AG-SHADE-1', 'role': 'shade', 'status': 'idle', 'goal': 'audit the auth module'},
+    ])
+
+    result = execute_list_retained_shades({}, ctx)
+    assert not result.is_error
+    assert len(result.details['shades']) == 1
+    row = result.details['shades'][0]
+    assert row['shade_id'] == 'AG-SHADE-1'
+    assert row['goal'] == 'audit the auth module'
+    assert row['idle_seconds'] is not None and row['idle_seconds'] >= 0
+    assert 'AG-SHADE-1' in result.content

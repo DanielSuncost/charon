@@ -232,3 +232,86 @@ def get_shade_provider_and_model(
 
     # Unknown mode
     return _get_shared_main(state_dir)
+
+
+def route_shade_model(state_dir: Path, *, task_complexity: str = 'normal', budget: dict | None = None) -> str:
+    """Rank 'fast' vs 'strong' via the real multi-objective router
+    (charon.routing.policy) instead of the plain complex-or-not switch,
+    picking the ECONOMY policy once this delegation tree's budget is
+    running low and BALANCED otherwise. Returns a task_complexity string
+    ('normal' or 'complex') for the caller to pass to
+    get_shade_provider_and_model as usual — this never resolves a
+    provider/model itself, so it can't fight that function's own OAuth-
+    reuse caching.
+
+    Falls back to `task_complexity` unchanged (today's behavior, zero
+    regression) whenever:
+    - fewer than 2 distinct real tier models are configured (the common
+      default setup — routing needs real choices to rank between), or
+    - billing is 'subscription' or 'local' (provider_billing_mode) — under
+      flat-rate/free billing, a real dollar difference between tiers
+      doesn't exist, so cost-aware routing would trade away quality for a
+      cost saving that isn't real, or
+    - routing raises for any reason.
+    """
+    try:
+        reg = load_registry(state_dir)
+        tiers = reg.get('tiers') or {}
+        fast_model = str(tiers.get('fast') or '').strip()
+        strong_model = str(tiers.get('strong') or '').strip()
+        if not fast_model or not strong_model or fast_model == strong_model:
+            return task_complexity
+        if not cost_is_real(resolve_billing_mode(state_dir)):
+            return task_complexity
+
+        from charon.routing.policy import route_models, ModelCandidate, TaskProfile, PolicyName
+        from charon.infra.orchestration_trace import estimate_cost_usd
+
+        # A nominal call's input+output size, purely to compare the two
+        # tiers' *relative* cost — not a claim about any real call's size.
+        representative_tokens = 2000
+        candidates = [
+            ModelCandidate(
+                candidate_id='fast', provider='shade', model_id=fast_model,
+                capabilities=(), context_window=0,
+                estimated_cost_usd=estimate_cost_usd(fast_model, representative_tokens, representative_tokens),
+                estimated_latency_ms=1000.0, estimated_quality=0.5, estimated_reliability=0.9,
+            ),
+            ModelCandidate(
+                candidate_id='strong', provider='shade', model_id=strong_model,
+                capabilities=(), context_window=0,
+                estimated_cost_usd=estimate_cost_usd(strong_model, representative_tokens, representative_tokens),
+                estimated_latency_ms=1000.0, estimated_quality=0.9, estimated_reliability=0.9,
+            ),
+        ]
+
+        utilization = None
+        if budget:
+            from charon.agents.topology_budget import token_budget_utilization, cost_budget_utilization
+            seen = [u for u in (token_budget_utilization(state_dir, budget), cost_budget_utilization(state_dir, budget)) if u is not None]
+            utilization = max(seen) if seen else None
+        scarce = utilization is not None and utilization >= 0.75
+        policy = PolicyName.ECONOMY if scarce else PolicyName.BALANCED
+
+        # A 'complex' request sets a quality floor 'fast' can't clear (its
+        # uncertainty-discounted quality is 0.25, 'strong' is 0.65 — see the
+        # heuristic estimates above) so BALANCED actually honors it instead
+        # of favoring 'fast' on cost alone as it otherwise would with only
+        # two candidates and no calibration data. Dropped entirely once the
+        # tree is scarce: ECONOMY is specifically the policy that overrides
+        # the caller's own request to conserve what's left, and a hard floor
+        # would make that impossible.
+        quality_floor = 0.4 if (task_complexity == 'complex' and not scarce) else None
+
+        task = TaskProfile(
+            task_id='shade-model-choice',
+            complexity=1.0 if task_complexity == 'complex' else (0.2 if task_complexity == 'simple' else 0.5),
+            quality_floor=quality_floor,
+        )
+        decision = route_models(task, candidates, policy=policy)
+        if not decision.feasible:
+            return task_complexity
+        return 'complex' if decision.selected_candidate_id == 'strong' else 'normal'
+    except Exception as e:
+        _diag('model_registry', 'shade model routing failed; falling back to plain task_complexity', error=e)
+        return task_complexity

@@ -164,3 +164,91 @@ def test_run_shade_records_token_usage_against_topology_budget(tmp_path, monkeyp
 
     state = current_state(state_dir, 'AG-ROOT')
     assert state['total_tokens_used'] >= 77
+
+
+def test_run_shade_records_real_cost_against_topology_budget(tmp_path, monkeypatch):
+    """_run_shade must also estimate and roll each phase's real dollar cost
+    into the tree's topology budget (topology_budget.record_cost), using the
+    resolved model's real pricing (orchestration_trace.estimate_cost_usd)."""
+    from charon.tools import shade_tool
+    from charon.shade.shade_orchestrator import create_contract
+    from charon.agents.topology_budget import mint_budget, current_state
+    from charon.providers import ModelInfo
+
+    state_dir = tmp_path / 'state'
+    state_dir.mkdir()
+
+    monkeypatch.setattr(
+        'charon.providers.model_registry.get_shade_provider_and_model',
+        lambda *a, **k: ('fake-provider', ModelInfo(provider='fake', model_id='claude-sonnet', context_window=200000), {}),
+    )
+
+    class _FakeEvent:
+        def __init__(self, type_, data):
+            self.type = type_
+            self.data = data
+
+    class _FakeEngine:
+        def __init__(self, **kwargs):
+            pass
+
+        async def submit_and_collect(self, instruction):
+            usage = {'input_tokens': 1000, 'output_tokens': 500, 'total_tokens': 1500}
+            return 'ok', [_FakeEvent('message_end', {'usage': usage})]
+
+    monkeypatch.setattr('charon.conversation.conversation_engine.ConversationEngine', _FakeEngine)
+
+    contract = create_contract(
+        state_dir, parent_task_id='', parent_agent_id='AG-ROOT', shade_agent_id='AG-SHADE',
+        conversation_id='conv-1', project=str(tmp_path), goal='test goal',
+    )
+    budget = mint_budget('AG-ROOT', preset='standard')
+    ctx = ToolContext(project_root=tmp_path, state_dir=state_dir, agent_id='AG-ROOT')
+
+    shade_tool._run_shade(state_dir, 'AG-SHADE', contract['id'], 'test goal', [], [], ctx, 1, budget)
+
+    state = current_state(state_dir, 'AG-ROOT')
+    # claude-sonnet: $3/1M input, $15/1M output -> 1000*3e-6 + 500*15e-6 = 0.0105 per phase.
+    assert state['total_cost_usd'] > 0
+    assert state['total_cost_usd'] >= 0.0105
+
+
+def test_spawn_shade_token_and_cost_budget_overrides_apply_at_root(tmp_path, monkeypatch):
+    from charon.tools import shade_tool
+    _ok_provider(monkeypatch)
+    monkeypatch.setattr(shade_tool, '_run_shade', lambda *a, **k: None)
+    ctx = _ctx(tmp_path)
+
+    result = execute_spawn_shade({
+        'goal': 'be cost-governed', 'token_budget': 5000, 'cost_budget_usd': 0.75,
+    }, ctx)
+    assert not result.is_error, result.content
+
+    contracts = {c['id']: c for c in load_contracts(ctx.state_dir)}
+    contract = contracts[result.details['contract_id']]
+    assert contract['metadata']['topology_budget']['token_budget'] == 5000
+    assert contract['metadata']['topology_budget']['cost_budget_usd'] == 0.75
+
+
+def test_spawn_shade_token_and_cost_budget_overrides_ignored_when_inherited(tmp_path, monkeypatch):
+    """Only the root of a tree gets to set budget overrides — a descendant
+    can't loosen an inherited budget by passing new values."""
+    from charon.tools import shade_tool
+    _ok_provider(monkeypatch)
+    monkeypatch.setattr(shade_tool, '_run_shade', lambda *a, **k: None)
+    inherited_budget = {
+        'root_id': 'AG-ROOT', 'max_depth': 5, 'max_breadth_per_level': 50,
+        'max_total_agents': 200, 'token_budget': 100, 'cost_budget_usd': 0.01,
+        'time_budget_minutes': 0, 'started_at': 0,
+    }
+    ctx = _ctx(tmp_path, agent_id='AG-CHILD', topology_depth=1, topology_budget=inherited_budget)
+
+    result = execute_spawn_shade({
+        'goal': 'try to loosen the budget', 'token_budget': 999999, 'cost_budget_usd': 999.0,
+    }, ctx)
+    assert not result.is_error, result.content
+
+    contracts = {c['id']: c for c in load_contracts(ctx.state_dir)}
+    contract = contracts[result.details['contract_id']]
+    assert contract['metadata']['topology_budget']['token_budget'] == 100
+    assert contract['metadata']['topology_budget']['cost_budget_usd'] == 0.01

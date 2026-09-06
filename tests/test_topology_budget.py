@@ -3,7 +3,7 @@ import time
 
 from charon.agents.topology_budget import (
     PRESETS, effective_budget, mint_budget, try_reserve, current_state, record_usage,
-    token_budget_utilization,
+    token_budget_utilization, record_cost, cost_budget_utilization, try_reserve_peer_message,
 )
 
 
@@ -177,3 +177,96 @@ def test_token_budget_utilization_clamped_to_one(tmp_path):
     budget = mint_budget('root-1', token_budget=1000)
     record_usage(tmp_path, budget, 5000)
     assert token_budget_utilization(tmp_path, budget) == 1.0
+
+
+def test_effective_budget_accepts_overrides_at_root(tmp_path):
+    class _Ctx:
+        agent_id = 'AG-ROOT'
+        topology_budget = None
+
+    budget = effective_budget(_Ctx(), preset='standard', token_budget=500, cost_budget_usd=1.5)
+    assert budget['token_budget'] == 500
+    assert budget['cost_budget_usd'] == 1.5
+
+
+def test_record_cost_accumulates(tmp_path):
+    budget = mint_budget('root-1', preset='standard')
+    record_cost(tmp_path, budget, 0.02)
+    record_cost(tmp_path, budget, 0.01)
+    state = current_state(tmp_path, 'root-1')
+    assert state['total_cost_usd'] == 0.03
+
+
+def test_record_cost_ignores_non_positive_amounts(tmp_path):
+    budget = mint_budget('root-1', preset='standard')
+    record_cost(tmp_path, budget, 0)
+    record_cost(tmp_path, budget, -1.0)
+    state = current_state(tmp_path, 'root-1')
+    assert state['total_cost_usd'] == 0.0
+
+
+def test_try_reserve_rejects_once_cost_budget_exhausted(tmp_path):
+    budget = mint_budget('root-1', max_depth=0, max_breadth_per_level=0, max_total_agents=0, cost_budget_usd=1.0)
+    record_cost(tmp_path, budget, 1.0)
+    ok, reason = try_reserve(tmp_path, budget, parent_agent_id='AG-1', depth=1)
+    assert not ok
+    assert 'cost budget' in reason
+
+
+def test_try_reserve_allows_when_under_cost_budget(tmp_path):
+    budget = mint_budget('root-1', max_depth=0, max_breadth_per_level=0, max_total_agents=0, cost_budget_usd=1.0)
+    record_cost(tmp_path, budget, 0.40)
+    ok, reason = try_reserve(tmp_path, budget, parent_agent_id='AG-1', depth=1)
+    assert ok
+    assert reason == ''
+
+
+def test_cost_budget_utilization_none_when_unlimited(tmp_path):
+    budget = mint_budget('root-1', cost_budget_usd=0)
+    assert cost_budget_utilization(tmp_path, budget) is None
+
+
+def test_cost_budget_utilization_reflects_spend(tmp_path):
+    budget = mint_budget('root-1', cost_budget_usd=2.0)
+    record_cost(tmp_path, budget, 0.5)
+    assert cost_budget_utilization(tmp_path, budget) == 0.25
+
+
+def test_cost_budget_utilization_clamped_to_one(tmp_path):
+    budget = mint_budget('root-1', cost_budget_usd=1.0)
+    record_cost(tmp_path, budget, 5.0)
+    assert cost_budget_utilization(tmp_path, budget) == 1.0
+
+
+def test_try_reserve_peer_message_allows_up_to_cap(tmp_path):
+    for _ in range(3):
+        ok, reason = try_reserve_peer_message(tmp_path, sender_agent_id='A', peer_agent_id='B', max_messages=3)
+        assert ok
+        assert reason == ''
+
+
+def test_try_reserve_peer_message_refuses_once_cap_hit(tmp_path):
+    for _ in range(3):
+        try_reserve_peer_message(tmp_path, sender_agent_id='A', peer_agent_id='B', max_messages=3)
+    ok, reason = try_reserve_peer_message(tmp_path, sender_agent_id='A', peer_agent_id='B', max_messages=3)
+    assert not ok
+    assert 'cap' in reason
+
+
+def test_try_reserve_peer_message_cap_is_per_directed_pair(tmp_path):
+    """A's cap messaging B is independent of A's cap messaging C, and of B's
+    cap messaging A (direction matters, not just the unordered pair)."""
+    for _ in range(3):
+        try_reserve_peer_message(tmp_path, sender_agent_id='A', peer_agent_id='B', max_messages=3)
+    ok_different_peer, _ = try_reserve_peer_message(tmp_path, sender_agent_id='A', peer_agent_id='C', max_messages=3)
+    ok_reverse_direction, _ = try_reserve_peer_message(tmp_path, sender_agent_id='B', peer_agent_id='A', max_messages=3)
+    assert ok_different_peer
+    assert ok_reverse_direction
+
+
+def test_try_reserve_peer_message_fails_open_on_unwritable_state_dir(tmp_path):
+    bogus_state_dir = tmp_path / 'not_a_dir'
+    bogus_state_dir.write_text('a file, not a directory')
+    ok, reason = try_reserve_peer_message(bogus_state_dir, sender_agent_id='A', peer_agent_id='B')
+    assert ok
+    assert reason == ''
