@@ -24,7 +24,7 @@ from .records import (
     BASE_FIELDS, BUNDLE_KEY, DEFAULT_LEASE_TTL_MS, EVENT_TYPE_RE, FSM, ID_PREFIX, KERNEL_VERSION, RECORD_TYPES,
     SCHEMA_TYPES, SCHEMA_VERSION, SESSION_STATUSES, SLUG_RE, SYSTEM_ACTOR, TYPE_FIELDS, USER_ACTOR,
     EventCollision, GuardFailed, IllegalTransition, LeaseConflict, NotFound, RevisionConflict, ValidationError,
-    assert_id, canonical_json, clone, digest_of, iso_from_ms, new_uuid, normalize_criteria, normalize_scope,
+    assert_id, canonical_json, clone, iso_from_ms, new_uuid, normalize_criteria, normalize_scope,
     now_ms, parse_iso_ms, pick, scopes_overlap, sha256_hex,
 )
 
@@ -351,16 +351,25 @@ class WorkspaceStore:
                 if key in ('record_type', 'id', 'workspace_id', 'revision', 'created_at', 'updated_at'):
                     continue
                 if key == 'extensions':
-                    rec['extensions'].update(clone(value) or {}); changed.append(key); continue
+                    rec['extensions'].update(clone(value) or {})
+                    changed.append(key)
+                    continue
                 if key == 'labels':
-                    rec['labels'] = clone(value) or {}; changed.append(key); continue
+                    rec['labels'] = clone(value) or {}
+                    changed.append(key)
+                    continue
                 if key == 'provenance':
-                    rec['provenance'] = clone(value) or []; changed.append(key); continue
+                    rec['provenance'] = clone(value) or []
+                    changed.append(key)
+                    continue
                 if key == 'acceptance_criteria' and record_type == 'work_item':
                     rec['acceptance_criteria'] = normalize_criteria(value, rec.get('acceptance_criteria'), self.new_id)
-                    changed.append(key); continue
+                    changed.append(key)
+                    continue
                 if key == 'scopes' and isinstance(value, list):
-                    rec['scopes'] = [normalize_scope(s) for s in value]; changed.append(key); continue
+                    rec['scopes'] = [normalize_scope(s) for s in value]
+                    changed.append(key)
+                    continue
                 if key in known:
                     if value is None:
                         rec.pop(key, None)
@@ -383,7 +392,6 @@ class WorkspaceStore:
             rec = self._require(record_type, record_id)
             source = rec.get('status')
             table = FSM[record_type]
-            target = table.get(source, {}).get(event) if source in table else None
             # Idempotent replay: the same event id, record, event, reason and base revision as an
             # already-recorded transition is a no-op (even with a now-stale expected_revision);
             # anything else under a used id is a collision.
@@ -600,9 +608,9 @@ class WorkspaceStore:
             leases: list[dict[str, Any]] = []
             now = self.now()
             for s in norm:
-                held = self.list('lease', lambda l, s=s: l.get('status') == 'active' and l.get('owner_task_id') == task_id
-                                 and (l.get('resource') or {}).get('selector') == s['selector']
-                                 and (l.get('resource') or {}).get('kind') == s['kind'])
+                held = self.list('lease', lambda lease, s=s: lease.get('status') == 'active' and lease.get('owner_task_id') == task_id
+                                 and (lease.get('resource') or {}).get('selector') == s['selector']
+                                 and (lease.get('resource') or {}).get('kind') == s['kind'])
                 if held:
                     leases.append(held[0])
                     continue

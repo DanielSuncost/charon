@@ -74,7 +74,7 @@ def extract_last_message(raw: str, is_agent: bool = True) -> str:
     """The agent's most recent message from a screen capture: everything after the
     user's last sent message, with TUI chrome (input box, separators, status lines,
     spinners) and marker glyphs stripped.  Deterministic, no LLM."""
-    lines = [l.rstrip() for l in clean_capture(raw).split('\n')]
+    lines = [line.rstrip() for line in clean_capture(raw).split('\n')]
     end = len(lines)
     for i in range(len(lines) - 1, max(-1, len(lines) - 26), -1):
         if lines[i].lstrip().startswith('❯'):
@@ -97,9 +97,9 @@ def extract_last_message(raw: str, is_agent: bool = True) -> str:
     while msg and _is_chrome(msg[-1]):
         msg.pop()
     out = []
-    for l in msg:
-        l = re.sub(r'^[⏺●]\s?', '', l)
-        out.append(l)
+    for line in msg:
+        line = re.sub(r'^[⏺●]\s?', '', line)
+        out.append(line)
     return '\n'.join(out).strip()
 
 

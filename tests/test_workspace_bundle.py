@@ -91,7 +91,8 @@ def test_write_bundle_files_layout(tmp_path):
 def test_cli_import_validate_status_verify_export(tmp_path):
     root = tmp_path / 'cli'
     env = {'PYTHONPATH': str(ROOT / 'src')}
-    run = lambda *args: subprocess.run([sys.executable, '-m', 'charon.workspace', *args], capture_output=True, text=True, env=env, cwd=ROOT)
+    def run(*args):
+        return subprocess.run([sys.executable, '-m', 'charon.workspace', *args], capture_output=True, text=True, env=env, cwd=ROOT)
     r = run('import', '--root', str(root), '--bundle', str(FIXTURE))
     assert r.returncode == 0, r.stderr
     assert '31 events' in r.stdout and "'ok': True" in r.stdout
@@ -105,6 +106,8 @@ def test_cli_import_validate_status_verify_export(tmp_path):
     r = run('export', '--root', str(root), '--bundle', str(out))
     assert r.returncode == 0 and validate_bundle(json.loads(out.read_text())) == []
     bad = tmp_path / 'bad.json'
-    b = read_bundle(FIXTURE); b['tasks'][0]['status'] = 'nope'; bad.write_text(json.dumps(b))
+    b = read_bundle(FIXTURE)
+    b['tasks'][0]['status'] = 'nope'
+    bad.write_text(json.dumps(b))
     r = run('validate', '--bundle', str(bad))
     assert r.returncode == 2 and 'error(s)' in r.stdout

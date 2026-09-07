@@ -16,7 +16,7 @@ CONTRACT = ROOT / 'docs' / 'contracts' / 'overseer-tools.json'
 
 def _run(lines: list[dict | str], *extra_args: str, cwd: Path | None = None, timeout: float = 60.0) -> list[dict]:
     """Feed request lines to a fresh server process; return the parsed response lines."""
-    payload = '\n'.join(l if isinstance(l, str) else json.dumps(l) for l in lines) + '\n'
+    payload = '\n'.join(line if isinstance(line, str) else json.dumps(line) for line in lines) + '\n'
     env = dict(os.environ)
     env['PYTHONPATH'] = str(SRC) + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
     env['CHARON_EMBED_BACKEND'] = 'local'

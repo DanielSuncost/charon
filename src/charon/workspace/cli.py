@@ -78,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         w = summarize_work(p)
         print(f"workspace {p['workspace']['id']} ({p['workspace']['title']}) revision {p['workspace']['revision']}")
         print(f"work items: {w['total']} total, {w['done']} done, {w['active']} active, {w['blocked']} blocked; tasks active: {w['tasks_active']}")
-        print(f"sessions: {len(p['sessions'])}; leases live: {sum(1 for l in p['leases'] if l['live'])}; "
+        print(f"sessions: {len(p['sessions'])}; leases live: {sum(1 for lease in p['leases'] if lease['live'])}; "
               f"gates open: {sum(1 for g in p['gates'] if g['status'] == 'open')}; events: {p['counts']['events']}")
         return 0
     if args.command == 'verify':

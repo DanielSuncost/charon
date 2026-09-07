@@ -5,6 +5,8 @@ import os
 import subprocess
 import sys
 
+import pytest
+
 from charon.conversation.conversation_runtime import enqueue_overseer_cycle
 from charon.workspace import cycle as C
 from charon.workspace.store import WorkspaceStore
@@ -20,9 +22,15 @@ def _read_jsonl(path: Path):
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-# JSON-only persistence: the enqueue helper runs in this process and would otherwise hold the
-# SQLite mirror open, making every write in the loop subprocess wait out the busy timeout.
-os.environ['CHARON_NO_SQLITE'] = '1'
+@pytest.fixture(autouse=True)
+def _json_only_persistence(monkeypatch):
+    """JSON-only persistence: the enqueue helper runs in this process and
+    would otherwise hold the SQLite mirror open, making every write in the
+    loop subprocess wait out the busy timeout. Scoped via monkeypatch (not
+    a bare module-level os.environ assignment) so it reverts after each
+    test instead of leaking CHARON_NO_SQLITE=1 into every other test that
+    runs later in the same pytest process."""
+    monkeypatch.setenv('CHARON_NO_SQLITE', '1')
 
 
 def _run_loop(state_dir: Path, stop_file: Path, max_cycles: int = 2):
@@ -78,7 +86,7 @@ def test_loop_runs_overseer_cycle_delivers_to_agent_and_recurs(tmp_path):
     fresh = WorkspaceStore.open(root, workspace_id='workspace.charon.ws1', replica_id='replica.charon.loop')
     cyc = [e for e in fresh.events if e['event_type'] == 'cycle.started']
     assert len(cyc) == 1 and cyc[0]['replica_id'] == 'replica.charon.loop' and cyc[0]['payload']['cycle'] == 1
-    assert any('decided by user: yes' in l for l in cyc[0]['payload']['lines'])
+    assert any('decided by user: yes' in line for line in cyc[0]['payload']['lines'])
     assert fresh.verify_chain('replica.charon.loop')['ok']
     assert fresh.get_extension(C.EXT_CYCLE_COUNT) == 1
 

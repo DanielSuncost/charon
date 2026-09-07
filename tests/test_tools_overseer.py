@@ -213,7 +213,7 @@ def test_checkpoint_releases_leases_and_never_completes_the_item(env):
                  changed_paths=['src-tauri/src/hub.rs'], validation=[{'command': 'cargo test', 'exit_code': 0}])
     assert r['status'] == 'succeeded' and 'unchanged' in r['note']
     st = env.store()
-    assert all(l['status'] != 'active' for l in st.list('lease'))
+    assert all(lease['status'] != 'active' for lease in st.list('lease'))
     assert st.get('work_item', wi['id'])['status'] == 'active'
     assert st.get('session', BUILDER)['extensions']['active_task_id'] is None
     rejects(lambda: env.call('acheron_checkpoint', task_id=d['task_id'], result='succeeded', summary='again'), 'already succeeded')
@@ -317,7 +317,7 @@ def test_rate_limit_and_journal(env, monkeypatch):
         env.call('acheron_work_create', kind='task', title=f'item {i}')
     rejects(lambda: env.call('acheron_work_create', kind='task', title='one too many'), 'rate limit')
     env.call('acheron_fleet')  # reads still work
-    j = [json.loads(l) for l in (env.root / 'journal.jsonl').read_text().splitlines()]
+    j = [json.loads(line) for line in (env.root / 'journal.jsonl').read_text().splitlines()]
     assert any(x['name'] == 'acheron_work_create' and not x['ok'] for x in j) and j[-1]['name'] == 'acheron_fleet'
 
 

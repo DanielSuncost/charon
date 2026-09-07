@@ -154,7 +154,7 @@ def collect_events(store, since_seq: int | dict[str, int] | None = None, *, tran
                 lines.append({'at': _now_ms(now), 'kind': 'error', 'text': f'{name}{tag}: error'})
             elif status == 'detached' and before not in (None, 'detached', 'starting'):
                 lines.append({'at': _now_ms(now), 'kind': 'detached', 'text': f'{name}{tag}: session detached/gone'})
-    lines.sort(key=lambda l: l['at'])
+    lines.sort(key=lambda entry: entry['at'])
     return lines, new_cursor, statuses
 
 
@@ -230,7 +230,7 @@ def build_digest(store, cycle: int, workspace_name: str, lines: list[dict], now:
     when = datetime.fromtimestamp(now_ms / 1000.0).strftime('%H:%M')
     head = (f'[acheron cycle {cycle} · {when} · workspace {workspace_name} · {active} active task{"" if active == 1 else "s"}'
             f' · {gates} gate{"" if gates == 1 else "s"} open]')
-    body = '\n'.join(f'- {l["text"]} ({time_ago(now_ms - float(l.get("at") or now_ms))})' for l in lines) if lines else '- (no new events)'
+    body = '\n'.join(f'- {entry["text"]} ({time_ago(now_ms - float(entry.get("at") or now_ms))})' for entry in lines) if lines else '- (no new events)'
     return f'{head}\n{body}\nRun a cycle.'
 
 
@@ -251,7 +251,7 @@ def run_cycle(store, *, deliver: Callable[[str], bool], transport: SessionTransp
     now_ms = _now_ms(now)
     cursor = store.get_extension(EXT_CURSOR) or {}
     lines, new_cursor, statuses = collect_events(store, cursor, transport=transport, now=now)
-    texts = [l['text'] for l in lines]
+    texts = [entry['text'] for entry in lines]
     cycle = int(store.get_extension(EXT_CYCLE_COUNT) or 0) + 1
     base = {'delivered': False, 'held': None, 'cycle': cycle - 1, 'lines': texts, 'text': None}
 

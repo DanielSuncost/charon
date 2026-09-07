@@ -62,12 +62,12 @@ def build_projection(store: 'WorkspaceStore') -> dict[str, Any]:
     sort_tree(roots)
     now = store.now()
     leases = []
-    for l in store.list('lease'):
-        expires = parse_iso_ms(l.get('expires_at'))
-        leases.append({'id': l['id'], 'status': l.get('status'), 'mode': l.get('mode'), 'resource': l.get('resource'),
-                       'owner_task_id': l.get('owner_task_id'), 'owner_session_id': l.get('owner_session_id'),
-                       'fencing_token': l.get('fencing_token'), 'acquired_at': l.get('acquired_at'), 'expires_at': l.get('expires_at'),
-                       'live': l.get('status') == 'active' and expires is not None and expires > now})
+    for lease in store.list('lease'):
+        expires = parse_iso_ms(lease.get('expires_at'))
+        leases.append({'id': lease['id'], 'status': lease.get('status'), 'mode': lease.get('mode'), 'resource': lease.get('resource'),
+                       'owner_task_id': lease.get('owner_task_id'), 'owner_session_id': lease.get('owner_session_id'),
+                       'fencing_token': lease.get('fencing_token'), 'acquired_at': lease.get('acquired_at'), 'expires_at': lease.get('expires_at'),
+                       'live': lease.get('status') == 'active' and expires is not None and expires > now})
     gates = sorted((clone(g) for g in store.list('gate')),
                    key=lambda g: (0 if g.get('status') == 'open' else 1, _desc(g.get('created_at'))))
     proposals = sorted((clone(p) for p in store.list('proposal')),
@@ -174,7 +174,7 @@ def render_status_md(store: 'WorkspaceStore', *, projection: dict[str, Any] | No
                           and (parse_iso_ms(t.get('completed_at') or t.get('updated_at')) or 0) > day)
     done_7d = sum(1 for i in items if i.get('status') == 'done' and (parse_iso_ms(i.get('updated_at')) or 0) > week)
     open_gates = [g for g in p.get('gates') or [] if g.get('status') == 'open']
-    active_leases = [l for l in p.get('leases') or [] if l.get('status') == 'active']
+    active_leases = [lease for lease in p.get('leases') or [] if lease.get('status') == 'active']
     staffing = '\n'.join(
         f"- **{_session_label(s)}** ({s.get('agent') or s.get('kind')}{', overseer' if s.get('role') == 'overseer' else ''}) — "
         f"{s.get('acheron_status') or s.get('status') or '?'}{f' · task {s['active_task_id']}' if s.get('active_task_id') else ''}"
@@ -195,8 +195,8 @@ def render_status_md(store: 'WorkspaceStore', *, projection: dict[str, Any] | No
     division = '\n'.join(division_lines) or '- (no tasks dispatched yet)'
     goals = render_goals(p.get('work_items') or [])
     risks = [f'- {r}' for r in report.get('risks') or []]
-    risks += [f"- expired lease on {(l.get('resource') or {}).get('selector')} ({l.get('owner_session_id')})"
-              for l in active_leases if (parse_iso_ms(l.get('expires_at')) or 0) < now]
+    risks += [f"- expired lease on {(lease.get('resource') or {}).get('selector')} ({lease.get('owner_session_id')})"
+              for lease in active_leases if (parse_iso_ms(lease.get('expires_at')) or 0) < now]
     risks += [f"- {_session_label(s)} is in error state" for s in sessions if (s.get('acheron_status') or s.get('status')) in ('error', 'failed')]
     risks += [f"- open gate ({g.get('kind')}): {g.get('question')}" for g in open_gates]
     summary = report.get('summary') or '_No report yet._'

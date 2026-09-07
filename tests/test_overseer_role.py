@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from charon.agents import specialists
 from charon.workspace.overseer_skill import install_overseer_skill, OVERSEER_SKILL_MD, skill_path

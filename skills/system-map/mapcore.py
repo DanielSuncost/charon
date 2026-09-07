@@ -115,7 +115,7 @@ def check_shape(m) -> list[str]:
                 str_arr(c.get('code'), f'{w}.code')
             str_arr(c.get('entrypoints'), f'{w}.entrypoints')
             str_arr(c.get('depends_on'), f'{w}.depends_on',
-                    lambda x, j: None if SLUG_RE.match(x) else err(f'{w}.depends_on[{j}] must be a slug'))
+                    lambda x, j, w=w: None if SLUG_RE.match(x) else err(f'{w}.depends_on[{j}] must be a slug'))
             dep = c.get('depends_on')
             if isinstance(dep, list) and len(set(dep)) != len(dep):
                 err(f'{w}.depends_on has duplicates')

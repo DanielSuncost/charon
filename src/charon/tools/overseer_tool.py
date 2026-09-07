@@ -30,7 +30,7 @@ from charon.workspace import (
     evaluate_send_policy, evaluate_spawn_policy, redact, sha256_hex,
 )
 from charon.workspace.records import slugify, unmet_required_criteria
-from charon.workspace.projections import flatten_tree, summarize_work
+from charon.workspace.projections import flatten_tree
 
 VERSION = '0.1.0'
 MAX_OPEN_QUESTIONS = 3
@@ -486,7 +486,7 @@ def h_dispatch(ctx: ToolContext, store: WorkspaceStore, a: dict[str, Any]) -> di
                        payload={'session_id': sid, 'task_id': task_id, 'work_item_id': wi['id'], 'content_digest': prompt_art['digest']['value'],
                                 'content_head': message[:200], 'via': via, 'branch_label': 'dispatch', 'forced': bool(a.get('force')),
                                 **({'forced_over': forced_over} if forced_over else {})})
-    return {'task_id': task_id, 'run_id': run['id'], 'manifest_id': manifest['id'], 'lease_ids': [l['id'] for l in leases],
+    return {'task_id': task_id, 'run_id': run['id'], 'manifest_id': manifest['id'], 'lease_ids': [lease['id'] for lease in leases],
             'attempt': attempt, 'sent_via': via, 'session': sid}
 
 
@@ -593,13 +593,13 @@ def h_evidence_attach(ctx: ToolContext, store: WorkspaceStore, a: dict[str, Any]
 
 
 def h_lease_heartbeat(ctx: ToolContext, store: WorkspaceStore, a: dict[str, Any]) -> dict[str, Any]:
-    l = store.lease_heartbeat(a.get('lease_id') or '')
-    return {'lease_id': l['id'], 'expires_at': l['expires_at']}
+    lease = store.lease_heartbeat(a.get('lease_id') or '')
+    return {'lease_id': lease['id'], 'expires_at': lease['expires_at']}
 
 
 def h_lease_release(ctx: ToolContext, store: WorkspaceStore, a: dict[str, Any]) -> dict[str, Any]:
-    l = store.lease_release(a.get('lease_id') or '', a.get('reason') or 'released by overseer', actor=actor_for(ctx))
-    return {'lease_id': l['id'], 'status': l['status']}
+    lease = store.lease_release(a.get('lease_id') or '', a.get('reason') or 'released by overseer', actor=actor_for(ctx))
+    return {'lease_id': lease['id'], 'status': lease['status']}
 
 
 def h_spawn(ctx: ToolContext, store: WorkspaceStore, a: dict[str, Any]) -> dict[str, Any]:

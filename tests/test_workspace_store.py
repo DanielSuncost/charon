@@ -32,7 +32,7 @@ def _open(root: Path, clock: Clock | None = None, replica: str = 'replica.test.a
 
 def _events(root: Path, replica: str = 'replica.test.a') -> list[dict]:
     path = root / 'events' / f'{replica}.jsonl'
-    return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
 def _item(ws: WorkspaceStore, **extra) -> dict:
@@ -232,7 +232,7 @@ def test_event_chain_links_and_tamper_detection(tmp_path):
     ws.append_event('cycle.report', actor=OV, payload={'summary': 'fine', 'health': 'green'})
     events = _events(tmp_path)
     assert events[0]['previous_digest'] is None
-    for prev, cur in zip(events, events[1:]):
+    for prev, cur in zip(events, events[1:], strict=False):
         assert cur['previous_digest'] == prev['digest']
         assert cur['replica_sequence'] == prev['replica_sequence'] + 1
     for e in events:
@@ -241,7 +241,8 @@ def test_event_chain_links_and_tamper_detection(tmp_path):
     # tamper with a payload on disk
     path = tmp_path / 'events' / 'replica.test.a.jsonl'
     lines = path.read_text().splitlines()
-    tampered = json.loads(lines[1]); tampered['payload']['title'] = 'evil'
+    tampered = json.loads(lines[1])
+    tampered['payload']['title'] = 'evil'
     lines[1] = json.dumps(tampered, ensure_ascii=False)
     path.write_text('\n'.join(lines) + '\n')
     result = ws.verify_chain()
@@ -306,7 +307,8 @@ def test_lease_overlap_rules_and_conflict_event(tmp_path):
     ok = ws.lease_acquire(task_id=t2['id'], scopes=[{'selector': 'src/hubble.rs'}])
     assert ok[0]['status'] == 'active' and ok[0]['fencing_token'] == 1
     # shared + shared coexist; exclusive vs shared conflicts
-    t3 = _task(ws, wi, 'session.d'); t4 = _task(ws, wi, 'session.e')
+    t3 = _task(ws, wi, 'session.d')
+    t4 = _task(ws, wi, 'session.e')
     ws.lease_acquire(task_id=t3['id'], scopes=[{'selector': 'docs/plan.md'}], mode='shared')
     ws.lease_acquire(task_id=t4['id'], scopes=[{'selector': 'docs/plan.md'}], mode='shared')
     with pytest.raises(LeaseConflict):
@@ -322,7 +324,8 @@ def test_fencing_tokens_heartbeat_expire_release(tmp_path):
     clock = Clock()
     ws = _open(tmp_path, clock)
     wi = _item(ws)
-    t1 = _task(ws, wi, 'session.b'); t2 = _task(ws, wi, 'session.c')
+    t1 = _task(ws, wi, 'session.b')
+    t2 = _task(ws, wi, 'session.c')
     l1 = ws.lease_acquire(task_id=t1['id'], scopes=[{'selector': 'a.rs'}], ttl_ms=5_000)[0]
     assert l1['fencing_token'] == 1
     hb = ws.lease_heartbeat(l1['id'], ttl_ms=5_000)
@@ -332,7 +335,7 @@ def test_fencing_tokens_heartbeat_expire_release(tmp_path):
     assert len(ws.events) == events_before  # liveness is not an event
     clock.t += 60 * 60 * 1000  # past expiry
     expired = ws.expire_leases()
-    assert [l['id'] for l in expired] == [l1['id']] and ws.get('lease', l1['id'])['status'] == 'expired'
+    assert [lease['id'] for lease in expired] == [l1['id']] and ws.get('lease', l1['id'])['status'] == 'expired'
     assert ws.get('lease', l1['id'])['release_reason'] == 'ttl elapsed'
     with pytest.raises(IllegalTransition):
         ws.lease_heartbeat(l1['id'])

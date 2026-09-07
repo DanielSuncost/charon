@@ -80,7 +80,7 @@ def test_collect_events_turns_workspace_events_into_acheron_worded_lines(tmp_pat
     store = _store(tmp_path)
     wi, task = _populate(store)
     lines, cursor, statuses = C.collect_events(store, None)
-    texts = [l['text'] for l in lines]
+    texts = [entry['text'] for entry in lines]
     assert f'work item {wi["id"]} → ready' in texts
     assert f'work item {wi["id"]} → active' in texts
     assert 'lease conflict: Tester vs Builder on src/hub.rs' in texts
@@ -107,7 +107,7 @@ def test_collect_events_observes_session_status_changes_through_the_transport(tm
         {'id': 'session.ov', 'callsign': 'Overseer', 'status': 'running', 'role': 'overseer'},
     ], screens={'session.b1': 'Wrote docs/design.md sk-ant-abcdefghijklmnopqrstuvwxyz1234 ✓ Done.', 'session.t1': 'Do you want to proceed? (y/n)'})
     lines, cursor, statuses = C.collect_events(store, {'replica.charon.test': store.seq}, transport=tr)
-    texts = [l['text'] for l in lines]
+    texts = [entry['text'] for entry in lines]
     assert 'Builder: finished — "Wrote docs/design.md sk-ant…[redacted] ✓ Done."' in texts
     assert 'Tester: waiting for approval — "Do you want to proceed? (y/n)"' in texts
     assert not any('Overseer' in t for t in texts)

@@ -272,7 +272,9 @@ def apply_defaults(type_: str, rec: dict[str, Any], actor: dict[str, Any], *, re
                    workspace_revision: int, now_ms_value: float, new_id: Callable[[], str]) -> None:
     ts = rec['created_at']
     if type_ == 'work_item':
-        _setdefault(rec, 'kind', 'task'); _setdefault(rec, 'status', 'backlog'); _setdefault(rec, 'priority', 'normal')
+        _setdefault(rec, 'kind', 'task')
+        _setdefault(rec, 'status', 'backlog')
+        _setdefault(rec, 'priority', 'normal')
         _setdefault(rec, 'owner', clone(actor))
         for key in ('dependency_ids', 'blocked_by_ids', 'assignees', 'run_ids'):
             _setdefault(rec, key, [])
@@ -280,56 +282,91 @@ def apply_defaults(type_: str, rec: dict[str, Any], actor: dict[str, Any], *, re
         rec['acceptance_criteria'] = normalize_criteria(rec.get('acceptance_criteria'), [], new_id)
         _setdefault(rec, 'description', '')
     elif type_ == 'run':
-        _setdefault(rec, 'workflow_id', 'workflow.acheron.dispatch'); _setdefault(rec, 'workflow_revision', '1')
-        _setdefault(rec, 'status', 'running'); _setdefault(rec, 'work_item_ids', []); _setdefault(rec, 'task_ids', [])
-        _setdefault(rec, 'initiated_by', clone(actor)); _setdefault(rec, 'started_at', ts)
-        _setdefault(rec, 'event_cursors', {replica_id: seq}); _setdefault(rec, 'metrics', {})
+        _setdefault(rec, 'workflow_id', 'workflow.acheron.dispatch')
+        _setdefault(rec, 'workflow_revision', '1')
+        _setdefault(rec, 'status', 'running')
+        _setdefault(rec, 'work_item_ids', [])
+        _setdefault(rec, 'task_ids', [])
+        _setdefault(rec, 'initiated_by', clone(actor))
+        _setdefault(rec, 'started_at', ts)
+        _setdefault(rec, 'event_cursors', {replica_id: seq})
+        _setdefault(rec, 'metrics', {})
     elif type_ == 'task':
-        _setdefault(rec, 'status', 'claimed'); _setdefault(rec, 'owner', clone(actor)); _setdefault(rec, 'attempt', 1)
+        _setdefault(rec, 'status', 'claimed')
+        _setdefault(rec, 'owner', clone(actor))
+        _setdefault(rec, 'attempt', 1)
         _setdefault(rec, 'max_attempts', 3)
         rec['scopes'] = [normalize_scope(s) for s in (rec.get('scopes') or [])]
         for key in ('dependency_task_ids', 'lease_ids', 'evidence_artifact_ids'):
             _setdefault(rec, key, [])
-        _setdefault(rec, 'started_at', ts); _setdefault(rec, 'idempotency_key', rec['id'])
+        _setdefault(rec, 'started_at', ts)
+        _setdefault(rec, 'idempotency_key', rec['id'])
     elif type_ == 'lease':
-        _setdefault(rec, 'mode', 'exclusive'); _setdefault(rec, 'status', 'active'); _setdefault(rec, 'acquired_at', ts)
-        _setdefault(rec, 'heartbeat_at', ts); _setdefault(rec, 'expires_at', iso_from_ms(now_ms_value + DEFAULT_LEASE_TTL_MS))
+        _setdefault(rec, 'mode', 'exclusive')
+        _setdefault(rec, 'status', 'active')
+        _setdefault(rec, 'acquired_at', ts)
+        _setdefault(rec, 'heartbeat_at', ts)
+        _setdefault(rec, 'expires_at', iso_from_ms(now_ms_value + DEFAULT_LEASE_TTL_MS))
         if rec.get('resource'):
             rec['resource'] = normalize_scope(rec['resource'])
     elif type_ == 'session':
-        _setdefault(rec, 'kind', 'interactive'); _setdefault(rec, 'status', 'starting'); _setdefault(rec, 'actor', clone(actor))
-        _setdefault(rec, 'task_ids', []); _setdefault(rec, 'started_at', ts); _setdefault(rec, 'event_cursors', {})
+        _setdefault(rec, 'kind', 'interactive')
+        _setdefault(rec, 'status', 'starting')
+        _setdefault(rec, 'actor', clone(actor))
+        _setdefault(rec, 'task_ids', [])
+        _setdefault(rec, 'started_at', ts)
+        _setdefault(rec, 'event_cursors', {})
         _setdefault(rec, 'replica_id', replica_id)
     elif type_ == 'artifact':
-        _setdefault(rec, 'kind', 'document'); _setdefault(rec, 'media_type', 'text/plain'); _setdefault(rec, 'immutable', True)
-        _setdefault(rec, 'status', 'available'); _setdefault(rec, 'produced_by', clone(actor)); _setdefault(rec, 'metadata', {})
+        _setdefault(rec, 'kind', 'document')
+        _setdefault(rec, 'media_type', 'text/plain')
+        _setdefault(rec, 'immutable', True)
+        _setdefault(rec, 'status', 'available')
+        _setdefault(rec, 'produced_by', clone(actor))
+        _setdefault(rec, 'metadata', {})
     elif type_ == 'context_manifest':
         _setdefault(rec, 'compiler', {'name': 'charon-overseer', 'version': KERNEL_VERSION})
         _setdefault(rec, 'workspace_revision', workspace_revision or 1)
-        _setdefault(rec, 'event_cursors', {replica_id: seq}); _setdefault(rec, 'built_at', ts); _setdefault(rec, 'query', {})
+        _setdefault(rec, 'event_cursors', {replica_id: seq})
+        _setdefault(rec, 'built_at', ts)
+        _setdefault(rec, 'query', {})
         _setdefault(rec, 'budget', {'unit': 'byte', 'limit': 0, 'used': 0})
         for key in ('policy_ids', 'entries', 'exclusions'):
             _setdefault(rec, key, [])
         _setdefault(rec, 'digest', digest_of(canonical_json(rec['entries'])))
     elif type_ == 'policy':
-        _setdefault(rec, 'version', '1'); _setdefault(rec, 'status', 'active'); _setdefault(rec, 'priority', 100)
-        _setdefault(rec, 'effect', 'allow'); _setdefault(rec, 'actions', []); _setdefault(rec, 'subject_selectors', ['*'])
+        _setdefault(rec, 'version', '1')
+        _setdefault(rec, 'status', 'active')
+        _setdefault(rec, 'priority', 100)
+        _setdefault(rec, 'effect', 'allow')
+        _setdefault(rec, 'actions', [])
+        _setdefault(rec, 'subject_selectors', ['*'])
         rec['resource_selectors'] = [normalize_scope(s) for s in (rec.get('resource_selectors') or [])]
-        _setdefault(rec, 'conditions', {}); _setdefault(rec, 'rationale', rec.get('name') or 'policy')
+        _setdefault(rec, 'conditions', {})
+        _setdefault(rec, 'rationale', rec.get('name') or 'policy')
     elif type_ == 'knowledge_item':
-        _setdefault(rec, 'kind', 'note'); _setdefault(rec, 'status', 'proposed'); _setdefault(rec, 'confidence', 0.5)
+        _setdefault(rec, 'kind', 'note')
+        _setdefault(rec, 'status', 'proposed')
+        _setdefault(rec, 'confidence', 0.5)
         _setdefault(rec, 'review', {'required': True, 'status': 'pending'})
         for key in ('scopes', 'evidence_artifact_ids', 'tags'):
             _setdefault(rec, key, [])
         _setdefault(rec, 'body', rec.get('title'))
     elif type_ == 'replica':
-        _setdefault(rec, 'kind', 'local'); _setdefault(rec, 'trust', 'trusted'); _setdefault(rec, 'cursors', {})
-        _setdefault(rec, 'capabilities', []); _setdefault(rec, 'policy_ids', [])
+        _setdefault(rec, 'kind', 'local')
+        _setdefault(rec, 'trust', 'trusted')
+        _setdefault(rec, 'cursors', {})
+        _setdefault(rec, 'capabilities', [])
+        _setdefault(rec, 'policy_ids', [])
     elif type_ == 'proposal':
-        _setdefault(rec, 'status', 'proposed'); _setdefault(rec, 'alternatives', []); _setdefault(rec, 'refs', [])
+        _setdefault(rec, 'status', 'proposed')
+        _setdefault(rec, 'alternatives', [])
+        _setdefault(rec, 'refs', [])
         _setdefault(rec, 'proposed_by', clone(actor))
     elif type_ == 'gate':
-        _setdefault(rec, 'status', 'open'); _setdefault(rec, 'options', []); _setdefault(rec, 'refs', [])
+        _setdefault(rec, 'status', 'open')
+        _setdefault(rec, 'options', [])
+        _setdefault(rec, 'refs', [])
         _setdefault(rec, 'opened_by', clone(actor))
         if 'answer' not in rec:
             rec['answer'] = None
@@ -347,32 +384,51 @@ def validate_record(type_: str, rec: dict[str, Any]) -> None:
             raise ValidationError(f'{type_}.{key} "{rec.get(key)}" not in {"|".join(allowed)}')
 
     if type_ == 'work_item':
-        need('title'); one_of('kind', WORK_ITEM_KINDS); one_of('status', FSM['work_item'].keys()); one_of('priority', PRIORITIES)
+        need('title')
+        one_of('kind', WORK_ITEM_KINDS)
+        one_of('status', FSM['work_item'].keys())
+        one_of('priority', PRIORITIES)
     elif type_ == 'task':
-        need('work_item_id'); need('run_id'); need('title'); need('instruction'); one_of('status', FSM['task'].keys())
+        need('work_item_id')
+        need('run_id')
+        need('title')
+        need('instruction')
+        one_of('status', FSM['task'].keys())
     elif type_ == 'run':
         if not rec.get('work_item_ids'):
             raise ValidationError('run.work_item_ids must not be empty')
     elif type_ == 'lease':
-        need('resource'); need('owner_task_id'); need('fencing_token'); one_of('mode', ['shared', 'exclusive'])
+        need('resource')
+        need('owner_task_id')
+        need('fencing_token')
+        one_of('mode', ['shared', 'exclusive'])
     elif type_ == 'session':
-        one_of('status', SESSION_STATUSES); one_of('kind', SESSION_KINDS)
+        one_of('status', SESSION_STATUSES)
+        one_of('kind', SESSION_KINDS)
     elif type_ == 'artifact':
-        need('title'); need('locator'); need('digest')
+        need('title')
+        need('locator')
+        need('digest')
     elif type_ == 'context_manifest':
         need('task_id')
     elif type_ == 'policy':
-        need('name'); one_of('effect', ['allow', 'deny', 'require_approval'])
+        need('name')
+        one_of('effect', ['allow', 'deny', 'require_approval'])
         if not rec.get('actions'):
             raise ValidationError('policy.actions must not be empty')
     elif type_ == 'knowledge_item':
-        need('title'); need('body')
+        need('title')
+        need('body')
     elif type_ == 'replica':
-        need('name'); need('identity')
+        need('name')
+        need('identity')
     elif type_ == 'proposal':
-        need('title'); need('rationale'); one_of('kind', PROPOSAL_KINDS)
+        need('title')
+        need('rationale')
+        one_of('kind', PROPOSAL_KINDS)
     elif type_ == 'gate':
-        need('question'); one_of('kind', GATE_KINDS)
+        need('question')
+        one_of('kind', GATE_KINDS)
 
 
 def pick(obj: dict[str, Any], keys: Iterable[str]) -> dict[str, Any]:
