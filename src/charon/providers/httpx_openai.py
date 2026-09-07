@@ -83,6 +83,121 @@ from charon.providers import Message, ModelInfo, StreamDelta, ToolCall  # noqa: 
 from charon.providers.http_client import AsyncClientPool  # noqa: E402
 from charon.providers.http_errors import exception_error, http_error  # noqa: E402
 
+try:
+    from charon.infra.diagnostics import record as _diag
+except Exception:  # diagnostics is best-effort and must never block import
+    def _diag(*args, **kwargs):
+        return None
+
+
+def _try_lenient_json_repair(raw: str) -> dict | None:
+    """Best-effort recovery for the single most common local-model tool-call
+    failure: the completion got cut off (max_tokens, or the model just
+    trailed off) mid-argument, so the JSON is truncated rather than wrong
+    in some other way. Closes an unterminated string and pads the missing
+    closing brackets/braces, in order, then retries the parse — never
+    invents field values, only closes what's already open. Returns None
+    (never raises) if the patched text still isn't a valid JSON object."""
+    text = raw.strip()
+    if not text:
+        return None
+    in_string = False
+    escaped = False
+    openers: list[str] = []
+    for ch in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == '\\':
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch in '{[':
+            openers.append(ch)
+        elif ch in '}]' and openers:
+            openers.pop()
+    patched = text + ('"' if in_string else '')
+    patched += ''.join('}' if ch == '{' else ']' for ch in reversed(openers))
+    try:
+        result = json.loads(patched)
+    except json.JSONDecodeError:
+        return None
+    return result if isinstance(result, dict) else None
+
+
+async def _repair_arguments_via_constrained_decoding(
+    client: httpx.AsyncClient, base_url: str, headers: dict, model_id: str,
+    tool_name: str, schema: dict, raw_arguments: str,
+) -> dict | None:
+    """Ask the same model to re-emit just this tool call's arguments,
+    grammar-constrained to its schema (OpenAI-compatible response_format:
+    json_schema — real, honored by LM Studio/llama.cpp's GBNF grammar,
+    vLLM's guided decoding, and OpenAI's own Structured Outputs). This is
+    the actual fix for output the truncation repair above can't recover
+    from local models with unreliable native tool-calling. Returns None
+    (never raises) if the server doesn't support constrained decoding, or
+    the retry still doesn't parse as an object — callers keep today's {}
+    fallback either way, so this can only make things better."""
+    body = {
+        'model': model_id,
+        'messages': [
+            {'role': 'system', 'content': 'Output ONLY a JSON object matching the given schema — no prose, no code fences.'},
+            {'role': 'user', 'content': (
+                f"Re-emit valid arguments for the tool `{tool_name}`. "
+                f"The previous attempt was not valid JSON: {raw_arguments[:2000]}"
+            )},
+        ],
+        'max_tokens': 2048,
+        'stream': False,
+        'response_format': {
+            'type': 'json_schema',
+            'json_schema': {'name': tool_name, 'schema': schema, 'strict': True},
+        },
+    }
+    try:
+        resp = await client.post(f'{base_url}/chat/completions', json=body, headers=headers, timeout=30.0)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        content = ((data.get('choices') or [{}])[0].get('message') or {}).get('content', '')
+        result = json.loads(content) if content else None
+    except Exception as e:
+        _diag('httpx_openai', 'constrained-decoding tool-argument repair failed', error=e, tool_name=tool_name)
+        return None
+    return result if isinstance(result, dict) else None
+
+
+async def _finalize_tool_call_arguments(
+    raw_arguments: str, tool_name: str, schema: dict | None,
+    *, client: httpx.AsyncClient, base_url: str, headers: dict, model_id: str,
+) -> dict:
+    """json.loads, then lenient truncation repair, then a grammar-
+    constrained retry against the same server — in that order, each only
+    attempted if the previous one failed. Never raises; {} is still the
+    final fallback, exactly like before this existed."""
+    if not raw_arguments:
+        return {}
+    try:
+        return json.loads(raw_arguments)
+    except json.JSONDecodeError:
+        pass
+    repaired = _try_lenient_json_repair(raw_arguments)
+    if repaired is not None:
+        _diag('httpx_openai', 'tool-call arguments recovered via truncation repair', tool_name=tool_name)
+        return repaired
+    if schema:
+        constrained = await _repair_arguments_via_constrained_decoding(
+            client, base_url, headers, model_id, tool_name, schema, raw_arguments,
+        )
+        if constrained is not None:
+            _diag('httpx_openai', 'tool-call arguments recovered via constrained-decoding retry', tool_name=tool_name)
+            return constrained
+    _diag('httpx_openai', 'tool-call arguments unrecoverable; falling back to {}', tool_name=tool_name, raw_arguments=raw_arguments[:500])
+    return {}
+
 
 class HttpxOpenAIProvider:
     def __init__(
@@ -128,6 +243,7 @@ class HttpxOpenAIProvider:
             'stream_options': {'include_usage': True},
         }
 
+        tool_schemas = _tool_schema_map(tools)
         if tools:
             openai_tools = _convert_tools(tools)
             if openai_tools:
@@ -266,10 +382,10 @@ class HttpxOpenAIProvider:
 
                     # Emit completed tool calls
                     for tc_data in current_tool_calls.values():
-                        try:
-                            args = json.loads(tc_data['arguments']) if tc_data['arguments'] else {}
-                        except json.JSONDecodeError:
-                            args = {}
+                        args = await _finalize_tool_call_arguments(
+                            tc_data['arguments'], tc_data['name'], tool_schemas.get(tc_data['name']),
+                            client=client, base_url=self._base_url, headers=headers, model_id=model.model_id,
+                        )
                         yield StreamDelta(
                             type='tool_call',
                             tool_call=ToolCall(
@@ -338,6 +454,26 @@ def _convert_messages(messages: list[Message]) -> list[dict[str, Any]]:
             })
 
     return result
+
+
+def _tool_schema_map(tools: list[dict] | None) -> dict[str, dict]:
+    """name -> JSON schema, accepting the same three tool-def shapes
+    _convert_tools does — used to look up the right schema for a
+    constrained-decoding argument repair once we only have the tool's name
+    back from the streamed response."""
+    mapping: dict[str, dict] = {}
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        if 'input_schema' in tool and tool.get('name'):
+            mapping[tool['name']] = tool['input_schema']
+        elif 'function' in tool:
+            fn = tool.get('function') or {}
+            if fn.get('name'):
+                mapping[fn['name']] = fn.get('parameters') or {}
+        elif 'parameters' in tool and tool.get('name'):
+            mapping[tool['name']] = tool['parameters']
+    return mapping
 
 
 def _convert_tools(tools: list[dict]) -> list[dict]:
