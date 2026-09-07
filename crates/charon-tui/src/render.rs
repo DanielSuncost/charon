@@ -51,16 +51,32 @@ pub fn render_border_colored<W: Write>(
 ) -> io::Result<()> {
     let title_color = CtColor::Rgb { r: 212, g: 196, b: 168 };
 
+    let inner_width = area.width as usize;
+    // Clip the title to the box. It used to be written in full while only the
+    // fill was clamped, so a title longer than its pane overflowed the top
+    // border and wrapped the terminal line — which shifted every row below it
+    // and shredded the layout of the whole view. Budget: "╭─ " + title + " " +
+    // at least one fill + "╮".
+    let max_title = inner_width.saturating_sub(4);
+    let title_owned: String = if title.chars().count() > max_title {
+        if max_title == 0 {
+            String::new()
+        } else {
+            title.chars().take(max_title.saturating_sub(1)).chain(std::iter::once('…')).collect()
+        }
+    } else {
+        title.to_string()
+    };
+    let title_width = title_owned.chars().count();
+
     // Top border with brighter title text
     out.queue(cursor::MoveTo(area.x.saturating_sub(1), area.y.saturating_sub(1)))?;
     out.queue(SetForegroundColor(border_color))?;
     write!(out, "╭─ ")?;
     out.queue(SetForegroundColor(title_color))?;
-    write!(out, "{}", title)?;
+    write!(out, "{}", title_owned)?;
     out.queue(SetForegroundColor(border_color))?;
     write!(out, " ")?;
-    let inner_width = area.width as usize;
-    let title_width = title.chars().count();
     // The prefix includes the left corner; leave enough fill for the right
     // corner to land at x + width, aligned with the side and bottom borders.
     let fill_count = inner_width.saturating_sub(3 + title_width);

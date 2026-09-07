@@ -521,7 +521,7 @@ pub(crate) fn ensure_native_self_pane(app: &mut App, server: Option<&NativeSessi
         return Ok(false);
     }
     let idx = app.sessions.panes.len();
-    let (_, _, rects) = compute_grid((idx + 1).max(1), outer_w.saturating_sub(((outer_w as f32) * 0.125) as u16 + 2), outer_h.saturating_sub(2));
+    let (_, _, rects) = compute_grid((idx + 1).max(1), outer_w.saturating_sub(sessions_sidebar_width(outer_w) + 2), outer_h.saturating_sub(2));
     let r = rects.get(idx).copied().unwrap_or(Rect { x: 0, y: 0, width: 80, height: 24 });
     let label = format!("charon-{}", server.name());
     let cell = SessionCell::attach_charon(idx as u64, &label, &socket, r.width.max(1), r.height.max(1))?;
@@ -592,7 +592,7 @@ pub(crate) fn sync_daemon_panes(app: &mut App, outer_w: u16, outer_h: u16) -> io
         let idx = app.sessions.panes.len();
         let (_, _, rects) = compute_grid(
             (idx + 1).max(1),
-            outer_w.saturating_sub(((outer_w as f32) * 0.125) as u16 + 2),
+            outer_w.saturating_sub(sessions_sidebar_width(outer_w) + 2),
             outer_h.saturating_sub(2),
         );
         let r = rects.get(idx).copied().unwrap_or(Rect { x: 0, y: 0, width: 80, height: 24 });
@@ -617,7 +617,7 @@ pub(crate) fn sync_session_panes_from_payload(app: &mut App, outer_w: u16, outer
         return Ok(false);
     }
     let target_total = metas.len().max(1);
-    let (_, _, rects) = compute_grid(target_total, outer_w.saturating_sub(((outer_w as f32) * 0.125) as u16 + 2), outer_h.saturating_sub(2));
+    let (_, _, rects) = compute_grid(target_total, outer_w.saturating_sub(sessions_sidebar_width(outer_w) + 2), outer_h.saturating_sub(2));
     let mut changed = false;
     for meta in metas {
         let composed_title = compose_session_title(&meta);
@@ -767,8 +767,17 @@ pub(crate) fn next_grid_focus(current_pane: usize, visible: &[usize], rects: &[R
     best.map(|(_, pane)| pane)
 }
 
+/// Sidebar width for the F3 grid. A flat 12.5% leaves 8 usable columns on an
+/// 85-column terminal — narrower than the "  ▾ [x] " row prefix itself, so every
+/// label truncated to about two characters. Give it a readable floor, capped at
+/// a third of the screen so the panes still take the majority.
+pub(crate) fn sessions_sidebar_width(w: u16) -> u16 {
+    let want = ((w as f32) * 0.125) as u16;
+    want.max(18).min((w / 3).max(1))
+}
+
 pub(crate) fn session_grid_rects(app: &mut App, outer_w: u16, outer_h: u16) -> Vec<Rect> {
-    let sidebar_w = ((outer_w as f32) * 0.125) as u16;
+    let sidebar_w = sessions_sidebar_width(outer_w);
     let grid_x = 1 + sidebar_w.min(outer_w.saturating_sub(8));
     let grid_w = outer_w.saturating_sub(grid_x + 1);
     let grid_h = outer_h.saturating_sub(2);
@@ -819,7 +828,7 @@ pub(crate) fn relayout_sessions(app: &mut App, outer_w: u16, outer_h: u16) -> io
 }
 
 pub(crate) fn draw_sessions<W: Write>(stdout: &mut W, app: &mut App, rects: &[Rect], force_all: bool, w: u16, h: u16, self_socket_to_hide: Option<&str>) -> io::Result<()> {
-    let sidebar_w = ((w as f32) * 0.125) as u16;
+    let sidebar_w = sessions_sidebar_width(w);
     let agents_area = Rect { x: 1, y: 2, width: sidebar_w.saturating_sub(2), height: (h.saturating_sub(4)) / 2 };
     let projects_area = Rect { x: 1, y: agents_area.y + agents_area.height + 1, width: sidebar_w.saturating_sub(2), height: h.saturating_sub(agents_area.height + 5) };
     render::render_border(stdout, agents_area, "agents", app.sessions.section == SessionsSection::Agents)?;

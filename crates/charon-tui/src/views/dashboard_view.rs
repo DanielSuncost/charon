@@ -25,10 +25,18 @@ pub(crate) fn dashboard_sparkline(points: &[u64]) -> String {
 pub(crate) fn draw_dashboard_panel<W: Write>(stdout: &mut W, area: Rect, title: &str, lines: &[String], focused: bool) -> io::Result<()> {
     render::render_border(stdout, area, title, focused)?;
     let max_lines = area.height as usize;
-    for (i, line) in lines.iter().take(max_lines).enumerate() {
+    // Pad every row to the panel width and paint the rows past the end of the
+    // list too. Writing only the new text left the tail of whatever was longer
+    // before it ("No agent selected." under "Name: charon-01" rendered as
+    // "Name: charon-01ed."), and a list that shrank kept its old rows.
+    for i in 0..max_lines {
         stdout.queue(cursor::MoveTo(area.x, area.y + i as u16))?;
-        let visible: String = line.chars().take(area.width as usize).collect();
-        write!(stdout, "{}", visible)?;
+        let visible: String = lines
+            .get(i)
+            .map(|line| line.chars().take(area.width as usize).collect())
+            .unwrap_or_default();
+        let pad = (area.width as usize).saturating_sub(visible.chars().count());
+        write!(stdout, "{}{}", visible, " ".repeat(pad))?;
     }
     Ok(())
 }
