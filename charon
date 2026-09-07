@@ -58,6 +58,16 @@ case "${1:-}" in
     echo "  charon status                Show current config"
     echo "  charon agents                List agents"
     echo ""
+    echo "Sessions & daemon (handled by the TUI):"
+    echo "  charon --list                List sessions"
+    echo "  charon --daemon-list         List daemon sessions"
+    echo "  charon --daemon-spawn [cmd]  Start a persistent session"
+    echo "  charon --daemon-attach ID    Attach a daemon session"
+    echo "  charon --daemon-respawn ID   Respawn a daemon session"
+    echo "  charon --daemon-upgrade      Swap the binary, keep sessions"
+    echo "  charon --attach NAME         Attach a named session"
+    echo "  charon -- CMD...             Spawn CMD in a session"
+    echo ""
     echo "TUI Controls (Rust TUI):"
     echo "  F1  Chat view"
     echo "  F2  Dashboard"
@@ -69,6 +79,7 @@ esac
 
 # Parse TUI flags (all fall through to TUI launch)
 LAUNCH_TUI=1
+TUI_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --resume=*)
@@ -106,6 +117,15 @@ while [[ $# -gt 0 ]]; do
     --no-tmux)
       export CHARON_NO_TMUX=1
       shift
+      ;;
+    --list|-l|--attach|-a|--daemon-list|--daemon-attach|--daemon-spawn|--daemon-respawn|--daemon-upgrade|--)
+      # Session and daemon control flags are implemented by the Rust TUI
+      # (crates/charon-tui/src/cli.rs). Hand this flag and everything after
+      # it straight through instead of falling into the catch-all below.
+      while [[ $# -gt 0 ]]; do
+        TUI_ARGS+=("$1")
+        shift
+      done
       ;;
     *)
       # Unknown flag — pass through to charon_agents.py
@@ -149,4 +169,4 @@ if [ ! -x "${RUST_TUI_BIN}" ]; then
   exit 1
 fi
 
-exec "${RUST_TUI_BIN}" "$@"
+exec "${RUST_TUI_BIN}" ${TUI_ARGS[@]+"${TUI_ARGS[@]}"}
