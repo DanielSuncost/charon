@@ -1021,18 +1021,22 @@ fn session_info_tokens<'a>(app: &'a App) -> Option<&'a Value> {
 
 fn draw_chat_status_line<W: Write>(stdout: &mut W, y: u16, width: u16, left: &str, right: &str, right_color: style::Color) -> io::Result<()> {
     let total = width as usize;
-    let left_len = left.chars().count();
-    let right_len = right.chars().count();
-    let pad = total.saturating_sub(left_len + right_len).max(1);
+    // `left` was written in full while only `right` was clipped, and pad had a
+    // .max(1) floor — so once left alone reached the terminal width the line
+    // overflowed and wrapped. That is what doubled the footer on narrow panes
+    // ("…PgUp/PgDn scrollhat:0↑ 0↓" over a second copy of the same line).
+    // Clip left, then give the remainder to right, so the row fills exactly.
+    let left_vis: String = left.chars().take(total).collect();
+    let left_len = left_vis.chars().count();
+    let room = total.saturating_sub(left_len);
+    let right_vis: String = if room >= 2 { right.chars().take(room - 1).collect() } else { String::new() };
+    let pad = room.saturating_sub(right_vis.chars().count());
     stdout.queue(cursor::MoveTo(0, y))?;
     stdout.queue(style::SetForegroundColor(style::Color::Rgb { r: 74, g: 74, b: 94 }))?;
-    write!(stdout, "{}", left)?;
+    write!(stdout, "{}", left_vis)?;
     write!(stdout, "{}", " ".repeat(pad))?;
     stdout.queue(style::SetForegroundColor(right_color))?;
-    let right_vis: String = right.chars().take(total.saturating_sub(left_len + pad)).collect();
     write!(stdout, "{}", right_vis)?;
-    let used = left_len + pad + right_vis.chars().count();
-    if used < total { write!(stdout, "{}", " ".repeat(total - used))?; }
     stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
     Ok(())
 }
