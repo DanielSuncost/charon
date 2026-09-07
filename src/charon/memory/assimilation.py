@@ -35,7 +35,8 @@ AGENT_REPOS: dict[str, dict] = {
     'pi-mono': {
         'git_url': 'git@github.com:earendil-works/pi.git',
         'lang': 'typescript',
-        'tools_dir': 'packages/coding-agent/src/tools',
+        # Moved under src/core/ upstream; the old path scanned to zero tools.
+        'tools_dir': 'packages/coding-agent/src/core/tools',
         'skills_dirs': [],
         'commands_file': None,
         'docs': ['README.md', 'packages/coding-agent/CHANGELOG.md'],
@@ -43,7 +44,8 @@ AGENT_REPOS: dict[str, dict] = {
     'openclaw': {
         'git_url': 'git@github.com:openclaw/openclaw.git',
         'lang': 'typescript',
-        'tools_dir': 'src/tools',
+        # Tools live under src/agents/, not src/ directly.
+        'tools_dir': 'src/agents/tools',
         'skills_dirs': ['skills', 'optional-skills'],
         'commands_file': None,
         'docs': ['README.md'],
@@ -51,10 +53,10 @@ AGENT_REPOS: dict[str, dict] = {
     'prime-agent': {
         'git_url': 'git@github.com:PrimeIntellect-ai/prime-agent.git',
         'lang': 'typescript',
-        # Shares its docs/ layout with earendil-works/pi (pi-mono above), so the
-        # tools dir is a guess by convention, not a confirmed path — the generic
-        # scanner degrades to an empty list rather than erroring if it's wrong.
-        'tools_dir': 'packages/coding-agent/src/tools',
+        # Shares its layout with earendil-works/pi (pi-mono above). The guessed
+        # path was wrong and silently scanned to zero; confirmed on disk as
+        # packages/coding-agent/src/core/tools.
+        'tools_dir': 'packages/coding-agent/src/core/tools',
         'skills_dirs': [],
         'commands_file': None,
         'docs': [
@@ -411,6 +413,7 @@ def get_charon_capabilities(charon_root: Path) -> dict:
 async def _provider_query(prompt: str, system: str, state_dir: Path, max_tokens: int = 4096) -> tuple[bool, str]:
     """Call the configured LLM provider (Codex, Claude, etc.) for analysis."""
     try:
+        from charon.providers import Message
         from charon.providers.provider_bridge import create_provider_and_model
         provider, model, ready = create_provider_and_model(state_dir)
         if not ready:
@@ -418,7 +421,10 @@ async def _provider_query(prompt: str, system: str, state_dir: Path, max_tokens:
 
         text_parts = []
         async for delta in provider.stream(
-            messages=[{'role': 'user', 'content': prompt}],
+            # stream() takes Message dataclasses; a raw dict raised
+            # "'dict' object has no attribute 'role'" and silently downgraded
+            # every analysis to the heuristic path.
+            messages=[Message(role='user', content=prompt)],
             model=model,
             system_prompt=system,
             max_tokens=max_tokens,
@@ -659,7 +665,7 @@ def _heuristic_capability_clusters(records: list[dict]) -> list[dict]:
             key = name.split('-')[0]
         else:
             key = name
-        buckets[(r.get('source_agent', '?'), key)].append(r)
+        buckets.setdefault((r.get('source_agent', '?'), key), []).append(r)
 
     clusters = []
     for i, ((source, key), items) in enumerate(sorted(buckets.items()), 1):
