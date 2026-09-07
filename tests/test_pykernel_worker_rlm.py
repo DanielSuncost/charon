@@ -7,6 +7,7 @@ live provider, just going one level deeper into the actual polling logic.
 """
 import json
 import time
+from datetime import datetime, timedelta, timezone
 
 from charon.tools import ToolResult
 from charon.tools import _pykernel_worker
@@ -373,6 +374,53 @@ def test_rlm_returns_still_running_before_hard_timeout(tmp_path, monkeypatch):
     result = mod.rlm('slow thing', poll_interval=0)
 
     assert result == {'status': 'still_running', 'contract_id': 'ctr-8', 'shade_id': 'AG-SLOW'}
+
+
+def test_rlm_returns_stalled_when_contract_goes_quiet(tmp_path, monkeypatch):
+    """A contract stuck at status='running' with no phase update for too
+    long (config.shade_contract_stall_seconds()) means its worker process
+    is almost certainly dead — rlm() should say so distinctly from
+    'still_running' rather than let a caller poll it forever. No deadline
+    is set here at all: staleness detection fires independently of it."""
+    stale_ts = (datetime.now(timezone.utc) - timedelta(seconds=1000)).isoformat()
+
+    def _fake_spawn(params, ctx):
+        return ToolResult(content='ok', details={'contract_id': 'ctr-9'})
+
+    def _fake_get_contract(state_dir, contract_id):
+        return {'status': 'running', 'updated_at': stale_ts, 'phases': [], 'metadata': {}, 'shade_agent_id': 'AG-DEAD'}
+
+    monkeypatch.setattr('charon.tools.shade_tool.execute_spawn_shade', _fake_spawn)
+    monkeypatch.setattr('charon.shade.shade_orchestrator.get_contract', _fake_get_contract)
+
+    result = _mod(tmp_path).rlm('dead thing', poll_interval=0)
+
+    assert result['status'] == 'stalled'
+    assert result['contract_id'] == 'ctr-9'
+    assert result['shade_id'] == 'AG-DEAD'
+    assert 'orphaned' in result['reason']
+
+
+def test_rlm_still_running_not_stalled_when_contract_is_actively_updating(tmp_path, monkeypatch):
+    """A contract that's merely slow (fresh updated_at) hits the deadline's
+    still_running path, never the stale one — staleness must not
+    false-positive on a worker that's genuinely making progress."""
+    fresh_ts = datetime.now(timezone.utc).isoformat()
+
+    def _fake_spawn(params, ctx):
+        return ToolResult(content='ok', details={'contract_id': 'ctr-8b'})
+
+    def _fake_get_contract(state_dir, contract_id):
+        return {'status': 'running', 'updated_at': fresh_ts, 'phases': [], 'metadata': {}, 'shade_agent_id': 'AG-SLOW'}
+
+    monkeypatch.setattr('charon.tools.shade_tool.execute_spawn_shade', _fake_spawn)
+    monkeypatch.setattr('charon.shade.shade_orchestrator.get_contract', _fake_get_contract)
+
+    mod = _mod(tmp_path)
+    mod._call_state['deadline'] = time.time() + 1  # about to expire
+    result = mod.rlm('slow but alive', poll_interval=0)
+
+    assert result == {'status': 'still_running', 'contract_id': 'ctr-8b', 'shade_id': 'AG-SLOW'}
 
 
 def test_rlm_blocks_normally_when_no_deadline_set(tmp_path, monkeypatch):

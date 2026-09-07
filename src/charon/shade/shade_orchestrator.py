@@ -367,29 +367,45 @@ def mark_phase_failed(state_dir: Path, contract_id: str, phase_id: str, *, task_
     return _update_contract(state_dir, contract)
 
 
-def reconcile_stale_shade_contracts(state_dir: Path, *, stale_after_seconds: int = 300) -> list[str]:
+def is_contract_stale(contract: dict, *, stale_after_seconds: int | None = None) -> bool:
+    """True if a 'running' contract has gone quiet (no phase update) for
+    longer than stale_after_seconds — the same signal
+    reconcile_stale_shade_contracts uses to repair orphaned contracts at
+    startup, exposed standalone so a caller that's actively polling one
+    contract (rlm()'s poll loop) can notice it's dead without waiting for
+    the next reconcile pass."""
+    if contract.get('status') != 'running':
+        return False
+    if stale_after_seconds is None:
+        stale_after_seconds = config.shade_contract_stall_seconds()
+    updated_at = str(contract.get('updated_at') or '')
+    try:
+        updated_ts = datetime.fromisoformat(updated_at.replace('Z', '+00:00')).timestamp()
+    except Exception:
+        return False
+    now = datetime.now(timezone.utc).timestamp()
+    return updated_ts > 0 and (now - updated_ts) >= stale_after_seconds
+
+
+def reconcile_stale_shade_contracts(state_dir: Path, *, stale_after_seconds: int | None = None) -> list[str]:
     """Mark contracts stuck at status='running' as failed once they've gone
-    quiet for longer than stale_after_seconds.
+    quiet for longer than stale_after_seconds (default:
+    config.shade_contract_stall_seconds()).
 
     A shade's phase loop runs in a background thread inside whatever
     process spawned it — the main daemon, or (for PyKernel-issued spawns,
     including charon.rlm()) the kernel worker subprocess. If that process
     is hard-killed, the thread dies with it and the contract is left at
     'running' forever, since nothing else was watching it. Call at daemon
-    startup, mirroring automation_runtime.reconcile_stale_automation_runs's
-    same shape of repair for the same class of problem.
+    startup and on every heartbeat, mirroring
+    automation_runtime.reconcile_stale_automation_runs's same shape of
+    repair for the same class of problem.
     """
+    if stale_after_seconds is None:
+        stale_after_seconds = config.shade_contract_stall_seconds()
     recovered: list[str] = []
-    now = datetime.now(timezone.utc).timestamp()
     for contract in load_contracts(state_dir):
-        if contract.get('status') != 'running':
-            continue
-        updated_at = str(contract.get('updated_at') or '')
-        try:
-            updated_ts = datetime.fromisoformat(updated_at.replace('Z', '+00:00')).timestamp()
-        except Exception:
-            updated_ts = 0.0
-        if updated_ts <= 0 or (now - updated_ts) < stale_after_seconds:
+        if not is_contract_stale(contract, stale_after_seconds=stale_after_seconds):
             continue
         contract_id = str(contract.get('id') or '')
         contract['status'] = 'failed'

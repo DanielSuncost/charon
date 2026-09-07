@@ -199,6 +199,13 @@ def _bridge_module(
         immediately, in case a caller-supplied huge poll_interval or some
         other edge case still lets PyKernel's own SIGINT land first.
 
+        A shade-contract wait can also come back {'status': 'stalled', ...}
+        — distinct from 'still_running' — if the contract goes quiet for
+        too long (config.shade_contract_stall_seconds(), default 300s) with
+        no phase update: the worker process behind it is almost certainly
+        dead. Unlike 'still_running', resuming a 'stalled' call with the
+        same contract_id won't help; treat it like a failure.
+
         child_agent_id: call an existing retained (idle) shade instead of
         spawning a fresh one. Errors — never silently spawns a fresh shade
         under that id — if it isn't found, isn't a shade, or isn't idle.
@@ -299,7 +306,7 @@ def _bridge_module(
             }
 
         from charon.tools.shade_tool import execute_spawn_shade
-        from charon.shade.shade_orchestrator import get_contract
+        from charon.shade.shade_orchestrator import get_contract, is_contract_stale
 
         if contract_id:
             cid = contract_id
@@ -351,6 +358,16 @@ def _bridge_module(
                 raise RuntimeError(f'contract {cid} not found')
             if contract.get('status') in terminal:
                 break
+            if is_contract_stale(contract):
+                # Gone quiet for over config.shade_contract_stall_seconds()
+                # with no phase update — the worker process behind this
+                # contract is almost certainly dead (hard-killed, orphaned).
+                # Distinct from 'still_running' so a caller resuming via
+                # contract_id doesn't keep blindly waiting on it forever.
+                return {
+                    'status': 'stalled', 'contract_id': cid, 'shade_id': contract.get('shade_agent_id'),
+                    'reason': 'no phase progress for too long — likely an orphaned worker process; do not resume, treat as failed',
+                }
             deadline = call_state.get('deadline')
             if deadline is not None and _time.time() > deadline - margin_sec:
                 return {'status': 'still_running', 'contract_id': cid, 'shade_id': contract.get('shade_agent_id')}

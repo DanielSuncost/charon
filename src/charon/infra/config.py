@@ -149,6 +149,15 @@ def retained_shade_max_idle_seconds() -> int:
     return _get_int('CHARON_RETAINED_SHADE_MAX_IDLE_SECONDS', 86400)
 
 
+def shade_contract_stall_seconds() -> int:
+    """CHARON_SHADE_CONTRACT_STALL_SECONDS (default 300): how long a shade
+    contract may sit at status='running' with no phase update before it's
+    treated as orphaned — by the startup/heartbeat reconciler, and by
+    rlm()'s own poll loop so a caller resuming via contract_id doesn't keep
+    blindly waiting on a worker process that's already dead."""
+    return _get_int('CHARON_SHADE_CONTRACT_STALL_SECONDS', 300)
+
+
 # ── Agents ───────────────────────────────────────────────────────────────────
 
 def require_tmux() -> bool:

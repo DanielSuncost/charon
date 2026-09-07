@@ -1064,6 +1064,19 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
             except Exception as e:
                 _diag('charon_loop', 'retained-shade TTL reap failed; idle shades may accumulate', error=e)  # Reaping is best-effort
 
+            # Stale shade contracts: reconcile every heartbeat too, not just
+            # startup (see reconcile_stale_shade_contracts's docstring) — a
+            # worker process can be hard-killed at any point in the
+            # daemon's lifetime, not just before it started.
+            try:
+                from charon.shade.shade_orchestrator import reconcile_stale_shade_contracts
+                reconciled = reconcile_stale_shade_contracts(state_dir)
+                for contract_id in reconciled:
+                    log_event(log_file, 'shade_contract_reconciled_stale', cycle=cycles, contract_id=contract_id)
+                    trace_event(trace_file, 'shade_contract_reconciled_stale', cycle=cycles, contract_id=contract_id)
+            except Exception as e:
+                _diag('charon_loop', 'periodic stale shade contract reconcile failed', error=e)  # Reconciliation is best-effort
+
             # Judge-loop driver: advance running optimization loops one step
             try:
                 from charon.infra import config as _cfg
