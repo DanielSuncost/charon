@@ -39,6 +39,7 @@ pub struct ChatRenderLine {
 #[derive(Default)]
 pub struct ChatVisualCache {
     pub width: usize,
+    pub height: usize,
     pub variant: Option<ChatLayoutVariant>,
     pub lines: Vec<ChatRenderLine>,
 }
@@ -505,9 +506,11 @@ pub fn ensure_chat_visual_cache(app: &App, w: u16, h: u16, cache: &mut ChatVisua
     let variant = chat_layout_variant(w, h);
     let content = chat_content_area(app, w, h);
     let width = content.width as usize;
-    if force || cache.width != width || cache.variant != Some(variant) {
-        cache.lines = build_chat_visual_lines(app, width, variant);
+    let height = content.height as usize;
+    if force || cache.width != width || cache.height != height || cache.variant != Some(variant) {
+        cache.lines = build_chat_visual_lines(app, width, height, variant);
         cache.width = width;
+        cache.height = height;
         cache.variant = Some(variant);
     }
 }
@@ -643,7 +646,21 @@ fn nonselectable_line(fg: style::Color, bg: Option<style::Color>, text: impl Int
     }
 }
 
-fn brand_lines(width: usize, variant: ChatLayoutVariant) -> Vec<ChatRenderLine> {
+fn wordmark_line(title_color: style::Color) -> ChatRenderLine {
+    ChatRenderLine {
+        spans: vec![
+            ChatSpan { fg: style::Color::Rgb { r: 90, g: 68, b: 40 }, text: "━━━ ".to_string() },
+            ChatSpan { fg: title_color, text: "❈ CHARON ❈".to_string() },
+            ChatSpan { fg: style::Color::Rgb { r: 90, g: 68, b: 40 }, text: " ━━━".to_string() },
+        ],
+        bg: None,
+        copy_text: String::new(),
+        copy_offset: 0,
+        selectable: false,
+    }
+}
+
+fn brand_lines(width: usize, height: usize, variant: ChatLayoutVariant) -> Vec<ChatRenderLine> {
     let mid_title = include_str!("../../../../assets/title_ascii_mid.txt");
     let cfg = mascot_config();
     let title_fg = cfg.tiny_title.as_ref().map(|t| t.fg).unwrap_or([176, 146, 62]);
@@ -652,37 +669,60 @@ fn brand_lines(width: usize, variant: ChatLayoutVariant) -> Vec<ChatRenderLine> 
     let default_dark = style::Color::Rgb { r: 26, g: 26, b: 26 };
     let mut out = Vec::new();
 
-    if variant == ChatLayoutVariant::Tiny || width < 38 {
-        out.push(ChatRenderLine {
-            spans: vec![
-                ChatSpan { fg: style::Color::Rgb { r: 90, g: 68, b: 40 }, text: "━━━ ".to_string() },
-                ChatSpan { fg: title_color, text: "❈ CHARON ❈".to_string() },
-                ChatSpan { fg: style::Color::Rgb { r: 90, g: 68, b: 40 }, text: " ━━━".to_string() },
-            ],
-            bg: None,
-            copy_text: String::new(),
-            copy_offset: 0,
-            selectable: false,
-        });
-        out.push(nonselectable_line(subtitle_color, None, "  Agent Operating System"));
+    // The mascot is 92x45. Sizing it from width alone overflows any short pane,
+    // which is what pushed the banner past the viewport and left duplicated rows
+    // on small terminals. Budget the rows first. The reserve covers the banner's
+    // own trailing rows (wordmark, subtitle, blank) plus the welcome line: without
+    // it the block overflows and the view anchors to the bottom, scrolling the
+    // wordmark off the top.
+    let row_budget = height.saturating_sub(6);
+    let sprite = mascot_sprite();
+    let base: f32 = if variant == ChatLayoutVariant::Full { 1.0 } else { 0.55 };
+    // Fit BOTH axes: a wide but short pane still has to scale down.
+    let scale = base
+        .min(row_budget as f32 / sprite.height as f32)
+        .min(width as f32 / sprite.width as f32);
+
+    // Below roughly a third the art is unreadable mush; show the wordmark instead.
+    if variant == ChatLayoutVariant::Tiny || width < 38 || row_budget < 8 || scale < 0.30 {
+        out.push(wordmark_line(title_color));
+        if height >= 4 {
+            out.push(nonselectable_line(subtitle_color, None, "  Agent Operating System"));
+        }
         out.push(nonselectable_line(style::Color::Reset, None, String::new()));
         return out;
     }
 
-    let sprite = mascot_sprite();
-    let scale = if variant == ChatLayoutVariant::Full { 1.0 } else { 0.55 };
     let cols = width.min(((sprite.width as f32) * scale).floor().max(1.0) as usize);
-    let rows = ((sprite.height as f32) * scale).floor().max(1.0) as usize;
+    let rows = (((sprite.height as f32) * scale).floor().max(1.0) as usize).min(row_budget.max(1));
     let mut chars = vec![vec![' '; cols]; rows];
     let mut colors = vec![vec![default_dark; cols]; rows];
     let title_src = cfg.tiny_title_source.as_ref().map(|s| (s.x, s.y, s.w, s.h)).unwrap_or((10usize, 16usize, 54usize, 4usize));
+
+    // title_ascii_mid.txt is a fixed 60x2 stamp. Once the sprite scales below the
+    // Mid default it no longer fits, and a half-clipped wordmark reads as
+    // corruption — so decide up front, and keep the sprite's own title when it
+    // will not fit rather than blanking that region for a stamp we cannot draw.
+    let stamp_x = ((title_src.0 as f32) * scale).floor() as usize;
+    let stamp_y = ((title_src.1 as f32) * scale).floor() as usize;
+    let title_w = mid_title.lines().filter(|l| !l.is_empty()).map(|l| l.chars().count()).max().unwrap_or(0);
+    let title_h = mid_title.lines().filter(|l| !l.is_empty()).count();
+    let stamp_title = variant == ChatLayoutVariant::Mid
+        && stamp_x + title_w <= cols
+        && stamp_y + title_h <= rows;
+    // The sprite's own block-letter title only survives near full scale; below
+    // that, floor() sampling collapses adjacent strokes and it reads as noise.
+    // (At the Mid default the 60-wide stamp never fits either, which is why the
+    // wordmark looked mangled at every mid size.) Blank the region and print a
+    // clean wordmark row above the art instead.
+    let suppress_title = !stamp_title && scale < 0.75;
 
     for cell in &sprite.cells {
         let x = ((cell.x as f32) * scale).floor() as usize;
         let y = ((cell.y as f32) * scale).floor() as usize;
         if x >= cols || y >= rows { continue; }
         let ch = cell.ch.chars().next().unwrap_or(' ');
-        if variant == ChatLayoutVariant::Mid
+        if (stamp_title || suppress_title)
             && cell.x >= title_src.0 && cell.x < title_src.0 + title_src.2
             && cell.y >= title_src.1 && cell.y < title_src.1 + title_src.3 {
             continue;
@@ -694,9 +734,7 @@ fn brand_lines(width: usize, variant: ChatLayoutVariant) -> Vec<ChatRenderLine> 
         }
     }
 
-    if variant == ChatLayoutVariant::Mid {
-        let stamp_x = ((title_src.0 as f32) * scale).floor() as usize;
-        let stamp_y = ((title_src.1 as f32) * scale).floor() as usize;
+    if stamp_title {
         for (dy, line) in mid_title.lines().filter(|l| !l.is_empty()).enumerate() {
             let y = stamp_y + dy;
             if y >= rows { continue; }
@@ -708,6 +746,10 @@ fn brand_lines(width: usize, variant: ChatLayoutVariant) -> Vec<ChatRenderLine> 
                 colors[y][x] = title_color;
             }
         }
+    }
+
+    if suppress_title {
+        out.push(wordmark_line(title_color));
     }
 
     let mut last_row = rows.saturating_sub(1);
@@ -838,7 +880,7 @@ fn push_libris_completion_card(
     );
 }
 
-fn build_chat_visual_lines(app: &App, width: usize, variant: ChatLayoutVariant) -> Vec<ChatRenderLine> {
+fn build_chat_visual_lines(app: &App, width: usize, height: usize, variant: ChatLayoutVariant) -> Vec<ChatRenderLine> {
     let robe_bg = style::Color::Rgb { r: 42, g: 18, b: 21 };
     let robe_fg = style::Color::Rgb { r: 224, g: 208, b: 192 };
     let robe_heading = style::Color::Rgb { r: 232, g: 213, b: 163 };
@@ -848,7 +890,7 @@ fn build_chat_visual_lines(app: &App, width: usize, variant: ChatLayoutVariant) 
     let tool_bg = style::Color::Rgb { r: 13, g: 13, b: 26 };
     let code_fg = style::Color::Rgb { r: 230, g: 237, b: 243 };
     let code_bg = style::Color::Rgb { r: 22, g: 27, b: 34 };
-    let mut visual_lines = brand_lines(width, variant);
+    let mut visual_lines = brand_lines(width, height, variant);
     if app.chat.messages.is_empty() {
         visual_lines.push(nonselectable_line(style::Color::DarkGrey, None, "  Welcome to Charon. Type a message to begin."));
         visual_lines.push(nonselectable_line(style::Color::Reset, None, String::new()));
