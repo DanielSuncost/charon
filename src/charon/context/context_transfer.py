@@ -199,6 +199,7 @@ MODEL_CONTEXT_OVERRIDES: dict[str, int] = {
     'gpt-5.6-sol': 200000,
     'gpt-5.6-terra': 200000,
     'gpt-5.6-luna': 200000,
+    'gpt-6-astra': 1050000,
     'claude-sonnet-4-20250514': 200000,
     'claude-opus-4-20250514': 200000,
     'qwen3-30b-a3b': 65536,

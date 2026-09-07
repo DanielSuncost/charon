@@ -101,6 +101,10 @@ _PRICING: dict[str, tuple[float, float]] = {
     "fast": (0.15, 0.60), "strong": (3.00, 15.00),
     # known model families (prefix match)
     "gpt-5.5": (1.25, 10.00), "gpt-5": (1.25, 10.00), "gpt-4o": (2.50, 10.00),
+    # GPT-6 Astra: standard short-context rate. NOTE: OpenAI rebills the whole
+    # request at $20/$75 once input exceeds 272k tokens, which this flat tuple
+    # cannot express — long-context astra calls are under-estimated 2x.
+    "gpt-6-astra": (10.00, 50.00),
     "o3": (2.00, 8.00), "o4": (2.00, 8.00),
     "claude-opus": (15.00, 75.00), "claude-sonnet": (3.00, 15.00),
     "claude-haiku": (0.80, 4.00), "claude-fable": (3.00, 15.00),

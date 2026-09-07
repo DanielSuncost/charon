@@ -89,6 +89,11 @@ CONTEXT_WINDOWS = {
     'gpt-5.6-sol': 200000,
     'gpt-5.6-terra': 200000,
     'gpt-5.6-luna': 200000,
+    # GPT-6 Astra (Sep 3 2026 flagship). CONTEXT_WINDOWS is an exact-match
+    # lookup, so without this entry astra falls back to DEFAULT_CONTEXT_WINDOW
+    # (65536) — a 16x undercount against its real window, which would truncate
+    # context on the one model whose selling point is the 1M+ window.
+    'gpt-6-astra': 1050000,
     # Local (conservative defaults)
     'qwen3-30b-a3b': 65536,
 }
