@@ -55,15 +55,21 @@ pub(crate) fn rect_rows(area: Rect, rows: usize) -> Vec<Rect> {
 }
 
 pub(crate) fn rect_cols(area: Rect, widths: [u16; 3]) -> [Rect; 3] {
+    // render_border draws a box spanning x-1 ..= x+width and y-1 ..= y+height,
+    // so a panel occupies its content plus two border columns and two border
+    // rows. The previous split reserved only one of each, which made adjacent
+    // panels share a border cell: the panel drawn later stamped its ╭ over its
+    // neighbour's ╮, so every junction rendered as ╭ and no panel ever closed.
+    // Lay the panels out box-by-box instead and subtract both borders.
     let total = widths[0] + widths[1] + widths[2];
-    let w1 = area.width.saturating_mul(widths[0]) / total.max(1);
-    let w2 = area.width.saturating_mul(widths[1]) / total.max(1);
-    let used = w1 + w2;
-    let w3 = area.width.saturating_sub(used);
+    let b1 = area.width.saturating_mul(widths[0]) / total.max(1);
+    let b2 = area.width.saturating_mul(widths[1]) / total.max(1);
+    let b3 = area.width.saturating_sub(b1 + b2);
+    let inner_h = area.height.saturating_sub(2);
     [
-        Rect { x: area.x, y: area.y, width: w1.saturating_sub(1), height: area.height.saturating_sub(1) },
-        Rect { x: area.x + w1, y: area.y, width: w2.saturating_sub(1), height: area.height.saturating_sub(1) },
-        Rect { x: area.x + used, y: area.y, width: w3.saturating_sub(1), height: area.height.saturating_sub(1) },
+        Rect { x: area.x, y: area.y, width: b1.saturating_sub(2), height: inner_h },
+        Rect { x: area.x + b1, y: area.y, width: b2.saturating_sub(2), height: inner_h },
+        Rect { x: area.x + b1 + b2, y: area.y, width: b3.saturating_sub(2), height: inner_h },
     ]
 }
 
