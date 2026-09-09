@@ -87,24 +87,36 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --resume)
-      export CHARON_RESUME="${2:-latest}"
-      shift; shift
+      # `shift; shift` exited 1 under `set -e` when no value followed, so the
+      # documented bare `charon --resume` died silently. Only consume a second
+      # argument when one exists and is not itself a flag.
+      if [ $# -ge 2 ] && [ "${2#-}" = "$2" ]; then
+        export CHARON_RESUME="$2"; shift 2
+      else
+        export CHARON_RESUME="latest"; shift
+      fi
       ;;
     --agent=*)
       export CHARON_AGENT="${1#--agent=}"
       shift
       ;;
     --agent)
-      export CHARON_AGENT="${2:-}"
-      shift; shift
+      if [ $# -ge 2 ] && [ "${2#-}" = "$2" ]; then
+        export CHARON_AGENT="$2"; shift 2
+      else
+        echo "Error: --agent requires a value (e.g. --agent AG-0005)" >&2; exit 2
+      fi
       ;;
     --provider=*)
       export CHARON_PROVIDER="${1#--provider=}"
       shift
       ;;
     --provider)
-      export CHARON_PROVIDER="${2:-}"
-      shift; shift
+      if [ $# -ge 2 ] && [ "${2#-}" = "$2" ]; then
+        export CHARON_PROVIDER="$2"; shift 2
+      else
+        echo "Error: --provider requires a value (e.g. --provider codex)" >&2; exit 2
+      fi
       ;;
     claude-code|codex|lmstudio|opencode|api)
       export CHARON_PROVIDER="$1"
