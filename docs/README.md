@@ -12,6 +12,7 @@ Documentation index for Charon.
 | [cross-agent-threads.md](cross-agent-threads.md) | Cross-agent decision and discussion threads (who/when/why) |
 | [remote-agent-teams.md](remote-agent-teams.md) | Persistent agent teams on remote machines (Harbor) |
 | [agent-abilities-registry.md](agent-abilities-registry.md) | Auto-generated registry of agent abilities |
+| [review-artifact.md](review-artifact.md) | The standard review artifact: findings, severity, evidence, test results, unresolved risks |
 | [design-library-spec.md](design-library-spec.md) | Design library spec |
 | [onboarding-summary.md](onboarding-summary.md) | Onboarding design and status summary |
 | [manual-provider-switch-transfer-test-checklist.adoc](manual-provider-switch-transfer-test-checklist.adoc) | Manual test checklist for provider-switch context transfer |
@@ -26,6 +27,12 @@ Documentation index for Charon.
 | [contracts/](contracts/) | JSON schemas and command/event contracts |
 | [features/](features/) | Feature specs (see [features/INDEX.md](features/INDEX.md)) |
 | [proposals/](proposals/) | Product and architecture proposals under review |
+
+## Skills
+
+[`skills/`](../skills/) (repo root, not under `docs/`) holds the engineering practice an
+agent working in this repo is expected to follow — debugging, TDD, spikes, code review,
+exploratory QA, and the system map. See [skills/README.md](../skills/README.md).
 
 ## Plans
 
