@@ -1,3 +1,9 @@
+---
+name: system-map
+description: A living, code-anchored model of the project — the declared map, the facts extracted from the code, and the disagreements between them.
+tags: [architecture, code-map, orientation]
+---
+
 # system-map — a living, code-anchored model of the project
 
 Use this skill when a user asks how the system works, when you are about to change
