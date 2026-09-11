@@ -181,6 +181,9 @@ def test_execute_tool_keeps_dangerous_gate_for_scoped_background_agent(
         scope=['research'],
     )
 
-    result = execute_tool('Bash', {'command': 'rm -rf /'}, ctx)
+    # Dangerous AND inside scope: scope now runs first, so an out-of-scope
+    # command would be refused before it ever reached the approval gate this
+    # test exists to check.
+    result = execute_tool('Bash', {'command': 'rm -rf research/data'}, ctx)
     assert result.is_error
     assert 'approval unavailable' in result.content

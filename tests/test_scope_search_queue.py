@@ -32,18 +32,27 @@ def test_scope_blocks_edit_outside(tmp_path):
     assert 'Scope violation' in result
 
 
-def test_scope_allows_bash(tmp_path):
-    """Bash can't be reliably scoped — allowed but shade is told in prompt."""
+def test_scope_enforced_on_bash(tmp_path):
+    """Bash is scoped. This previously asserted `rm -rf /` was allowed."""
     ctx = ToolContext(project_root=tmp_path, scope=['src/'])
     result = _check_scope('Bash', {'command': 'rm -rf /'}, ctx)
-    assert result is None  # allowed (can't scope bash)
+    assert result is not None
+    assert 'Scope violation' in result
 
 
-def test_scope_allows_git(tmp_path):
-    """Git operates on whole repo — allowed."""
+def test_scope_allows_bash_writes_inside_contract(tmp_path):
+    """Enforcement must not make the tool useless for in-scope work."""
+    (tmp_path / 'src').mkdir()
     ctx = ToolContext(project_root=tmp_path, scope=['src/'])
-    result = _check_scope('Git', {'action': 'status'}, ctx)
-    assert result is None
+    assert _check_scope('Bash', {'command': 'echo x > src/out.txt'}, ctx) is None
+    assert _check_scope('Bash', {'command': 'cat README.md'}, ctx) is None
+
+
+def test_scope_allows_git_reads(tmp_path):
+    """Git reads stay open; actions that rewrite the tree are gated."""
+    ctx = ToolContext(project_root=tmp_path, scope=['src/'])
+    assert _check_scope('Git', {'action': 'status'}, ctx) is None
+    assert _check_scope('Git', {'action': 'checkout', 'branch': 'x'}, ctx) is not None
 
 
 def test_no_scope_allows_everything(tmp_path):

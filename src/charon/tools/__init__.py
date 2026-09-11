@@ -1661,6 +1661,103 @@ def _request_interactive_approval(
     return approved if responded else False, resolution
 
 
+def _path_within(target: Path, entry: str, root: Path) -> bool:
+    """True when `target` is `entry` or sits beneath it. `entry` may be relative."""
+    e = entry.strip()
+    if not e:
+        return False
+    base_path = Path(e).expanduser()
+    if not base_path.is_absolute():
+        base_path = root / e.strip('/')
+    try:
+        base = str(base_path.resolve())
+    except Exception:
+        base = str(base_path)
+    t = str(target)
+    return t == base or t.startswith(base + os.sep)
+
+
+def _check_shell_scope(command: str, ctx: ToolContext) -> str | None:
+    """Apply the shade's scope and frozen lists to a shell command.
+
+    Bash used to bypass scope entirely on the grounds that shell cannot be
+    analysed reliably. It cannot be analysed *perfectly*, but the common write
+    forms are readable, and a command that genuinely cannot be read is refused
+    rather than waved through — an unreadable command is the case most likely
+    to be an escape, not the case most likely to be benign.
+    """
+    from charon.tools.shell_scope import analyze_write_targets
+
+    analysis = analyze_write_targets(command, ctx.project_root)
+
+    if not analysis.is_analyzable:
+        return (
+            f'Scope violation: this shade is restricted to '
+            f'[{", ".join(ctx.scope or ctx.frozen or [])}], and the command cannot be '
+            f'checked against that restriction ({analysis.unanalyzable}). '
+            f'Rewrite it so its write targets are literal paths, or use Write/Edit.'
+        )
+
+    for target in analysis.targets:
+        if ctx.frozen and any(_path_within(target, e, ctx.project_root) for e in ctx.frozen):
+            return (
+                f'Frozen-path violation: the command writes "{target}", which is inside '
+                f'a frozen path [{", ".join(ctx.frozen)}] that must not be modified.'
+            )
+        if ctx.scope and not any(_path_within(target, e, ctx.project_root) for e in ctx.scope):
+            return (
+                f'Scope violation: the command writes "{target}", outside allowed scope '
+                f'[{", ".join(ctx.scope)}]. This shade is restricted to modifying files '
+                f'within its contract scope.'
+            )
+    return None
+
+
+# git actions that only read; everything else can move files the shade does not own.
+_GIT_READ_ONLY_ACTIONS = {'status', 'diff', 'log', 'branch'}
+
+
+def _check_git_scope(params: dict, ctx: ToolContext) -> str | None:
+    """Apply scope to the Git tool.
+
+    Git was previously allowed wholesale because "git operates on the whole
+    repo" — which is the reason to gate it, not to exempt it. Reads stay open;
+    actions that rewrite the working tree or stage paths the shade does not own
+    are refused while a scope is in force.
+    """
+    action = str(params.get('action', '')).strip().lower()
+    if action in _GIT_READ_ONLY_ACTIONS or not action:
+        return None
+    if not ctx.scope:
+        return None
+
+    if action == 'add':
+        files = params.get('files') or ['.']
+        for f in files:
+            target = Path(f)
+            if not target.is_absolute():
+                target = ctx.project_root / f
+            try:
+                target = target.resolve()
+            except Exception:
+                pass
+            if not any(_path_within(target, e, ctx.project_root) for e in ctx.scope):
+                return (
+                    f'Scope violation: git add "{f}" stages a path outside allowed scope '
+                    f'[{", ".join(ctx.scope)}]. Stage only files within the contract scope.'
+                )
+        return None
+
+    if action in ('checkout', 'stash'):
+        return (
+            f'Scope violation: git {action} rewrites the working tree across the whole '
+            f'repository, which would affect files outside this shade\'s scope '
+            f'[{", ".join(ctx.scope)}] and discard work belonging to other agents.'
+        )
+
+    return None
+
+
 def _check_scope(name: str, params: dict, ctx: ToolContext) -> str | None:
     """Check if a tool call is within the shade's allowed scope.
 
@@ -1675,12 +1772,9 @@ def _check_scope(name: str, params: dict, ctx: ToolContext) -> str | None:
     if name in ('Read', 'Write', 'Edit'):
         path_param = params.get('path', '')
     elif name == 'Bash':
-        # Can't reliably scope bash commands — allow but log
-        # (shade system prompt already tells it to stay in scope)
-        return None
+        return _check_shell_scope(params.get('command', ''), ctx)
     elif name in ('Git',):
-        # Git operates on the whole repo — allow
-        return None
+        return _check_git_scope(params, ctx)
 
     if not path_param:
         return None
@@ -1736,9 +1830,9 @@ def execute_tool(name: str, params: dict, ctx: ToolContext) -> ToolResult:
     if scope_error:
         return ToolResult(content=scope_error, is_error=True)
 
-    # Scoped shades retain their existing non-dangerous fast path, but scope is
-    # not a substitute for gating destructive shell actions (Bash cannot be
-    # reliably path-scoped).
+    # Scope is checked above and now covers Bash and Git, but it only answers
+    # "where" — approval still answers "whether". A destructive command aimed
+    # squarely inside a shade's own scope is in-contract and still gated here.
     try:
         from charon.infra.tool_approval import needs_approval, approve_tool_for_session
         session_id = ctx.agent_id or 'default'
