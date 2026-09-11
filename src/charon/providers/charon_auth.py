@@ -70,6 +70,26 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b'=').decode('utf-8')
 
 
+def _verify_state(expected: str, returned: Optional[str]) -> None:
+    """Reject an OAuth callback whose state does not match the one we issued.
+
+    The returned state was previously passed straight to the token exchange and
+    never compared, which left the callback open to CSRF: an attacker who could
+    drive the redirect could have this client exchange a code of their choosing
+    and bind the resulting account to the user's install.
+    """
+    if not returned:
+        raise RuntimeError(
+            'OAuth callback carried no state parameter; refusing the exchange. '
+            'Retry the login, or use the manual code flow if your provider omits state.'
+        )
+    if not secrets.compare_digest(str(returned), str(expected)):
+        raise RuntimeError(
+            'OAuth state mismatch: the callback did not come from the request this '
+            'client started. Refusing the exchange.'
+        )
+
+
 def _pkce_pair() -> tuple[str, str]:
     verifier = _b64url(secrets.token_bytes(32))
     challenge = _b64url(hashlib.sha256(verifier.encode('utf-8')).digest())
@@ -269,8 +289,11 @@ def login_oauth(
             status_cb(msg)
 
     verifier, challenge = _pkce_pair()
-    # Use verifier as state (matches pi-agent's approach)
-    state = verifier
+    # state must be independent of the PKCE verifier. Reusing the verifier as
+    # state published it in the redirect URL, browser history and any proxy or
+    # server log along the way — the verifier is the one value PKCE relies on
+    # staying private, so that defeated the exchange it was protecting.
+    state = _b64url(secrets.token_bytes(32))
 
     # Build the authorization URL
     auth_params = {
@@ -321,11 +344,16 @@ def login_oauth(
                     code = parts[0].strip()
                     returned_state = parts[1].strip() if len(parts) > 1 else None
                 else:
+                    # A bare code carries no state to check. Mark it as such
+                    # rather than substituting the expected value, which would
+                    # have made any later comparison pass by construction.
                     code = raw
-                    returned_state = state
+                    returned_state = None
 
         if not code:
             raise RuntimeError('No authorization code received')
+
+        _verify_state(state, returned_state)
 
         emit('Exchanging code for tokens...')
         if provider.id == 'openai-codex':
@@ -333,7 +361,7 @@ def login_oauth(
             token_data = _exchange_code_form(provider, code, verifier)
         else:
             # Anthropic uses JSON token exchange
-            token_data = _exchange_code_json(provider, code, verifier, state=returned_state or state)
+            token_data = _exchange_code_json(provider, code, verifier, state=returned_state)
     else:
         # Manual code flow (for providers without local callback)
         emit(f'AUTH_URL::{auth_url}')
@@ -350,6 +378,7 @@ def login_oauth(
         fragment = code_parts[1] if len(code_parts) > 1 else ''
         frag_params = urllib.parse.parse_qs(fragment)
         returned_state = frag_params.get('state', [None])[0]
+        _verify_state(state, returned_state)
         emit('Exchanging code for tokens...')
         token_data = _exchange_code_json(provider, code, verifier, state=returned_state)
 
