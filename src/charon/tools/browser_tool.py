@@ -586,9 +586,10 @@ def _extract_json(text: str) -> dict | None:
 async def _provider_vision_backend(png: bytes, question: str, schema: dict, state_dir) -> dict:
     """Describe a screenshot with the configured provider into `schema`.
 
-    Only the Anthropic-family adapters pass list-form user content through to
-    the wire; the OpenAI-family adapters json.dumps() it, which would ship the
-    base64 image as prose. Refuse loudly rather than do that.
+    Gated on the adapter's own `supports_image_input` capability, not its
+    family: an adapter that advertises it carries the image block below to
+    the model as an image. One that does not would ship the base64 as prose,
+    so refuse loudly rather than do that.
     """
     from charon.providers import Message
     from charon.providers.provider_bridge import create_provider_and_model
@@ -597,11 +598,10 @@ async def _provider_vision_backend(png: bytes, question: str, schema: dict, stat
     provider, model, ready = create_provider_and_model(state_dir)
     if not ready:
         raise VisionUnavailable('no provider configured')
-    family = type(provider).__module__
-    if 'anthropic' not in family:
+    if not getattr(provider, 'supports_image_input', False):
         raise VisionUnavailable(
-            f'{type(provider).__name__} cannot carry images (list content is serialised as text); '
-            'switch to an Anthropic-family provider for the vision fallback'
+            f'{type(provider).__name__} cannot carry images (it does not advertise '
+            'supports_image_input); the vision fallback needs a provider that does'
         )
     model.supports_images = True
 

@@ -82,6 +82,10 @@ class ModelInfo:
 class Provider(Protocol):
     """Protocol that all LLM providers must implement."""
 
+    # True when stream() carries Anthropic-style image blocks in list-form user
+    # content to the model as images. Absent means images would not survive.
+    supports_image_input: bool
+
     async def stream(
         self,
         messages: list[Message],

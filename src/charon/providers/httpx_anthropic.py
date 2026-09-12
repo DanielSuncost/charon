@@ -34,6 +34,9 @@ ANTHROPIC_VERSION = '2023-06-01'
 
 
 class HttpxAnthropicProvider:
+    # Anthropic-style image blocks are this API's native shape and pass through.
+    supports_image_input = True
+
     def __init__(self, api_key: str | None = None, timeout: float = 300.0,
                  refresh_token: str | None = None,
                  auth_store_path: str | None = None):

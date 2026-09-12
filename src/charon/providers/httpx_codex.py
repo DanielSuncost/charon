@@ -22,6 +22,7 @@ from charon.infra import config
 from charon.providers import Message, ModelInfo, StreamDelta, ToolCall
 from charon.providers.http_client import AsyncClientPool
 from charon.providers.http_errors import exception_error, http_error
+from charon.providers.image_content import has_image_block, to_responses_input_parts
 
 try:
     from charon.infra.diagnostics import record as _diag
@@ -64,11 +65,15 @@ def _convert_messages_to_input(messages: list[Message]) -> list[dict]:
     emitted_output_ids: set[str] = set()
     for msg in messages:
         if msg.role == 'user':
-            content = msg.content if isinstance(msg.content, str) else json.dumps(msg.content)
+            if has_image_block(msg.content):
+                parts = to_responses_input_parts(msg.content)
+            else:
+                content = msg.content if isinstance(msg.content, str) else json.dumps(msg.content)
+                parts = [{'type': 'input_text', 'text': content}]
             result.append({
                 'type': 'message',
                 'role': 'user',
-                'content': [{'type': 'input_text', 'text': content}],
+                'content': parts,
             })
         elif msg.role == 'assistant':
             # Text output as a message item
@@ -267,6 +272,9 @@ class _CodexWebSocketTransportError(RuntimeError):
 
 class HttpxCodexProvider:
     """Codex Responses API provider using httpx."""
+
+    # Image blocks go out as Responses API input_image items (image_content.py).
+    supports_image_input = True
 
     def __init__(self, api_key: str, refresh_token: str | None = None,
                  auth_store_path: str | None = None, timeout: float = 300.0):
