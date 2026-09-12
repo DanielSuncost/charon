@@ -2,6 +2,18 @@
 
 Notable changes to Charon. Follows [Keep a Changelog](https://keepachangelog.com/) loosely; versions are milestones, not releases on a cadence.
 
+## [Unreleased]
+
+### Changed
+- **Browser tool: stable element refs.** Interactive elements are tagged in-page with ids bound to the DOM node (`[e12]`, `[f1.e4]` inside a frame) instead of a position in the last listing, so a ref survives reflow, lazy-loaded rows and list mutation; a ref that outlives its element or document reports *why* it is stale instead of clicking the wrong thing. Ids are unique for the browser session. The legacy numeric `index` still works and is documented as positional.
+- **Browser tool: every frame is walked.** Elements inside iframes — including cross-origin ones — are listed and clickable; `click_selector` / `input_selector` / `assert_selector` search all frames. Clicks are real Playwright pointer input (`isTrusted`), with a DOM-click fallback.
+- **Browser tool: `get_state` is one round trip per frame and O(n)**, with a MutationObserver-backed snapshot cache. Measured on the same page and Chromium (`scripts/experiments/bench_browser_get_state.py`): 300 elements 11.3 → 4.3 ms, 2000 elements 139.9 → 4.3 ms, unchanged-DOM call 0.6 ms.
+
+### Added
+- **Browser tool: dialogs are answered by policy and reported.** `alert`/`confirm`/`prompt`/`beforeunload` never block; the default matches Playwright's previous silent behaviour (dismiss) but every dialog now appears in the next state with the policy that answered it, and `dialog_policy` switches to accept (with a prompt answer).
+- **Browser tool: vision fallback.** When the DOM exposes no interactive elements (or a canvas covers ≥50% of the viewport) a screenshot is described by the configured provider into a fixed JSON shape, validated with `structured_output.schema_validation_errors`, and returned as coordinate refs `[v1]`… that `click` accepts; `vision` asks a question directly and `click_at` clicks coordinates. Only Anthropic-family adapters carry images today — the OpenAI-family adapters serialise list content as text — so the fallback degrades to an explicit message there. Disable with `CHARON_BROWSER_VISION=0`.
+- Live-Chromium tests on inline local pages (`tests/test_browser_{refs,vision,dialogs_frames}.py`), skipped cleanly where no browser binary is installed.
+
 ## [0.2.0] — 2026-07-12
 
 Large-scale restructuring for legibility, durability, and packaging honesty.
