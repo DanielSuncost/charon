@@ -164,7 +164,7 @@ def is_read_only_research_source_call(tool_name: str, params: dict) -> bool:
         action = str(params.get('action') or '').strip().lower()
         return action in {
             'navigate', 'screenshot', 'scroll', 'go_back', 'wait',
-            'get_state', 'assert_text', 'assert_selector',
+            'get_state', 'assert_text', 'assert_selector', 'vision',
         }
 
     if tool_name == 'X':
