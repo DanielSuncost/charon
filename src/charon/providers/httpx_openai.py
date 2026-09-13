@@ -82,6 +82,7 @@ import httpx  # noqa: E402 — deliberate layout: pure helpers above, deps below
 from charon.providers import Message, ModelInfo, StreamDelta, ToolCall  # noqa: E402
 from charon.providers.http_client import AsyncClientPool  # noqa: E402
 from charon.providers.http_errors import exception_error, http_error  # noqa: E402
+from charon.providers.image_content import has_image_block, to_chat_completions_parts  # noqa: E402
 
 try:
     from charon.infra.diagnostics import record as _diag
@@ -200,6 +201,9 @@ async def _finalize_tool_call_arguments(
 
 
 class HttpxOpenAIProvider:
+
+    # Image blocks go out as Chat Completions image_url parts (image_content.py).
+    supports_image_input = True
     def __init__(
         self,
         base_url: str | None = None,
@@ -423,7 +427,10 @@ def _convert_messages(messages: list[Message]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for msg in messages:
         if msg.role == 'user':
-            content = msg.content if isinstance(msg.content, str) else json.dumps(msg.content)
+            if has_image_block(msg.content):
+                content = to_chat_completions_parts(msg.content)
+            else:
+                content = msg.content if isinstance(msg.content, str) else json.dumps(msg.content)
             result.append({'role': 'user', 'content': content})
 
         elif msg.role == 'assistant':

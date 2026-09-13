@@ -24,6 +24,9 @@ THINKING_BUDGET_MAP = {
 
 
 class AnthropicProvider:
+    # Anthropic-style image blocks are this API's native shape and pass through.
+    supports_image_input = True
+
     def __init__(self, api_key: str | None = None):
         self._api_key = api_key or os.environ.get('ANTHROPIC_API_KEY', '')
 

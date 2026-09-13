@@ -9,6 +9,7 @@ import os
 from typing import Any, AsyncIterator
 
 from charon.providers import Message, ModelInfo, StreamDelta, ToolCall
+from charon.providers.image_content import has_image_block, to_chat_completions_parts
 
 try:
     import openai
@@ -18,6 +19,9 @@ except ImportError:
 
 
 class OpenAICompatProvider:
+    # Image blocks go out as Chat Completions image_url parts (image_content.py).
+    supports_image_input = True
+
     def __init__(self, base_url: str | None = None, api_key: str | None = None):
         self._base_url = base_url or os.environ.get('OPENAI_BASE_URL', 'https://api.openai.com/v1')
         self._api_key = api_key or os.environ.get('OPENAI_API_KEY', '')
@@ -132,7 +136,10 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
     result = []
     for msg in messages:
         if msg.role == 'user':
-            content = msg.content if isinstance(msg.content, str) else json.dumps(msg.content)
+            if has_image_block(msg.content):
+                content = to_chat_completions_parts(msg.content)
+            else:
+                content = msg.content if isinstance(msg.content, str) else json.dumps(msg.content)
             result.append({'role': 'user', 'content': content})
         elif msg.role == 'assistant':
             entry: dict[str, Any] = {'role': 'assistant'}

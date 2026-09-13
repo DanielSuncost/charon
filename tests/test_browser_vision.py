@@ -128,11 +128,11 @@ def _model():
 
 
 def test_browser_multimodal_backend_refuses_provider_that_cannot_carry_images(monkeypatch):
-    class FakeOpenAI:
+    class TextOnly:  # advertises no supports_image_input
         pass
-    FakeOpenAI.__module__ = 'charon.providers.httpx_openai'
+    TextOnly.__module__ = 'charon.providers.httpx_anthropic'  # the family name no longer matters
     monkeypatch.setattr('charon.providers.provider_bridge.create_provider_and_model',
-                        lambda state_dir, **kw: (FakeOpenAI(), _model(), True))
+                        lambda state_dir, **kw: (TextOnly(), _model(), True))
     with pytest.raises(VisionUnavailable, match='cannot carry images'):
         asyncio.run(_provider_vision_backend(b'png', 'q', VISION_SCHEMA, None))
 
@@ -145,6 +145,8 @@ def test_browser_multimodal_backend_reports_missing_provider(monkeypatch):
 
 
 class _FakeAnthropic:
+    supports_image_input = True
+
     def __init__(self, reply: str):
         self.reply = reply
         self.seen: dict = {}
@@ -155,7 +157,13 @@ class _FakeAnthropic:
         yield SimpleNamespace(type='done')
 
 
-_FakeAnthropic.__module__ = 'charon.providers.httpx_anthropic'
+
+
+class _FakeCodex(_FakeAnthropic):
+    pass
+
+
+_FakeCodex.__module__ = 'charon.providers.httpx_codex'
 
 
 def test_browser_multimodal_backend_sends_image_block_and_validates_schema(monkeypatch):
@@ -187,3 +195,21 @@ def test_browser_multimodal_backend_rejects_non_json(monkeypatch):
                         lambda state_dir, **kw: (fake, _model(), True))
     with pytest.raises(VisionUnavailable, match='no JSON object'):
         asyncio.run(_provider_vision_backend(b'png', '', VISION_SCHEMA, None))
+
+
+def test_browser_multimodal_backend_accepts_openai_family_provider_that_advertises_images(monkeypatch):
+    fake = _FakeCodex('{"summary": "A form", "elements": []}')
+    monkeypatch.setattr('charon.providers.provider_bridge.create_provider_and_model',
+                        lambda state_dir, **kw: (fake, _model(), True))
+    result = asyncio.run(_provider_vision_backend(PNG_MAGIC, 'q', VISION_SCHEMA, None))
+    assert result['summary'] == 'A form'
+    assert fake.seen['messages'][0].content[0]['type'] == 'image'
+
+
+def test_browser_vision_gate_matches_what_the_real_adapters_advertise():
+    from charon.providers.httpx_anthropic import HttpxAnthropicProvider
+    from charon.providers.httpx_codex import HttpxCodexProvider
+    from charon.providers.httpx_openai import HttpxOpenAIProvider
+    from charon.providers.openai_compat import OpenAICompatProvider
+    for cls in (HttpxCodexProvider, HttpxOpenAIProvider, OpenAICompatProvider, HttpxAnthropicProvider):
+        assert cls.supports_image_input is True, cls.__name__
