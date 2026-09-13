@@ -46,6 +46,27 @@ First run:
 
 More detail: [docs/install.md](docs/install.md)
 
+For a lightweight Python install with only the agent runtime and provider
+transport dependencies:
+
+```bash
+pip install charon
+```
+
+Install every optional integration with:
+
+```bash
+pip install 'charon[all]'
+```
+
+The extras can also be installed independently:
+
+- `charon[memory]` — local embeddings and vector recall with
+  sentence-transformers and sqlite-vec
+- `charon[browser]` — browser automation with Playwright
+- `charon[office]` — Excel, Word, and PowerPoint readers with openpyxl,
+  python-docx, and python-pptx
+
 ---
 
 ## What's inside

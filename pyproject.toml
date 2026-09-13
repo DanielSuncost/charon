@@ -3,20 +3,34 @@ name = "charon"
 version = "0.2.0"
 description = "A single-user agent operating system"
 requires-python = ">=3.12"
-license = {text = "MIT"}
+license = "MIT"
 
 dependencies = [
-    "httpx[http2]>=0.28",
+    "httpx>=0.28",
     "websockets>=15.0",
-    "playwright>=1.50",
-    "sqlite-vec>=0.1.6",
+]
+
+[project.optional-dependencies]
+memory = [
     "sentence-transformers>=4.0,<5.0",
+    "sqlite-vec>=0.1.6",
+]
+browser = [
+    "playwright>=1.50",
+]
+office = [
     "openpyxl>=3.1",
     "python-docx>=1.1",
     "python-pptx>=1.0",
 ]
-
-[project.optional-dependencies]
+all = [
+    "sentence-transformers>=4.0,<5.0",
+    "sqlite-vec>=0.1.6",
+    "playwright>=1.50",
+    "openpyxl>=3.1",
+    "python-docx>=1.1",
+    "python-pptx>=1.0",
+]
 dev = [
     "pytest>=9.0",
     "ruff",
