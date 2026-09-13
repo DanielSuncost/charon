@@ -35,8 +35,9 @@ cd charon
 charon
 ```
 
-Handles macOS and Ubuntu. Installs Python deps into a project-local
-venv, builds the Rust TUI, symlinks `charon` into `~/.local/bin`.
+`./scripts/install.sh` remains the recommended full install. It handles macOS
+and Ubuntu, installs Python deps into a project-local venv, builds the Rust
+TUI, and symlinks `charon` into `~/.local/bin`.
 
 First run:
 ```
@@ -50,21 +51,21 @@ For a lightweight Python install with only the agent runtime and provider
 transport dependencies:
 
 ```bash
-pip install charon
+pip install .
 ```
 
 Install every optional integration with:
 
 ```bash
-pip install 'charon[all]'
+pip install '.[all]'
 ```
 
 The extras can also be installed independently:
 
-- `charon[memory]` — local embeddings and vector recall with
+- `.[memory]` — local embeddings and vector recall with
   sentence-transformers and sqlite-vec
-- `charon[browser]` — browser automation with Playwright
-- `charon[office]` — Excel, Word, and PowerPoint readers with openpyxl,
+- `.[browser]` — browser automation with Playwright
+- `.[office]` — Excel, Word, and PowerPoint readers with openpyxl,
   python-docx, and python-pptx
 
 ---

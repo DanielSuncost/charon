@@ -51,14 +51,15 @@ def test_dependency_groups_keep_core_install_lightweight():
     assert set(extras["all"]) == set().union(*OPTIONAL_DEPENDENCIES.values())
 
 
-def test_requirements_file_tracks_core_dependencies():
+def test_requirements_file_tracks_full_install():
     requirements = [
         line.strip()
         for line in (ROOT / "requirements.txt").read_text().splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
 
-    assert requirements == CORE_DEPENDENCIES
+    expected = set(CORE_DEPENDENCIES).union(*OPTIONAL_DEPENDENCIES.values())
+    assert set(requirements) == expected
 
 
 def test_core_entrypoints_do_not_import_optional_dependencies():
