@@ -8,20 +8,26 @@
 
 ---
 
-Charon is where I work out how autonomous agents should remember,
-coordinate, research, and improve their own output. It runs as a durable
-agent runtime on your own machine, and every capability in it began as a
-question I wanted to answer in running code. It will continue to change
-and grow as my own interests change.
+Charon is my custom agent laboratory. It will continue to change
+and grow as my interests change.
+Some of the key internal projects of interest to me are: 
+- Long running research agents with judge loops that perform evidence validation
+- Long running software development teams that can do automated browser use and ios simulation testing
+- A generalizable "overseer" role that can dynamically design, deploy scoped sub agents, which can also
+  be promoted or retained.
+- Tiered memory: session-scope, project-scope and user-scope
+- Remote coordination of agents that live on separate servers
+- Observable conversation rooms for traceable coordination and critique of long running projects and for experiments on multi-agent QUD estimation.
+- Automated human-oriented documentation of progress and task status
+- Graph based workflows and visualizations
+
 
 Everything runs locally. Memory is SQLite plus on-device embeddings, with
 no cloud services for recall or context. You own the data, and so do the
-agents: their identity and history live in files on your disk, not in a
-provider's account. Swap the model and the agent keeps its memory.
+agents: their identity and history live in files on your disk. 
+Swap the model or provider and the agent keeps its memory.
 
-This is an active personal project and a testbed. It works, it has tests,
-and I use it daily, but some experiments are further along than others,
-and I try to report each one honestly, including where it falls short. I
+This is an active personal project and a testbed. I
 cannot offer support, but I welcome suggestions and ideas.
 
 ---
