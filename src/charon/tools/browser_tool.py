@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import importlib.util
 import inspect
 import json
 import re
@@ -109,6 +110,19 @@ _context = None
 # ── Browser visibility context (set per execute_browser call) ─────────────────
 _session_id_ctx: str = ''
 _state_dir_ctx = None
+
+_BROWSER_INSTALL_ERROR = (
+    "Browser is unavailable because Playwright is not installed. "
+    "Install it with `pip install 'charon[browser]'`, then run "
+    "`playwright install chromium`."
+)
+
+
+def _playwright_available() -> bool:
+    try:
+        return importlib.util.find_spec('playwright') is not None
+    except (ImportError, ValueError):
+        return False
 
 # ── Element identity ──────────────────────────────────────────────────────────
 # ref ('e12' / 'f1.e4') → {'frame': Frame, 'id': 'e12', 'token': doc token, ...}
@@ -894,6 +908,12 @@ def execute_browser(params: dict, ctx: ToolContext) -> ToolResult:
     """Execute a browser action."""
     action = str(params.get('action', '')).strip().lower()
 
+    # The registry normally hides Browser when its extra is absent. Keep this
+    # guard for direct imports and long-lived processes whose environment
+    # changed after the registry was built.
+    if not _playwright_available():
+        return ToolResult(content=_BROWSER_INSTALL_ERROR, is_error=True)
+
     # Update module-level session context so _ensure_page picks up the right settings
     global _session_id_ctx, _state_dir_ctx
     _session_id_ctx = ctx.agent_id or ''
@@ -988,5 +1008,9 @@ def execute_browser(params: dict, ctx: ToolContext) -> ToolResult:
 
         return ToolResult(content=f'Unknown action: {action}', is_error=True)
 
+    except ImportError as e:
+        if 'playwright' in str(e).lower() or str(getattr(e, 'name', '')).startswith('playwright'):
+            return ToolResult(content=_BROWSER_INSTALL_ERROR, is_error=True)
+        return ToolResult(content=f'Browser error: {e}', is_error=True)
     except Exception as e:
         return ToolResult(content=f'Browser error: {e}', is_error=True)

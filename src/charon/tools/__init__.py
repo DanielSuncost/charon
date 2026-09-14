@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import difflib
+import importlib.util
 import json
 import os
 import signal
@@ -1379,6 +1380,14 @@ from charon.tools.clarify_tool import CLARIFY_TOOL_DEF, execute_clarify
 FAILED_TOOL_IMPORTS: list[dict[str, str]] = []
 
 
+def _optional_dependency_available(module_name: str) -> bool:
+    """Return whether an optional dependency can actually be imported."""
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (ImportError, ValueError):
+        return False
+
+
 def _record_tool_import_failure(tool_name: str, exc: BaseException) -> None:
     if isinstance(exc, ImportError):
         _diag('tools', f'optional tool {tool_name} not loaded (missing dependency)', error=exc, tool=tool_name)
@@ -1390,6 +1399,8 @@ def _record_tool_import_failure(tool_name: str, exc: BaseException) -> None:
 # Browser tool — optional, only loads if playwright is installed
 # Suppress stdout/stderr during import (browser-use loads ML models noisily)
 try:
+    if not _optional_dependency_available('playwright'):
+        raise ImportError("Browser requires the 'browser' extra (playwright).")
     import io as _io
     import contextlib as _cl
     with _cl.redirect_stdout(_io.StringIO()), _cl.redirect_stderr(_io.StringIO()):
@@ -1404,6 +1415,8 @@ from charon.tools.tool_catalog import TOOL_CATALOG_DEF, execute_tool_catalog
 
 # Recall tool — optional, only loads if sqlite-vec and sentence-transformers are installed
 try:
+    if not all(_optional_dependency_available(name) for name in ('sentence_transformers', 'sqlite_vec')):
+        raise ImportError("Recall requires the 'memory' extra (sentence-transformers and sqlite-vec).")
     from charon.tools.recall_tool import RECALL_TOOL_DEF, execute_recall
     _HAS_RECALL = True
 except Exception as _e:
@@ -1412,6 +1425,8 @@ except Exception as _e:
 
 # Timeline tool — episodic + procedural memory; same deps as Recall
 try:
+    if not all(_optional_dependency_available(name) for name in ('sentence_transformers', 'sqlite_vec')):
+        raise ImportError("Timeline requires the 'memory' extra (sentence-transformers and sqlite-vec).")
     from charon.tools.timeline_tool import TIMELINE_TOOL_DEF, execute_timeline
     _HAS_TIMELINE = True
 except Exception as _e:

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -153,6 +154,13 @@ async def one_shot(engine: ConversationEngine, query: str) -> int:
     """
     saw_error = False
     text_parts: list[str] = []
+    usage = {
+        'input_tokens': 0,
+        'output_tokens': 0,
+        'cache_read_tokens': 0,
+        'cache_write_tokens': 0,
+        'total_tokens': 0,
+    }
 
     async for event in engine.submit(query):
         if event.type == 'text_delta':
@@ -167,6 +175,13 @@ async def one_shot(engine: ConversationEngine, query: str) -> int:
             if event.data.get('is_error'):
                 first_line = event.data.get('content', '').splitlines()[:1]
                 print(f'[tool-error] {first_line[0] if first_line else ""}', file=sys.stderr, flush=True)
+        elif event.type == 'message_end':
+            turn_usage = event.data.get('usage') or {}
+            for field in ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_write_tokens'):
+                try:
+                    usage[field] += max(0, int(turn_usage.get(field, 0) or 0))
+                except (TypeError, ValueError):
+                    continue
         elif event.type == 'turn_end':
             # Separate turns so a marker line stays on its own line
             if text_parts and not text_parts[-1].endswith('\n'):
@@ -178,6 +193,8 @@ async def one_shot(engine: ConversationEngine, query: str) -> int:
 
     if text_parts and not text_parts[-1].endswith('\n'):
         print(flush=True)
+    usage['total_tokens'] = usage['input_tokens'] + usage['output_tokens']
+    print(json.dumps({'usage': usage}, separators=(',', ':')), file=sys.stderr, flush=True)
     return 1 if (saw_error and not ''.join(text_parts).strip()) else 0
 
 
