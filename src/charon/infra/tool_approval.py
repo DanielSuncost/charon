@@ -372,3 +372,20 @@ def get_approval_status(
             'configured_research_sources': configured_research_source_approval_policy(state_dir),
             'research_sources_env_override': config.research_source_approval_override(),
         }
+
+
+def request_attached_browser_approval(params: dict, ctx) -> bool:
+    """Per-call privilege approval: no research, scope or remembered-tool bypass.
+
+    This gate runs inside the serialized executor to prevent session switches
+    between classification and use, and protects direct executor invocations.
+    Explicit global approval-off remains the operator's override.
+    """
+    if is_approval_skipped():
+        return True
+    from charon.tools import _request_interactive_approval
+    approved, _ = _request_interactive_approval(
+        'Browser', params, 'dangerous',
+        'attach to or change a logged-in browser session', ctx,
+    )
+    return approved
