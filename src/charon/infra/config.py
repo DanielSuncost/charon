@@ -379,3 +379,8 @@ def requested_agent() -> str:
     """CHARON_AGENT (default ''): agent id or name the TUI session should
     bind to at launch. Empty means an unbound fresh session."""
     return os.environ.get('CHARON_AGENT', '').strip()
+
+
+def requested_project() -> str:
+    """CHARON_PROJECT_ROOT: per-launch project override; does not change onboarding."""
+    return os.environ.get('CHARON_PROJECT_ROOT', '').strip()

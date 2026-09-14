@@ -73,6 +73,7 @@ class ProvidersMixin:
         configured_project = str(onboarding.get('project') or '').strip()
         if configured_project:
             project = configured_project
+        project = config.requested_project() or project
 
         # Build enriched system prompt with memory, goals, coordination.
         # Fresh launches should stay fresh: do NOT silently bind to an existing
