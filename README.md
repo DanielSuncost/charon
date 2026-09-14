@@ -9,26 +9,31 @@
 ---
 
 Charon is my custom agent laboratory. It will continue to change
-and grow as my interests change.
-Some of the key internal projects of interest to me are: 
+and grow as my interests change. Each capability here started as a
+question I wanted to answer in running code.
+
+Some of the key internal projects of interest to me are:
 - Long running research agents with judge loops that perform evidence validation
 - Long running software development teams that can do automated browser use and ios simulation testing
 - A generalizable "overseer" role that can dynamically design, deploy scoped sub agents, which can also
   be promoted or retained.
 - Tiered memory: session-scope, project-scope and user-scope
 - Remote coordination of agents that live on separate servers
-- Observable conversation rooms for traceable coordination and critique of long running projects and for experiments on multi-agent QUD estimation.
+- Observable conversation rooms for traceable coordination and critique of
+  long running projects, and experiments on multi-agent QUD estimation
 - Automated human-oriented documentation of progress and task status
 - Graph based workflows and visualizations
 
+Some of these run today and some are still being built; the Status section
+lists what works.
 
 Everything runs locally. Memory is SQLite plus on-device embeddings, with
 no cloud services for recall or context. You own the data, and so do the
-agents: their identity and history live in files on your disk. 
+agents: their identity and history live in files on your disk.
 Swap the model or provider and the agent keeps its memory.
 
-This is an active personal project and a testbed. I
-cannot offer support, but I welcome suggestions and ideas.
+This is an active personal project and a testbed. I cannot offer support,
+but I welcome suggestions and ideas.
 
 ---
 
@@ -78,9 +83,8 @@ The extras can also be installed independently:
 
 ## What's inside
 
-Each of the following started as a question. They are experiments first
-and features second, and several are reported below with their limits,
-not just their wins.
+Each of the following started as a question. Where a capability has limits
+or produced a negative result, the section says so.
 
 ### Memory
 
@@ -139,6 +143,35 @@ Agent: [spawns 6 shades, max 6 concurrent]
 
 Sequential contracts for multi-step work. Parallel batches for
 independent tasks. Budget limits on tokens, time, and iterations.
+
+Scope is enforced on Bash and Git as well as the file tools: a command's
+write targets are resolved before it runs, and anything outside the contract
+is refused. This is path scoping inside the process, not OS-level isolation.
+
+### Overseer
+
+*Who decides what a team of agents should be doing?*
+
+An overseer runs a workspace instead of a task. It reads the sessions it
+manages, keeps work items with acceptance criteria, dispatches scoped tasks
+to agents, verifies each criterion before accepting a result, and reports.
+Completion is evidence-gated: an item cannot pass without a recorded
+verification for every required criterion.
+
+`charon.workspace` holds the records, state machines, hash-chained event
+store and projections behind it, interchangeable with Acheron's JavaScript
+kernel over the same schema. The tools an overseer drives are specified in
+[`docs/contracts/overseer-tools.json`](docs/contracts/overseer-tools.json)
+and run over local tmux, charond, or fleet transports.
+
+Charon also serves those tools over MCP stdio:
+
+```bash
+python -m charon.mcp_server --profile overseer
+```
+
+A Claude Code or Codex session pointed at that drives a Charon workspace
+with the same role document, whether the tools come from Charon or Acheron.
 
 ### Graph Control Plane
 
@@ -280,6 +313,37 @@ keeps turn state visible.
 Archetypes: peer, teacher/student, debate, strategist/critic,
 architect/reviewer, pair-programmers.
 
+### Skills
+
+*What should an agent read before it touches this repo?*
+
+`skills/` holds the procedures an agent working in Charon is expected to
+follow, one directory per skill: `system-map`, `systematic-debugging`,
+`tdd`, `spikes`, `code-review`, and `exploratory-qa`. They are written
+against real Charon commands, paths and invariants rather than general
+advice, and each one ends with the claims it is not allowed to make.
+
+`code-review` and `exploratory-qa` produce the same five-field review
+artifact ([`docs/review-artifact.md`](docs/review-artifact.md)), which is
+checkable rather than prose:
+
+```bash
+python3 skills/code-review/review_artifact.py check <file>
+```
+
+### Capability Assimilation
+
+*Can an agent study another agent's codebase and take what works?*
+
+```
+/harvest_souls
+```
+
+Scans peer agent repositories — their tools, skills and prompts — and
+reports what Charon is missing, with the source path behind each finding.
+`/harvest_souls evaluate` grades the candidates, so the output is a ranked
+decision rather than a dump. The skills above came out of that process.
+
 ### Remote Coordination (Harbor)
 
 *Does coordination hold up when the agents are on different machines?*
@@ -328,10 +392,33 @@ dependencies.
 
 Built-in: Read, Write, Edit, Bash, Git, Http, Search, Recall,
 UserModel, ProjectKnowledge, SpawnShade, SpawnBatch, SpawnJudgeLoop,
-Web, Browser, and more.
+Web, Browser, PyKernel, and more.
 
 Dynamic loader: drop a `.py` file in `.charon/tools/` and it's
 available after `/tools reload`.
+
+**PyKernel** is a persistent Python kernel, one per agent. Variables,
+imports and definitions survive across calls, so an agent can hold scraped
+pages or dataframes as live objects instead of re-reading them through tool
+results every turn. Inside the kernel, `charon.spawn_shade(goal, scope=[...])`
+starts a shade and returns a handle; `charon.rlm(objective, ...)` blocks until
+the child returns its result, like a recursive call. It runs at the same trust
+level as Bash.
+
+**Browser** drives one local Chromium through Playwright with no other
+dependency. Interactive elements are tagged in-page with ids bound to the DOM
+node rather than to a position, so a reference survives reflow and
+lazy-loaded rows. Every frame is walked, including cross-origin iframes.
+Dialogs are answered by policy and reported in the next state instead of
+blocking. When the DOM walk finds nothing usable — canvas apps, closed shadow
+roots — a screenshot is described by the configured multimodal provider into a
+fixed JSON shape, and the resulting refs are clickable by coordinate.
+
+**Schema-constrained generation** returns one non-streaming completion checked
+against a JSON Schema, with a repair pass and conformance failures recorded
+through diagnostics. Local models get the same contract through grammar and
+`json_schema` constraints, which is what makes a small local model usable as a
+tool caller.
 
 ---
 
@@ -341,6 +428,7 @@ available after `/tools reload`.
 charon/
 ├── src/charon/                    # Python agent runtime (installable package)
 │   ├── charon_loop.py             # Daemon entry point
+│   ├── mcp_server.py              # Charon's tools over MCP stdio
 │   ├── agents/                    # Agent lifecycle, runtime, policy, specialists
 │   ├── conversation/              # Multi-turn LLM engine with tool use and steering
 │   ├── context/                   # Context store, compaction, system prompts
@@ -354,6 +442,7 @@ charon/
 │   ├── evaluation/                # Paired agentic benchmarks and statistics
 │   ├── devop/                     # Devop orchestration
 │   ├── fleet/                     # Remote dispatch (Harbor protocol), fleet sync
+│   ├── workspace/                 # Overseer records, state machines, event store
 │   ├── providers/                 # Anthropic, OpenAI, local (httpx)
 │   ├── tools/                     # Built-in + dynamic plugin loader
 │   └── infra/                     # SQLite persistence (WAL), diagnostics, registry
@@ -363,6 +452,7 @@ charon/
 │   ├── src/terminal.rs            # Screen buffer + scrollback
 │   └── src/clipboard.rs           # Cross-platform clipboard (pbcopy, OSC52)
 ├── tools/charons-boat/            # External agent bridge + Harbor worker
+├── skills/                        # Procedures agents follow in this repo
 └── docs/                          # Design documents
 ```
 
@@ -370,28 +460,36 @@ charon/
 
 ## Status
 
-Active development. Full test suite run in CI on every push. Used daily
-as a primary working environment.
+Active development. Used daily as a primary working environment.
+
+CI runs ruff and the Rust build on every push. The Python test job has been
+failing since 2026-07-16 and is not fixed yet; the suite passes locally
+(1522 passed, 1 skipped, most recently 2026-09-14).
 
 What works:
 - Memory recall and user-model / preference consolidation
-- Shade swarms with scope enforcement
+- Shade swarms with scope enforcement, including Bash and Git
+- Overseer workspaces: work items, scoped dispatch, evidence-gated completion
+- Charon's tools served to other agents over MCP stdio
 - Durable graph workflows with routing and live projection
 - Routing calibration and paired policy evaluation
 - Judge loops with checkpoint/rollback
-- Multi-provider (Claude, Codex, local models)
+- Multi-provider (Claude, Codex, local models), with schema-constrained output
 - Session grid with live VTE terminals
 - Conversation rooms
 - Harbor protocol for remote dispatch
-- Browser automation (Playwright)
+- Browser automation with stable refs, every frame, and a vision fallback
+- Persistent Python kernel (PyKernel)
 - Dynamic tool loader
 
 What's planned:
-- MCP support
+- MCP as a client: consuming external MCP servers as a tool registry
+  ([RFC](docs/proposals/charon-mcp.md))
 - Procedural memory (learned multi-step approaches)
 - Per-agent provider config
 - Transparent checkpoints before file mutations
 - Voice integration
+- An agent benchmark number; none has been published yet
 
 See [capability roadmap](docs/plans/capability-roadmap.md) for the
 full list.
@@ -411,6 +509,10 @@ full list.
 | [Routing Calibration](docs/evaluation/routing-calibration.md) | Routing policies, benchmark statistics, and experiment discipline |
 | [Capability Roadmap](docs/plans/capability-roadmap.md) | Prioritized feature plan (P0 to P3) |
 | [Master Plan](docs/plans/MASTER_PLAN.md) | Architecture and build phases |
+| [Skills](skills/README.md) | Procedures an agent follows when working in this repo |
+| [Review Artifact](docs/review-artifact.md) | The five-field artifact code-review and exploratory-qa produce |
+| [MCP](docs/mcp.md) | Charon's tools over MCP stdio |
+| [Overseer Tools](docs/contracts/overseer-tools.json) | The tool contract an overseer drives a workspace with |
 
 ---
 
