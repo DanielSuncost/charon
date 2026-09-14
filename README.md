@@ -503,6 +503,14 @@ CI runs ruff and the Rust build on every push. The Python test job has been
 failing since 2026-07-16 and is not fixed yet; the suite passes locally
 (1522 passed, 1 skipped, most recently 2026-09-14).
 
+On 2026-09-14 Charon resolved 9 of 10 tasks on a mixed subset of
+terminal-bench-core 0.1.1 — three easy, five medium, two hard, across seven
+categories — running on the configured codex route. The one miss, `fix-git`,
+was a byte-exactness failure: the fix was right, but the edit left a trailing
+newline the grader would not accept. Ten tasks out of eighty is a signal, not
+a population estimate, and this dataset is not Terminal-Bench 2.0, so the
+number is not comparable to the published 2.0 leaderboard.
+
 What works:
 - Memory recall and user-model / preference consolidation
 - Shade swarms with scope enforcement, including Bash and Git
@@ -526,7 +534,6 @@ What's planned:
 - Per-agent provider config
 - Transparent checkpoints before file mutations
 - Voice integration
-- An agent benchmark number; none has been published yet
 
 See [capability roadmap](docs/plans/capability-roadmap.md) for the
 full list.
