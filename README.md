@@ -148,6 +148,51 @@ Scope is enforced on Bash and Git as well as the file tools: a command's
 write targets are resolved before it runs, and anything outside the contract
 is refused. This is path scoping inside the process, not OS-level isolation.
 
+### Recursive Calls
+
+*Can an agent call another agent the way it calls a function?*
+
+PyKernel gives each agent a persistent Python kernel: variables, imports and
+definitions survive across calls, so an agent can hold scraped pages or
+dataframes as live objects instead of re-reading them through tool results
+every turn. Inside it, a `charon` module exposes the agent graph as ordinary
+Python:
+
+```python
+handle = charon.spawn_shade('extract the tables', scope=['data/'])  # returns immediately
+result = charon.rlm('summarise the failures in build.log')          # blocks, returns the output
+```
+
+`spawn_shade` is fire-and-forget. `rlm` waits for the target and returns what
+it produced. The target can be a fresh shade, an existing retained shade
+(`child_agent_id`), or another running agent (`peer_agent_id`) — a peer
+message goes through the real task queue and reaches that agent's own
+conversation, not an inert inbox.
+
+The rest of it is what makes recursion survivable:
+
+- **Resumable waits.** One kernel call is capped at 300s, so `rlm` stops short
+  of that ceiling and returns `{'status': 'still_running', ...}` with an id.
+  Pass the id back on the next call to keep waiting instead of spawning the
+  same work twice.
+- **Stalled is not still-running.** If a contract goes quiet past
+  `shade_contract_stall_seconds` (default 300s), the call returns `stalled`:
+  the worker behind it is almost certainly dead, and resuming will not help.
+- **Inherited budget.** Depth and token budget come from whatever spawned the
+  kernel, so a kernel belonging to a shade deep in someone else's tree cannot
+  root a new tree at its own id. `task_complexity='complex'` asks for the
+  strong model tier, and is downgraded once the tree's budget is mostly spent.
+- **Capped peer traffic.** Messages are capped per sender/peer pair, so two
+  agents cannot message each other in an unbounded loop.
+- **Judged promotion.** With `promote=True` an independent judge scores
+  whether the result is a reusable finding before it reaches project memory,
+  never on the worker's own say-so.
+- **Trace.** Every call appends to a JSONL trace per root task under
+  `state_dir/rlm/`, shaped by
+  [`docs/contracts/rlm-node.schema.json`](docs/contracts/rlm-node.schema.json).
+
+The kernel is not sandboxed: it runs at the same trust level as Bash.
+
 ### Overseer
 
 *Who decides what a team of agents should be doing?*
@@ -396,14 +441,6 @@ Web, Browser, PyKernel, and more.
 
 Dynamic loader: drop a `.py` file in `.charon/tools/` and it's
 available after `/tools reload`.
-
-**PyKernel** is a persistent Python kernel, one per agent. Variables,
-imports and definitions survive across calls, so an agent can hold scraped
-pages or dataframes as live objects instead of re-reading them through tool
-results every turn. Inside the kernel, `charon.spawn_shade(goal, scope=[...])`
-starts a shade and returns a handle; `charon.rlm(objective, ...)` blocks until
-the child returns its result, like a recursive call. It runs at the same trust
-level as Bash.
 
 **Browser** drives one local Chromium through Playwright with no other
 dependency. Interactive elements are tagged in-page with ids bound to the DOM
