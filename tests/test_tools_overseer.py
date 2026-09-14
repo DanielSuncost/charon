@@ -377,3 +377,19 @@ def test_mcp_overseer_profile_routes_to_executors(tmp_path):
     finally:
         proc.stdin.close()
         proc.wait(timeout=10)
+
+
+@pytest.mark.parametrize('agent', ['claude', 'codex', 'charon'])
+def test_spawn_preserves_requested_runtime(env, agent):
+    tool = next(t for t in OT.CONTRACT if t['name'] == 'acheron_spawn')
+    assert agent in tool['inputSchema']['properties']['agent']['enum']
+    result = env.call('acheron_spawn', agent=agent, role='RuntimeCheck', prompt='Check runtime.')
+    assert result['agent'] == agent
+    assert result['wired'] is True
+    assert env.transport.by(result['session'])['agent'] == agent
+
+
+def test_spawn_rejects_unknown_runtime(env):
+    before = len(env.transport.sessions)
+    rejects(lambda: env.call('acheron_spawn', agent='unknown', role='Check', prompt='Check'), 'Unsupported agent runtime')
+    assert len(env.transport.sessions) == before

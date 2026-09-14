@@ -612,7 +612,9 @@ def h_spawn(ctx: ToolContext, store: WorkspaceStore, a: dict[str, Any]) -> dict[
     if not v.get('ok'):
         raise OverseerError(f"policy.{v['code']}: {v['reason']}")
     role = str(a.get('role') or 'Agent').strip()
-    agent = 'codex' if a.get('agent') == 'codex' else 'claude'
+    agent = a.get('agent') or 'claude'
+    if agent not in ('claude', 'codex', 'charon'):
+        raise OverseerError(f'Unsupported agent runtime: {agent}')
     if v.get('confirm'):
         gate = store.create_gate(kind='spawn', question=f'Spawn a {role} ({agent})?', options=['Spawn', 'Decline'], actor=actor_for(ctx),
                                  related={'action': {'tool': 'acheron_spawn', 'args': dict(a)}, 'prompt_head': str(a.get('prompt') or '')[:200]})
