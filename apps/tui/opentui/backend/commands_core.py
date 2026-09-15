@@ -598,3 +598,14 @@ class CoreCommandsMixin:
                 self._run_setup_command(f'model {model_name}', request_id)
             return
         return UNHANDLED
+
+    def _cmd_effort(self, command: str, request_id: str | None):
+        if command == '/effort':
+            self._run_setup_command('effort', request_id)
+            return
+        if command.startswith('/effort '):
+            level = command[8:].strip()
+            if level:
+                self._run_setup_command(f'effort {level}', request_id)
+            return
+        return UNHANDLED

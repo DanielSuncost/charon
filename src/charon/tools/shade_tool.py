@@ -289,6 +289,18 @@ def _run_shade(
         # Create provider using shade-specific config (falls back to main if not set)
         provider, model, provider_meta = get_shade_provider_and_model(state_dir, task_complexity=effective_complexity)
 
+        # Reasoning effort for this worker: by the *requested* complexity (the
+        # tier router above may already have stepped the tier down on the same
+        # budget signal; stepping effort down from the downgraded tier as well
+        # would starve a hard contract twice), degraded once when the tree's
+        # budget is scarce. None → the engine loads the session default.
+        try:
+            from charon.providers.model_registry import route_shade_effort
+            shade_effort = route_shade_effort(state_dir, task_complexity=task_complexity, budget=budget)
+        except Exception as exc:
+            shade_effort = None
+            _diag('shade_tool', 'effort routing failed; shade inherits the session level', error=exc, contract_id=contract_id)
+
         # Build shade system prompt
         scope_str = ', '.join(scope) if scope else 'entire project'
         constraint_str = '\n'.join(f'- {c}' for c in constraints) if constraints else 'None'
@@ -332,6 +344,7 @@ def _run_shade(
             agent_name=f'shade-{shade_id}',
             system_prompt=system_prompt,
             state_dir=state_dir,
+            thinking_level=shade_effort,
             max_tokens=16384,
         )
         if resume:

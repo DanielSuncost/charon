@@ -361,6 +361,15 @@ def shade_model() -> str | None:
     return val or None
 
 
+def shade_effort_mode() -> str | None:
+    """CHARON_SHADE_EFFORT_MODE (no default): overrides how worker (shade)
+    reasoning effort is chosen — 'auto' (by task complexity, degrading with
+    the tree's budget) or 'same' (inherit the session's level). Empty/unset
+    returns None."""
+    val = os.environ.get('CHARON_SHADE_EFFORT_MODE', '').strip()
+    return val or None
+
+
 # ── TUI launcher ─────────────────────────────────────────────────────────────
 
 def requested_provider() -> str:

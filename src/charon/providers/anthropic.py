@@ -20,6 +20,8 @@ THINKING_BUDGET_MAP = {
     'medium': 10000,
     'high': 32000,
     'xhigh': 100000,
+    'max': 100000,
+    'ultra': 100000,
 }
 
 

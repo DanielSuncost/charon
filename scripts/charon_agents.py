@@ -647,8 +647,8 @@ def _chat_command_catalog() -> list[str]:
         '/setup provider api',
         '/setup auth-start',
         '/setup model <name>',
-        '/setup effort <off|minimal|low|medium|high|xhigh>',
-        '/effort <off|minimal|low|medium|high|xhigh>',
+        '/setup effort <off|minimal|low|medium|high|xhigh|max|ultra>',
+        '/effort <off|minimal|low|medium|high|xhigh|max|ultra>',
         '/setup project <name>',
         '/setup complete',
         '/clarifications',
@@ -765,7 +765,7 @@ def _handle_chat_slash_command(msg: str, *, agent_id: str, conversation_id: str,
         if not rest:
             state = _load_onboarding_state()
             print(f"current effort: {state.get('reasoning_effort') or state.get('thinking_level') or 'off'}")
-            print('use /effort <off|minimal|low|medium|high|xhigh> to change')
+            print('use /effort <off|minimal|low|medium|high|xhigh|max|ultra> to change')
             return True
         cmd_setup_effort(argparse.Namespace(level=rest))
         return True
@@ -943,12 +943,12 @@ def cmd_setup_model(args):
 
 
 def _normalize_effort(level: str) -> str:
-    raw = str(level or '').strip().lower()
-    aliases = {'none': 'off', '0': 'off', 'min': 'minimal', 'med': 'medium', 'max': 'high'}
-    raw = aliases.get(raw, raw)
-    allowed = {'off', 'minimal', 'low', 'medium', 'high', 'xhigh'}
-    if raw not in allowed:
-        raise ValueError(f"unsupported effort: {level}; use off, minimal, low, medium, high, or xhigh")
+    # One ladder for the whole codebase; 'max' and 'ultra' are real Codex levels
+    # (charon.providers.effort), so 'max' is no longer an alias for 'high'.
+    from charon.providers.effort import THINKING_LEVELS, normalize_thinking_level
+    raw = normalize_thinking_level(level, default='')
+    if not raw:
+        raise ValueError(f"unsupported effort: {level}; use {', '.join(THINKING_LEVELS)}")
     return raw
 
 
