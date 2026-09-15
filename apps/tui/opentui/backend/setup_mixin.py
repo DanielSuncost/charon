@@ -256,11 +256,14 @@ class SetupMixin:
                     {'id': 'claude-3-5-haiku-20241022', 'desc': 'Haiku 3.5'},
                 ],
                 'codex': [
-                    {'id': 'gpt-5.5', 'desc': 'GPT 5.5 — latest, most capable'},
+                    # Ladders per model come from charon.providers.effort (the Codex
+                    # backend's own model list); /setup effort shows them.
+                    {'id': 'gpt-6-astra', 'desc': 'GPT-6 Astra — most capable, 1.05M context, effort up to max'},
+                    {'id': 'gpt-5.5', 'desc': 'GPT 5.5 — effort up to xhigh'},
                     {'id': 'gpt-5.4', 'desc': 'GPT 5.4'},
                     {'id': 'gpt-5', 'desc': 'GPT 5'},
                     # Note: o3, o4-mini, gpt-4.1, gpt-4o, codex-mini etc. are NOT supported
-                    # with Codex OAuth (ChatGPT subscription). Only gpt-5 family works.
+                    # with Codex OAuth (ChatGPT subscription). Only the gpt-5/gpt-6 family works.
                 ],
                 'lmstudio': [],  # dynamic — detected from LM Studio
                 'api': [],
@@ -324,6 +327,43 @@ class SetupMixin:
             effective_onboarding = dict(onboarding)
             effective_onboarding.update(target_state)
             self._on_setup_complete(effective_onboarding, request_id)
+        elif subcmd == 'effort':
+            # Reasoning effort for the user's own session (workers are routed
+            # separately by the model registry, see route_shade_effort).
+            from charon.providers.effort import THINKING_LEVELS, clamp_effort, normalize_thinking_level, supported_efforts
+            target_state = dict(session_override) if session_override else dict(onboarding)
+            provider = str(target_state.get('provider') or onboarding.get('provider') or '').strip()
+            model = str(target_state.get('model') or target_state.get('provider_model') or '').strip()
+            current = normalize_thinking_level(target_state.get('reasoning_effort') or target_state.get('thinking_level'))
+            ladder = supported_efforts(model) if (provider == 'codex' and model) else THINKING_LEVELS[1:]
+            if not arg:
+                common.emit({
+                    'type': 'status',
+                    'message': (
+                        f'Current effort: {current}\n'
+                        f'Levels for {model or provider or "this provider"}: off {" ".join(ladder)}\n'
+                        'Usage: /setup effort <level>   (or /effort <level>)'
+                    ),
+                    'request_id': request_id,
+                })
+                return
+            level = normalize_thinking_level(arg, default='')
+            if not level:
+                common.emit({'type': 'error', 'error': f'Unknown effort: {arg}. Options: {", ".join(THINKING_LEVELS)}', 'request_id': request_id})
+                return
+            target_state['reasoning_effort'] = level
+            target_state['thinking_level'] = level
+            onboarding.update(target_state)
+            self._save_onboarding(onboarding)
+            if session_override and self._active_agent_id:
+                save_session_provider_config(common.STATE_DIR, self._active_agent_id, target_state)
+            self._dispose_engine()  # the new level applies from the next turn
+            note = ''
+            if provider == 'codex' and model and level != 'off':
+                sent = clamp_effort(level, model)
+                if sent != level:
+                    note = f' ({model} tops out at {sent}; requests will be sent at {sent})'
+            common.emit({'type': 'status', 'message': f'✓ Effort set to {level}.{note}', 'request_id': request_id})
         elif subcmd == 'shade-provider':
             if not arg:
                 # Show shade provider picker

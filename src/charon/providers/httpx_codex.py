@@ -22,6 +22,7 @@ from charon.infra import config
 from charon.providers import Message, ModelInfo, StreamDelta, ToolCall
 from charon.providers.http_client import AsyncClientPool
 from charon.providers.http_errors import exception_error, http_error
+from charon.providers.effort import clamp_effort
 from charon.providers.image_content import has_image_block, to_responses_input_parts
 
 try:
@@ -651,10 +652,13 @@ class HttpxCodexProvider:
             body['tool_choice'] = 'auto'
             body['parallel_tool_calls'] = True
 
-        # Reasoning config
-        if thinking_level != 'off':
-            effort_map = {'minimal': 'low', 'low': 'low', 'medium': 'medium', 'high': 'high', 'xhigh': 'high'}
-            effort = effort_map.get(thinking_level, 'medium')
+        # Reasoning config: send the requested level clamped to what *this* model
+        # accepts (charon.providers.effort; the endpoint rejects anything else
+        # with a 400) — xhigh and max go through on astra instead of being
+        # folded into high, 'ultra' (a CLI-only mode) is sent as max, and
+        # levels stay clamped on models that stop lower.
+        effort = clamp_effort(thinking_level, model.model_id)
+        if effort != 'off':
             body['reasoning'] = {'effort': effort, 'summary': 'auto'}
 
         # Codex WebSocket v2 avoids a new HTTP request/response setup on each

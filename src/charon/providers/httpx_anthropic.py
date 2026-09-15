@@ -211,7 +211,7 @@ class HttpxAnthropicProvider:
             body['tools'] = tools
 
         if thinking_level != 'off' and model.supports_thinking:
-            budget = {'minimal': 1024, 'low': 4096, 'medium': 10000, 'high': 32000, 'xhigh': 100000}.get(thinking_level, 10000)
+            budget = {'minimal': 1024, 'low': 4096, 'medium': 10000, 'high': 32000, 'xhigh': 100000, 'max': 100000, 'ultra': 100000}.get(thinking_level, 10000)
             body['thinking'] = {'type': 'enabled', 'budget_tokens': budget}
             body['max_tokens'] = max(max_tokens, budget + 4096)
 

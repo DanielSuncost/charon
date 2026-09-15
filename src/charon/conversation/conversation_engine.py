@@ -116,17 +116,10 @@ def _sanitize_assistant_text(text: str) -> str:
 
 
 def _normalize_thinking_level(value: str | None) -> str:
-    val = str(value or '').strip().lower()
-    aliases = {
-        '': 'off',
-        'none': 'off',
-        '0': 'off',
-        'min': 'minimal',
-        'med': 'medium',
-        'max': 'high',
-    }
-    val = aliases.get(val, val)
-    return val if val in {'off', 'minimal', 'low', 'medium', 'high', 'xhigh'} else 'off'
+    # One ladder for the whole codebase (charon.providers.effort): 'max' and
+    # 'ultra' are real Codex levels, so they are no longer aliased to 'high'.
+    from charon.providers.effort import normalize_thinking_level
+    return normalize_thinking_level(value)
 
 
 def _load_default_thinking_level(state_dir: Path | None) -> str:

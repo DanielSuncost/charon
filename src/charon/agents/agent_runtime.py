@@ -598,6 +598,7 @@ def _get_or_create_engine(state_dir: Path, agent: dict, task: dict):
     selected_endpoint = None
     credential_fingerprint = ''
     registry_execution = None
+    routed_effort: str | None = None
     if route_override is not None:
         resolver = str(route_override.get('resolver') or '').strip()
         if resolver:
@@ -609,13 +610,17 @@ def _get_or_create_engine(state_dir: Path, agent: dict, task: dict):
                 get_shade_provider_and_model,
             )
 
+            routed_complexity = str(route_override.get('task_complexity') or 'normal')
             provider, model, ready = get_shade_provider_and_model(
                 state_dir,
                 phase_name=str(route_override.get('phase_name') or ''),
-                task_complexity=str(
-                    route_override.get('task_complexity') or 'normal'
-                ),
+                task_complexity=routed_complexity,
             )
+            try:
+                from charon.providers.model_registry import route_shade_effort
+                routed_effort = route_shade_effort(state_dir, task_complexity=routed_complexity)
+            except Exception as exc:
+                _diag('agent_runtime', 'effort routing failed; routed task keeps the session level', error=exc)
             if not ready:
                 raise ProviderRouteError(
                     'model registry route is unavailable'
@@ -673,6 +678,8 @@ def _get_or_create_engine(state_dir: Path, agent: dict, task: dict):
         cached.update_system_prompt(system_prompt)
         if selected_endpoint is not None:
             cached._charon_selected_endpoint = selected_endpoint
+        if routed_effort is not None:
+            cached.thinking_level = routed_effort
         return cached, True
 
     if registry_execution is not None:
@@ -694,6 +701,7 @@ def _get_or_create_engine(state_dir: Path, agent: dict, task: dict):
         agent_name=agent.get('name') or 'Charon',
         system_prompt=system_prompt,
         state_dir=state_dir,
+        thinking_level=routed_effort,
         max_tokens=32768,
     )
     if selected_endpoint is not None:

@@ -144,6 +144,7 @@ instead of `os.environ`.
 | `CHARON_LOCAL_MODEL` | unset | Model id override for the local provider (`lmstudio/` prefix stripped). |
 | `CHARON_SHADE_MODEL_MODE` | unset | Overrides the model-selection mode for shade agents. |
 | `CHARON_SHADE_MODEL` | unset | Pins shades to a fixed model (implies mode `fixed`). |
+| `CHARON_SHADE_EFFORT_MODE` | unset | How worker reasoning effort is chosen: `auto` (by task complexity, degrading with budget) or `same` (inherit the session's level). |
 | `CHARON_PROVIDER` | unset | Provider requested at TUI launch (e.g. `local`, `claude-code`). |
 | `CHARON_RESUME` | unset | Agent id (or `latest`) whose conversation the TUI resumes at launch. |
 | `CHARON_AGENT` | unset | Agent id/name the TUI session binds to at launch. |

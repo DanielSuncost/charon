@@ -73,6 +73,12 @@ def resolve_billing_mode(state_dir: Path) -> str:
 
 DEFAULT_REGISTRY = {
     'shade_model_mode': 'auto',  # 'auto' (pick per task), 'same' (use main model), 'fixed'
+    'shade_effort_mode': 'auto', # 'auto' (by task_complexity, degrading with budget), 'same' (inherit the session's level)
+    'effort_by_complexity': {    # worker reasoning effort per task_complexity (mode 'auto')
+        'simple': 'low',         # a probe or a lookup should not burn deep reasoning
+        'normal': 'medium',      # the Codex backend's own default for most models
+        'complex': 'high',       # xhigh/max/ultra are opt-in here: they multiply per-worker latency across a tree
+    },
     'shade_model': None,         # specific model id when mode='fixed'
     'shade_provider': None,      # specific provider when mode='fixed'
     'shade_base_url': None,      # custom base URL (e.g., openrouter)
@@ -108,16 +114,19 @@ def load_registry(state_dir: Path) -> dict:
     reg = dict(DEFAULT_REGISTRY)
     reg['tiers'] = dict(DEFAULT_REGISTRY['tiers'])
     reg['phase_tier_map'] = dict(DEFAULT_REGISTRY['phase_tier_map'])
+    reg['effort_by_complexity'] = dict(DEFAULT_REGISTRY['effort_by_complexity'])
 
     try:
         p = state_dir / 'model_registry.json'
         if p.exists():
             user = json.loads(p.read_text())
             if isinstance(user, dict):
-                for k in ('shade_model_mode', 'shade_model', 'shade_provider',
+                for k in ('shade_model_mode', 'shade_effort_mode', 'shade_model', 'shade_provider',
                            'shade_base_url', 'shade_api_key'):
                     if k in user:
                         reg[k] = user[k]
+                if 'effort_by_complexity' in user and isinstance(user['effort_by_complexity'], dict):
+                    reg['effort_by_complexity'].update(user['effort_by_complexity'])
                 if 'tiers' in user and isinstance(user['tiers'], dict):
                     reg['tiers'].update(user['tiers'])
                 if 'phase_tier_map' in user and isinstance(user['phase_tier_map'], dict):
@@ -133,6 +142,9 @@ def load_registry(state_dir: Path) -> dict:
     if env_model:
         reg['shade_model'] = env_model
         reg['shade_model_mode'] = 'fixed'
+    env_effort_mode = config.shade_effort_mode()
+    if env_effort_mode:
+        reg['shade_effort_mode'] = env_effort_mode
 
     return reg
 
@@ -234,6 +246,71 @@ def get_shade_provider_and_model(
     return _get_shared_main(state_dir)
 
 
+SCARCE_UTILIZATION = 0.75
+
+
+def _budget_scarce(state_dir: Path, budget: dict | None) -> bool:
+    """True once this delegation tree has used >= 75% of its token or cost budget.
+    The one signal both routers degrade on, so tier and effort step down together."""
+    if not budget:
+        return False
+    from charon.agents.topology_budget import token_budget_utilization, cost_budget_utilization
+    seen = [u for u in (token_budget_utilization(state_dir, budget), cost_budget_utilization(state_dir, budget)) if u is not None]
+    return bool(seen) and max(seen) >= SCARCE_UTILIZATION
+
+
+def _session_thinking_level(state_dir: Path) -> str:
+    """The user's own level from onboarding.json ('off' when unset)."""
+    from charon.providers.effort import normalize_thinking_level
+    try:
+        data = json.loads((Path(state_dir) / 'onboarding.json').read_text(encoding='utf-8'))
+        return normalize_thinking_level(data.get('reasoning_effort') or data.get('thinking_level'))
+    except Exception:
+        return 'off'
+
+
+def route_shade_effort(
+    state_dir: Path,
+    *,
+    task_complexity: str = 'normal',
+    budget: dict | None = None,
+    user_level: str | None = None,
+) -> str:
+    """Pick a worker's reasoning effort the way route_shade_model picks a tier.
+
+    Mode 'auto' (default): `effort_by_complexity[task_complexity]` from the
+    registry — simple→low, normal→medium, complex→high unless overridden —
+    stepped down one notch (never below 'low') once the tree's budget is
+    scarce, the same >=75% signal that moves the model tier. A cheap probe
+    therefore never runs at high, and a hard contract under a starved budget
+    still gets medium rather than being dropped to the floor.
+
+    Mode 'same': the session's own level (`user_level`, else onboarding.json),
+    for users who want workers to reason exactly as they do.
+
+    This is worker policy only: the user's own session keeps whatever they
+    chose. Never raises — any failure returns the plain complexity default.
+    """
+    from charon.providers.effort import normalize_thinking_level, step_down
+    try:
+        reg = load_registry(state_dir)
+        mode = str(reg.get('shade_effort_mode') or 'auto').strip().lower()
+        if mode == 'same':
+            if user_level is not None:
+                return normalize_thinking_level(user_level)
+            return _session_thinking_level(state_dir)
+        table = dict(DEFAULT_REGISTRY['effort_by_complexity'])
+        table.update(reg.get('effort_by_complexity') or {})
+        complexity = str(task_complexity or 'normal').strip().lower()
+        level = normalize_thinking_level(table.get(complexity, table['normal']), default='medium')
+        if _budget_scarce(state_dir, budget):
+            level = step_down(level, floor='low')
+        return level
+    except Exception as e:
+        _diag('model_registry', 'shade effort routing failed; using the complexity default', error=e)
+        return {'simple': 'low', 'complex': 'high'}.get(str(task_complexity or '').lower(), 'medium')
+
+
 def route_shade_model(state_dir: Path, *, task_complexity: str = 'normal', budget: dict | None = None) -> str:
     """Rank 'fast' vs 'strong' via the real multi-objective router
     (charon.routing.policy) instead of the plain complex-or-not switch,
@@ -285,12 +362,7 @@ def route_shade_model(state_dir: Path, *, task_complexity: str = 'normal', budge
             ),
         ]
 
-        utilization = None
-        if budget:
-            from charon.agents.topology_budget import token_budget_utilization, cost_budget_utilization
-            seen = [u for u in (token_budget_utilization(state_dir, budget), cost_budget_utilization(state_dir, budget)) if u is not None]
-            utilization = max(seen) if seen else None
-        scarce = utilization is not None and utilization >= 0.75
+        scarce = _budget_scarce(state_dir, budget)
         policy = PolicyName.ECONOMY if scarce else PolicyName.BALANCED
 
         # A 'complex' request sets a quality floor 'fast' can't clear (its
