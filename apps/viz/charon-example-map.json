@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "system": {
+    "id": "charon",
+    "name": "Charon",
+    "description": "Partial architecture example; unowned source appears as gaps."
+  },
+  "subsystems": [
+    {
+      "id": "runtime",
+      "name": "Runtime",
+      "description": "Agent execution and coordination"
+    }
+  ],
+  "components": [
+    {
+      "id": "tools",
+      "subsystem": "runtime",
+      "name": "Tools",
+      "kind": "module",
+      "description": "Tools implementation",
+      "code": [
+        "src/charon/tools/**"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "workspace",
+      "subsystem": "runtime",
+      "name": "Workspace",
+      "kind": "module",
+      "description": "Workspace implementation",
+      "code": [
+        "src/charon/workspace/**"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "agents",
+      "subsystem": "runtime",
+      "name": "Agents",
+      "kind": "module",
+      "description": "Agents implementation",
+      "code": [
+        "src/charon/agents/**"
+      ],
+      "depends_on": []
+    },
+    {
+      "id": "orchestration",
+      "subsystem": "runtime",
+      "name": "Orchestration",
+      "kind": "module",
+      "description": "Orchestration implementation",
+      "code": [
+        "src/charon/orchestration/**"
+      ],
+      "depends_on": []
+    }
+  ],
+  "externals": []
+}

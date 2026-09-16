@@ -1,0 +1,29 @@
+.charon-viz {
+  color: var(--viz-text, #1f2937); background: var(--viz-surface, #f7f8fa); font: 14px var(--viz-font, system-ui, sans-serif); padding: 16px;
+}
+/* Defaults are inherited from the mount element when the host supplies tokens. */
+.charon-viz { --viz-gap: 12px; }
+.charon-viz header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--viz-gap); }
+.charon-viz h2 { width: 100%; margin: 0 0 var(--viz-gap); font-size: 20px; }
+.charon-viz button, .charon-viz input, .charon-viz select { font: inherit; color: var(--viz-text, #1f2937); background: var(--viz-surface-raised, #ffffff); border: 1px solid var(--viz-edge, #62748a); border-radius: var(--viz-radius, 8px); padding: 6px 9px; margin: 3px; }
+.charon-viz button, .charon-viz summary { cursor: pointer; }
+.charon-viz :focus-visible { outline: 3px solid var(--viz-focus-ring, #245c9c); outline-offset: 2px; }
+.charon-viz .viz-surface { display: flex; gap: var(--viz-gap); }
+.charon-viz svg { display: block; width: 75%; height: 650px; background: var(--viz-surface, #f7f8fa); touch-action: none; }
+.charon-viz aside { width: 25%; max-height: 650px; overflow: auto; overflow-wrap: anywhere; }
+.charon-viz aside button { display: block; text-align: left; }
+.charon-viz .viz-node { cursor: pointer; }
+.charon-viz .viz-node rect { fill: var(--viz-surface-raised, #ffffff); stroke: var(--viz-edge, #62748a); stroke-width: 1.5; }
+.charon-viz .viz-node.selected rect { stroke: var(--viz-accent, #245c9c); stroke-width: 4; }
+.charon-viz text { fill: var(--viz-text, #1f2937); font-family: var(--viz-font, system-ui, sans-serif); font-size: 13px; }
+.charon-viz .viz-name { font-weight: 650; font-size: 15px; }
+.charon-viz .viz-description, .charon-viz .viz-status, .charon-viz .viz-boundary { fill: var(--viz-text-muted, #526075); font-size: 11px; }
+.charon-viz .viz-edge { fill: none; stroke: var(--viz-edge, #62748a); stroke-width: 2; cursor: pointer; }
+.charon-viz .observed { stroke-dasharray: 8 4; }
+.charon-viz .inferred { stroke-dasharray: 2 4; stroke: var(--viz-edge-inferred, #826137); }
+.charon-viz .viz-limit, .charon-viz .viz-legend { color: var(--viz-text-muted, #526075); }
+.charon-viz .viz-error { color: var(--viz-warn, #8e480d); white-space: pre-wrap; }
+.charon-viz pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--viz-font-mono, monospace); }
+@media (max-width: 700px) { .charon-viz .viz-surface { flex-direction: column; } .charon-viz svg, .charon-viz aside { width: 100%; } }
+
+.charon-viz .viz-containment { fill: none; stroke: var(--viz-edge, #62748a); stroke-width: 1; stroke-dasharray: 3 6; }

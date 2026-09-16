@@ -1,0 +1,73 @@
+{
+  "model": {
+    "version": 2,
+    "system": {
+      "id": "small",
+      "name": "Small system",
+      "description": "Shared fixture"
+    },
+    "revision": 7,
+    "nodes": [
+      {
+        "id": "a",
+        "parentId": null,
+        "kind": "component",
+        "name": "a",
+        "description": "Purpose of a",
+        "claim": "declared",
+        "freshness": "unknown"
+      },
+      {
+        "id": "b",
+        "parentId": "a",
+        "kind": "component",
+        "name": "b",
+        "description": "Purpose of b",
+        "claim": "declared",
+        "freshness": "unknown"
+      },
+      {
+        "id": "c",
+        "parentId": "a",
+        "kind": "component",
+        "name": "c",
+        "description": "Purpose of c",
+        "claim": "declared",
+        "freshness": "unknown"
+      }
+    ],
+    "relationships": [
+      {
+        "id": "bc",
+        "from": {
+          "systemId": "small",
+          "nodeId": "b"
+        },
+        "to": {
+          "systemId": "small",
+          "nodeId": "c"
+        },
+        "kind": "dependency",
+        "label": "bc",
+        "claim": "observed",
+        "freshness": "fresh",
+        "evidence": [
+          {
+            "rootId": "repo",
+            "path": "src/main.py",
+            "line": 12
+          }
+        ]
+      }
+    ],
+    "extensions": {
+      "example.future": {
+        "version": 99,
+        "fallback": "Unsupported temperature overlay: 23 degrees"
+      }
+    }
+  },
+  "view": {
+    "visibleDepth": 2
+  }
+}
