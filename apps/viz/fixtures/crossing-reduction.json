@@ -1,0 +1,123 @@
+{
+  "model": {
+    "version": 2,
+    "system": {
+      "id": "small",
+      "name": "Small system",
+      "description": "Shared fixture"
+    },
+    "revision": 7,
+    "nodes": [
+      {
+        "id": "a",
+        "parentId": null,
+        "name": "a",
+        "kind": "component"
+      },
+      {
+        "id": "b",
+        "parentId": null,
+        "name": "b",
+        "kind": "component"
+      },
+      {
+        "id": "c",
+        "parentId": null,
+        "name": "c",
+        "kind": "component"
+      },
+      {
+        "id": "d",
+        "parentId": null,
+        "name": "d",
+        "kind": "component"
+      },
+      {
+        "id": "w",
+        "parentId": null,
+        "name": "w",
+        "kind": "component"
+      },
+      {
+        "id": "x",
+        "parentId": null,
+        "name": "x",
+        "kind": "component"
+      },
+      {
+        "id": "y",
+        "parentId": null,
+        "name": "y",
+        "kind": "component"
+      },
+      {
+        "id": "z",
+        "parentId": null,
+        "name": "z",
+        "kind": "component"
+      }
+    ],
+    "relationships": [
+      {
+        "id": "az",
+        "from": {
+          "systemId": "small",
+          "nodeId": "a"
+        },
+        "to": {
+          "systemId": "small",
+          "nodeId": "z"
+        },
+        "kind": "dependency",
+        "label": "dependency",
+        "claim": "declared"
+      },
+      {
+        "id": "by",
+        "from": {
+          "systemId": "small",
+          "nodeId": "b"
+        },
+        "to": {
+          "systemId": "small",
+          "nodeId": "y"
+        },
+        "kind": "dependency",
+        "label": "dependency",
+        "claim": "declared"
+      },
+      {
+        "id": "cx",
+        "from": {
+          "systemId": "small",
+          "nodeId": "c"
+        },
+        "to": {
+          "systemId": "small",
+          "nodeId": "x"
+        },
+        "kind": "dependency",
+        "label": "dependency",
+        "claim": "declared"
+      },
+      {
+        "id": "dw",
+        "from": {
+          "systemId": "small",
+          "nodeId": "d"
+        },
+        "to": {
+          "systemId": "small",
+          "nodeId": "w"
+        },
+        "kind": "dependency",
+        "label": "dependency",
+        "claim": "declared"
+      }
+    ],
+    "extensions": {}
+  },
+  "view": {
+    "visibleDepth": 1
+  }
+}

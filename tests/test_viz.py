@@ -27,7 +27,7 @@ def page(browser, tmp_path):
     errors = []
     page.on('pageerror', lambda e: errors.append(str(e)))
     fixture = json.loads((ASSETS / 'fixtures/small.json').read_text())
-    html = render_html(fixture['model'], fixture['view']).replace('const options = JSON.parse', 'window.mount = mount; const options = JSON.parse')
+    html = render_html(fixture['model'], fixture['view']).replace('const options = JSON.parse', 'window.mount = mount; window.layoutSystem = layoutSystem; const options = JSON.parse')
     path = tmp_path / 'viz.html'
     path.write_text(html)
     page.goto(path.as_uri())
@@ -188,3 +188,61 @@ def test_viz_loopback_server():
         server.shutdown()
         server.server_close()
         worker.join()
+
+
+def test_viz_semantic_columns_crossings_and_determinism(page):
+    fixture = json.loads((ASSETS / 'fixtures/crossing-reduction.json').read_text())
+    metric = page.evaluate('''({model}) => {
+      const idx = {nodes: new Map(model.nodes.map(n => [n.id,n]))};
+      const a = layoutSystem(model.nodes, model.relationships, idx);
+      const b = layoutSystem(model.nodes, model.relationships, idx);
+      return {baseline: a.baselineCrossings, reduced: a.actualCrossings,
+        first: [...a.pos], second: [...b.pos]};
+    }''', fixture)
+    assert metric['first'] == metric['second']
+    assert metric['baseline'] == 6
+    assert metric['reduced'] == 0
+    print(f"Crossing fixture: {metric['baseline']} → {metric['reduced']} inversions")
+    page.evaluate('(f) => charonViz.update(f)', fixture)
+    positions = page.evaluate('''() => Object.fromEntries([...document.querySelectorAll('.viz-node')].map(n => [n.dataset.id, n.getAttribute('transform')]))''')
+    # Existing fixture positions survive updates. Start a fresh layout to check columns.
+    page.evaluate('charonViz.autoLayout()')
+    assert 'left → right: depends on' in page.locator('.viz-axis').inner_text()
+    geometry = page.evaluate('''() => Object.fromEntries([...document.querySelectorAll('.viz-node')].map(n => [n.dataset.id, n.transform.baseVal.getItem(0).matrix.e]))''')
+    for a, b in [('a', 'z'), ('b', 'y'), ('c', 'x'), ('d', 'w')]:
+        assert geometry[a] < geometry[b]
+    positions = page.evaluate('''() => Object.fromEntries([...document.querySelectorAll('.viz-node')].map(n => [n.dataset.id, n.getAttribute('transform')]))''')
+    fixture['model']['nodes'].append(dict(id='unrelated', parentId=None, kind='component', name='Unrelated'))
+    page.evaluate('(f) => charonViz.update(f)', fixture)
+    after = page.evaluate('''() => Object.fromEntries([...document.querySelectorAll('.viz-node')].map(n => [n.dataset.id, n.getAttribute('transform')]))''')
+    assert all(after[id] == p for id, p in positions.items())
+
+
+def test_viz_flow_pins_feedback_and_regions(page):
+    flow = json.loads((ASSETS / 'fixtures/flow.json').read_text())
+    page.evaluate('(f) => charonViz.update(f)', flow)
+    assert 'Flow view' in page.locator('.viz-axis').inner_text()
+    coords = page.evaluate('''() => [...document.querySelectorAll('.viz-node')].map(n => n.transform.baseVal.getItem(0).matrix.e)''')
+    assert coords == sorted(coords) and len(set(coords)) == 5
+    flow['view']['pinnedPositions'] = {'reader': {'x': 150, 'y': 300}}
+    page.evaluate('(f) => charonViz.update(f)', flow)
+    assert page.locator('[data-id="reader"]').get_attribute('transform') == 'translate(150,300)'
+    page.evaluate("charonViz.update({view:{mode:'overview',pinnedPositions:{reader:{x:150,y:300}}}})")
+    assert page.locator('[data-id="reader"]').get_attribute('transform') == 'translate(150,300)'
+    page.evaluate('charonViz.autoLayout()')
+    assert page.locator('[data-id="reader"]').get_attribute('transform') != 'translate(150,300)'
+    cycle = json.loads((ASSETS / 'fixtures/relationship-cycle.json').read_text())
+    page.evaluate('(f) => charonViz.update(f)', cycle)
+    page.evaluate('charonViz.autoLayout()')
+    assert page.locator('.viz-feedback').count() > 0
+    assert 'feedback' in page.locator('.viz-feedback-label').first.text_content()
+    # Two subsystem lanes, a cross-lane edge via outer boundary rails.
+    model = cycle['model']
+    model['nodes'][0]['kind'] = 'subsystem'
+    model['nodes'].append(dict(id='other',parentId=None,kind='subsystem',name='Other'))
+    model['nodes'][2]['parentId'] = 'other'
+    page.evaluate('(f) => charonViz.update(f)', cycle)
+    page.evaluate('charonViz.autoLayout()')
+    assert page.locator('.viz-lane').count() == 2
+    path = page.locator('[data-edge-id="bc"]').get_attribute('d')
+    assert path.count('H') == 4 and path.count('V') == 3

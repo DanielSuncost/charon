@@ -27,3 +27,8 @@
 @media (max-width: 700px) { .charon-viz .viz-surface { flex-direction: column; } .charon-viz svg, .charon-viz aside { width: 100%; } }
 
 .charon-viz .viz-containment { fill: none; stroke: var(--viz-edge, #62748a); stroke-width: 1; stroke-dasharray: 3 6; }
+.charon-viz .viz-axis { width: 100%; margin: 0; color: var(--viz-text-muted, #526075); }
+.charon-viz .viz-lane { fill: var(--viz-surface-raised, #fff); stroke: var(--viz-edge, #62748a); stroke-width: 1; }
+.charon-viz .viz-lane-title { font-weight: 650; font-size: 16px; }
+.charon-viz .viz-feedback { stroke-dasharray: 12 4 2 4; }
+.charon-viz .viz-feedback-label { fill: var(--viz-warn, #8e480d); font-size: 11px; }

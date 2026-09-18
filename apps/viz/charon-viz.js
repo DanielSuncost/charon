@@ -1,5 +1,5 @@
 /** Charon renderer. Model content is only assigned through textContent. */
-export const RENDERER_VERSION = '1.0.0';
+export const RENDERER_VERSION = '1.1.0';
 export const SCHEMA_VERSIONS = Object.freeze([2]);
 const NS = 'http://www.w3.org/2000/svg';
 const LEGEND = 'Claims: declared [D] solid · observed [O] dashed · inferred [I] dotted. Freshness: fresh / stale / unknown. Imports are observations, not design intent.';
@@ -51,10 +51,157 @@ function validate(model) {
   return {nodes, children};
 }
 
+// Port of Acheron mapview.js layerNodes/layoutGraph: dependency depth, then
+// declaration-ordered subsystem lanes. Keep claims separate; never merge facts.
+const COL = 360, ROW = 155, PAD = 65;
+const FLOW = new Set(['reads', 'writes', 'calls', 'produces']);
+function directed(r, mode) {
+  if (mode === 'data-flow' && r.kind === 'reads') return [r.to.nodeId, r.from.nodeId];
+  return [r.from.nodeId, r.to.nodeId];
+}
+function layers(nodes, edges, mode) {
+  const deps = new Map(nodes.map(n => [n.id, []])), depth = new Map();
+  for (const e of edges) { const [a, b] = directed(e, mode); if (a !== b && deps.has(a) && deps.has(b)) deps.get(a).push(b); }
+  const remaining = new Set(deps.keys());
+  while (remaining.size) {
+    let progressed = false;
+    for (const id of remaining) if (!deps.get(id).some(d => remaining.has(d))) {
+      depth.set(id, 1 + Math.max(-1, ...deps.get(id).map(d => depth.get(d))));
+      remaining.delete(id); progressed = true;
+    }
+    if (!progressed) {
+      const id = remaining.values().next().value; // deterministic cycle break
+      depth.set(id, 1 + Math.max(-1, ...deps.get(id).filter(d => depth.has(d)).map(d => depth.get(d))));
+      remaining.delete(id);
+    }
+  }
+  const max = Math.max(0, ...depth.values());
+  return new Map(nodes.map(n => [n.id, max - depth.get(n.id)]));
+}
+
+/** Count inversions between edges joining the same pair of columns, excluding
+ * shared endpoints and feedback edges. This is a layer-order metric, not a count
+ * of intersections after orthogonal routing. */
+function crossingCount(edges, positions, mode) {
+  let count = 0;
+  const pairs = edges.map(e => directed(e, mode)).filter(([a,b]) => positions.has(a) && positions.has(b));
+  for (let i = 0; i < pairs.length; i++) for (let j = i + 1; j < pairs.length; j++) {
+    const [a,b] = pairs[i], [c,d] = pairs[j];
+    if (a === c || b === d) continue;
+    const [pa,pb,pc,pd] = [a,b,c,d].map(id => positions.get(id));
+    if (pa.x < pb.x && pa.x === pc.x && pb.x === pd.x && (pa.y - pc.y) * (pb.y - pd.y) < 0) count++;
+  }
+  return count;
+}
+
+export function layoutSystem(nodes, edges, index, mode = 'overview', previous = new Map(), pins = {}) {
+  const ids = new Set(nodes.map(n => n.id));
+  const localEdges = edges.filter(e => ids.has(e.from.nodeId) && ids.has(e.to.nodeId));
+  const columns = layers(nodes, localEdges, mode), laneOf = new Map(), laneNames = new Map();
+  for (const n of nodes) {
+    let ancestor = n, lane = n.kind === 'external' ? '__external' : '__root';
+    while (ancestor) {
+      if (ancestor.kind === 'subsystem') { lane = ancestor.id; break; }
+      if (ancestor.parentId == null && ancestor.id !== n.id) lane = ancestor.id;
+      ancestor = index.nodes.get(ancestor.parentId);
+    }
+    laneOf.set(n.id, lane);
+    laneNames.set(lane, lane === '__external' ? 'External systems' : lane === '__root' ? 'System components' : index.nodes.get(lane)?.name || lane);
+    // A visible subsystem is the lane's context, not a dependency sink.
+    if (n.id === lane && nodes.some(other => other.parentId === n.id)) columns.set(n.id, -1);
+  }
+  const groups = new Map();
+  for (const n of nodes) {
+    const key = JSON.stringify([laneOf.get(n.id), columns.get(n.id)]);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(n.id);
+  }
+  const order = new Map(nodes.map((n,i) => [n.id,i]));
+  function freshPositions() {
+    const out = new Map(); let top = 30;
+    for (const lane of laneNames.keys()) {
+      let slots = 1;
+      for (const [key, members] of groups) {
+        const [l,c] = JSON.parse(key); if (l !== lane) continue;
+        slots = Math.max(slots, members.length);
+        members.forEach((id,i) => out.set(id, {x: 45 + (c + 1) * COL, y: top + PAD + i * ROW}));
+      }
+      top += PAD + slots * ROW + 35;
+    }
+    return out;
+  }
+  let best = freshPositions(), baseline = crossingCount(localEdges, best, mode), bestCount = baseline;
+  // Barycenter sweeps reorder only within a lane/column; declaration order breaks
+  // equal barycenters. Keep the best pass so crossing count can never increase.
+  for (let pass = 0; pass < 4; pass++) {
+    const working = freshPositions();
+    const keys = [...groups.keys()].sort((a,b) => (JSON.parse(a)[1] - JSON.parse(b)[1]) * (pass % 2 ? -1 : 1));
+    for (const key of keys) {
+      const members = groups.get(key), scores = new Map();
+      for (const id of members) {
+        const neighbors = [];
+        for (const e of localEdges) {
+          const [a,b] = directed(e,mode);
+          if (pass % 2 === 0 && b === id && columns.get(a) < columns.get(b)) neighbors.push(working.get(a).y);
+          if (pass % 2 === 1 && a === id && columns.get(a) < columns.get(b)) neighbors.push(working.get(b).y);
+        }
+        scores.set(id, neighbors.length ? neighbors.reduce((a,b) => a+b,0) / neighbors.length : working.get(id).y);
+      }
+      members.sort((a,b) => scores.get(a) - scores.get(b) || order.get(a) - order.get(b));
+      const ys = members.map(id => working.get(id).y).sort((a,b) => a-b);
+      members.forEach((id,i) => working.set(id, {...working.get(id), y: ys[i]}));
+    }
+    const count = crossingCount(localEdges, working, mode);
+    if (count < bestCount) { best = new Map(working); bestCount = count; }
+  }
+  const pos = new Map(previous);
+  for (const n of nodes) if (pins[n.id]) {
+    const p = pins[n.id];
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) throw Error(`Invalid pinned position: ${n.id}`);
+    pos.set(n.id, {...p});
+  }
+  for (const n of nodes) if (!pos.has(n.id)) {
+    const p = {...best.get(n.id)};
+    // Incremental additions retain their semantic column and every existing slot.
+    // If a lane fills, a labelled continuation region is added below it.
+    while ([...pos].some(([id,q]) => ids.has(id) && Math.abs(q.x-p.x) < 300 && Math.abs(q.y-p.y) < ROW)) p.y += ROW;
+    const otherLane = [...pos].filter(([id]) => ids.has(id) && laneOf.get(id) !== laneOf.get(n.id));
+    if (otherLane.some(([,q]) => Math.abs(q.y-p.y) < ROW)) p.y = Math.max(p.y, ...[...pos].filter(([id]) => ids.has(id)).map(([,q]) => q.y + ROW + PAD));
+    pos.set(n.id,p);
+  }
+  const width = Math.max(500, ...nodes.map(n => pos.get(n.id).x + 320));
+  const regions = [];
+  const ordered = [...nodes].sort((a,b) => pos.get(a.id).y-pos.get(b.id).y || order.get(a.id)-order.get(b.id));
+  for (const n of ordered) {
+    const lane = laneOf.get(n.id), p = pos.get(n.id);
+    let region = regions.at(-1);
+    if (!region || region.id !== lane) { region = {id: lane, name: laneNames.get(lane), y: p.y-PAD, bottom: p.y+135, members: []}; regions.push(region); }
+    region.bottom = Math.max(region.bottom,p.y+135); region.members.push(n.id);
+  }
+  const regionOf = new Map();
+  regions.forEach((r,i) => r.members.forEach(id => regionOf.set(id,i)));
+  return {pos, regions, regionOf, width, columns, baselineCrossings: baseline, crossings: bestCount,
+    actualCrossings: crossingCount(localEdges,pos,mode)};
+}
+
+function routeRelationship(a, b, fromRegion, toRegion, layout, track) {
+  const feedback = b.x <= a.x;
+  const sx = a.x + 270, sy = a.y + 52, tx = b.x, ty = b.y + 52;
+  if (fromRegion === toRegion && !feedback && b.x-a.x <= COL) {
+    const mid = sx + 25;
+    return {path: `M ${sx} ${sy} H ${mid} V ${ty} H ${tx}`, feedback};
+  }
+  const ar = layout.regions[fromRegion], br = layout.regions[toRegion];
+  const ay = ar.y + 38 + track % 4 * 5, by = br.y + 38 + track % 4 * 5;
+  const rail = layout.width + 15 + track % 8 * 8;
+  return {path: `M ${sx} ${sy} H ${sx+20} V ${ay} H ${rail} V ${by} H ${tx-20} V ${ty} H ${tx}`, feedback};
+}
+
 export function mount(element, {model, view = {}, theme = {}, callbacks = {}} = {}) {
   let current, config = {}, index, positions = new Map(), drawn, svg, world, inspector;
   let camera = {x: 0, y: 0, zoom: 1}, selection = null, expanded = new Set(), focusNode = null;
   let destroyed = false, generation = 0;
+  const modePositions = new Map();
   const root = el('section', undefined, {class: 'charon-viz', 'aria-label': 'System visualization'});
   const error = el('div', '', {class: 'viz-error', role: 'alert'});
   const content = el('div'); root.append(error, content); element.append(root);
@@ -93,28 +240,13 @@ export function mount(element, {model, view = {}, theme = {}, callbacks = {}} = 
     const local = e => e.systemId === m.system.id && ids.has(e.nodeId);
     const relevant = m.relationships.filter(r => local(r.from) || local(r.to));
     const filtered = relevant.filter(r => !v.relationshipKinds?.length || v.relationshipKinds.includes(r.kind));
-    const edges = filtered.slice(0, 500), pos = new Map(basePositions);
-    const occupied = [];
-    for (const n of visible) {
-      const pin = v.pinnedPositions?.[n.id];
-      if (pin) {
-        if (!Number.isFinite(pin.x) || !Number.isFinite(pin.y)) throw Error(`Invalid pinned position: ${n.id}`);
-        pos.set(n.id, {...pin});
-      }
-      if (pos.has(n.id)) occupied.push(pos.get(n.id));
-    }
-    for (const n of visible) if (!pos.has(n.id)) {
-      const rel = edges.find(r => r.from.nodeId === n.id || r.to.nodeId === n.id);
-      const near = rel && pos.get(rel.from.nodeId === n.id ? rel.to.nodeId : rel.from.nodeId);
-      let p = near ? {x: near.x + 310, y: near.y} : {x: 30, y: 40};
-      if (p.x > 650) p = {x: 30, y: p.y + 165};
-      while (occupied.some(o => Math.abs(o.x - p.x) < 290 && Math.abs(o.y - p.y) < 145)) {
-        p.x += 310; if (p.x > 650) { p.x = 30; p.y += 165; }
-      }
-      pos.set(n.id, p); occupied.push(p);
-    }
-    return {visible, ids, edges, pos, hidden: m.nodes.length - visible.length, filtered: relevant.length - filtered.length, edgeLimit: filtered.length - edges.length};
+    const mode = v.mode || 'overview';
+    const semantic = filtered.filter(r => mode === 'data-flow' ? FLOW.has(r.kind) : !FLOW.has(r.kind));
+    const edges = semantic.slice(0, 500);
+    const layout = layoutSystem(visible, edges.filter(r => r.from.systemId === m.system.id && r.to.systemId === m.system.id), idx, mode, basePositions, v.pinnedPositions || {});
+    return {visible, ids, edges, ...layout, hidden: m.nodes.length - visible.length, filtered: relevant.length - semantic.length, edgeLimit: semantic.length - edges.length};
   }
+
   function evidence(parent, refs) {
     for (const ref of refs || []) parent.append(button(`${ref.path || ref.file || ref.url || ref.rootId || 'Reference'}${ref.line ? ':' + ref.line : ''}${ref.symbol ? '#' + ref.symbol : ''}`, () => {
       if (!callbacks.onOpenEvidence) { fail(Error('No evidence resolver is attached to this host.')); return; }
@@ -171,12 +303,13 @@ export function mount(element, {model, view = {}, theme = {}, callbacks = {}} = 
       for (const n of hits.slice(0, 50)) results.append(button(n.name || n.id, () => { handle.focus(n.id); handle.select(n.id); }));
       if (hits.length > 50) results.append(el('p', `Search limit: ${hits.length - 50} more results; refine your query.`));
     };
+    header.append(el('p', v.mode === 'data-flow' ? 'Flow view · left → right: source to consumer. Reads: resource → reader; writes, calls, produces: actor → target. Arrows describe relations, not clock time.' : 'Structural view · left → right: depends on. Leaves and externals sit to the right. Dashed imports are observed, not declared design. ↶ marks feedback.', {class: 'viz-axis'}));
     header.append(nav, search, button('Fit', () => handle.fit()), button('Auto-layout', () => handle.autoLayout()), button('Zoom +', () => zoom(1.2)), button('Zoom −', () => zoom(1 / 1.2)));
     const modes = el('select', undefined, {'aria-label': 'View mode'});
-    for (const mode of ['overview', 'dependency', 'data-flow']) modes.append(el('option', mode, {value: mode}));
-    modes.value = v.mode || 'overview'; modes.onchange = () => update({view: {...config, mode: modes.value}});
+    for (const mode of ['overview', 'dependency', 'data-flow']) modes.append(el('option', mode === 'data-flow' ? 'Flow' : mode === 'overview' ? 'Structural overview' : 'Structural dependencies', {value: mode}));
+    modes.value = v.mode || 'overview'; modes.onchange = () => { if (update({view: {...config, mode: modes.value}})) handle.fit(); };
     header.append(modes, results); box.append(header);
-    const limits = el('p', `View: ${d.visible.length} nodes. ${d.hidden ? `Limit state: ${d.hidden} nodes not drawn (outside focus, depth, collapse or ${v.maxNodes || 200}-node bound); search or focus to navigate.` : 'All nodes drawn.'} ${d.filtered} relationships excluded by kind filter. ${d.edgeLimit ? `Limit state: ${d.edgeLimit} relationships exceed the 500-edge bound.` : ''}`, {class: 'viz-limit', role: 'status'});
+    const limits = el('p', `View: ${d.visible.length} nodes. ${d.hidden ? `Limit state: ${d.hidden} nodes not drawn (outside focus, depth, collapse or ${v.maxNodes || 200}-node bound); search or focus to navigate.` : 'All nodes drawn.'} ${d.filtered} relationships excluded by active mode/kind filter. ${d.edgeLimit ? `Limit state: ${d.edgeLimit} relationships exceed the 500-edge bound.` : ''}`, {class: 'viz-limit', role: 'status'});
     box.append(limits);
     for (const _ of Object.keys(m.extensions || {})) box.append(el('details', undefined));
     // Every unknown extension has a readable, inert fallback, including full data.
@@ -189,12 +322,9 @@ export function mount(element, {model, view = {}, theme = {}, callbacks = {}} = 
     s.append(el('title', `${m.system.id} · revision ${text(m.revision)}`, {}, true));
     const w = el('g', undefined, {}, true); s.append(w);
     const endpoint = e => e.systemId !== m.system.id ? `Unresolved reference ${e.systemId}/${e.nodeId}` : d.ids.has(e.nodeId) ? e.nodeId : `Boundary reference ${e.nodeId}`;
-    if ((v.mode || 'overview') === 'overview') for (const n of d.visible) {
-      const parent = d.ids.has(n.parentId) && d.pos.get(n.parentId), child = d.pos.get(n.id);
-      if (parent) {
-        const link = el('path', undefined, {d: `M ${parent.x + 270} ${parent.y + 52} L ${child.x} ${child.y + 52}`, class: 'viz-containment'}, true);
-        link.append(el('title', `Contains: ${n.parentId} → ${n.id}`, {}, true)); w.append(link);
-      }
+    for (const region of d.regions) {
+      w.append(el('rect', undefined, {x: 15, y: region.y, width: d.width, height: region.bottom-region.y, rx: 10, class: 'viz-lane'}, true));
+      w.append(el('text', region.name, {x: 30, y: region.y+24, class: 'viz-lane-title'}, true));
     }
     const boundaryCounts = new Map();
     const edgeList = el('details');
@@ -205,10 +335,15 @@ export function mount(element, {model, view = {}, theme = {}, callbacks = {}} = 
       const a = r.from.systemId === m.system.id && d.ids.has(r.from.nodeId) && d.pos.get(r.from.nodeId);
       const b = r.to.systemId === m.system.id && d.ids.has(r.to.nodeId) && d.pos.get(r.to.nodeId);
       if (a && b) {
-        const path = el('path', undefined, {d: `M ${a.x + 135} ${a.y + 100} Q ${a.x + 135} ${b.y - 25} ${b.x + 135} ${b.y}`, class: `viz-edge ${r.claim || 'declared'}`, tabindex: 0, role: 'button', 'aria-label': `${r.label || r.kind} ${badge(r)}`}, true);
-        path.append(el('title', `${r.from.nodeId} → ${r.to.nodeId}: ${r.label || r.kind} · ${badge(r)}`, {}, true));
+        const [fromId,toId] = directed(r, v.mode);
+        const start = d.pos.get(fromId), end = d.pos.get(toId);
+        const route = routeRelationship(start, end, d.regionOf.get(fromId), d.regionOf.get(toId), d, d.edges.indexOf(r));
+        const label = `${r.label || r.kind} · ${badge(r)}${route.feedback ? ' · ↶ feedback' : ''}`;
+        const path = el('path', undefined, {d: route.path, class: `viz-edge ${r.claim || 'declared'}${route.feedback ? ' viz-feedback' : ''}`, 'data-edge-id': r.id, 'data-feedback': route.feedback, tabindex: 0, role: 'button', 'aria-label': label}, true);
+        path.append(el('title', `${r.from.nodeId} → ${r.to.nodeId}: ${label}`, {}, true));
         path.onclick = () => handle.select(r.id); path.onkeydown = e => { if (e.key === 'Enter') handle.select(r.id); }; w.append(path);
-        w.append(el('text', '▼', {x: b.x + 129, y: b.y, class: 'viz-arrow'}, true));
+        w.append(el('text', '▶', {x: end.x-10, y: end.y+56, class: 'viz-arrow'}, true));
+        if (route.feedback) w.append(el('text', '↶ feedback', {x: start.x+275, y: start.y+42, class: 'viz-feedback-label'}, true));
       } else {
         const p = a || b;
         if (p) { const key = a ? r.from.nodeId : r.to.nodeId; boundaryCounts.set(key, (boundaryCounts.get(key) || 0) + 1); }
@@ -245,7 +380,10 @@ export function mount(element, {model, view = {}, theme = {}, callbacks = {}} = 
     try {
       // Snapshot caller data; callbacks can never mutate an accepted model in place.
       const m = structuredClone(next.model ?? current), v = structuredClone(next.view ?? config);
-      const idx = validate(m), d = plan(m, v, idx, positions), ui = paint(m, v, idx, d);
+      const idx = validate(m), mode = v.mode || 'overview';
+      const base = mode === (config.mode || 'overview') ? positions : modePositions.get(mode) || new Map();
+      const d = plan(m, v, idx, base), ui = paint(m, v, idx, d);
+      modePositions.set(config.mode || 'overview', positions);
       current = m; config = v; index = idx; drawn = d; positions = d.pos; focusNode = v.focusNode ?? null;
       svg = ui.s; world = ui.w; inspector = ui.aside; generation++;
       content.replaceChildren(ui.box); error.textContent = ''; applyCamera(); inspect();
@@ -257,7 +395,7 @@ export function mount(element, {model, view = {}, theme = {}, callbacks = {}} = 
     update,
     focus(id) { if (update({view: {...config, focusNode: id}})) { handle.fit(); invoke('onFocus', id, crumbs(id)); changed(); } },
     select(id) { if (destroyed) return; if (id != null && !index?.nodes.has(id) && !current?.relationships.some(r => r.id === id)) { fail(Error(`Unknown selection: ${id}`)); return; } selection = id; inspect(); for (const n of svg?.querySelectorAll('[data-id]') || []) n.classList.toggle('selected', n.getAttribute('data-id') === id); invoke('onSelect', id); changed(); },
-    fit() { if (!drawn || destroyed) return; const ps = drawn.visible.map(n => positions.get(n.id)); if (!ps.length) return; const minX = Math.min(...ps.map(p => p.x)), minY = Math.min(...ps.map(p => p.y)); const width = Math.max(...ps.map(p => p.x + 285)) - minX, height = Math.max(...ps.map(p => p.y + 145)) - minY; const z = Math.min(1, 950 / width, 600 / height); camera = {x: 25 - minX * z, y: 25 - minY * z, zoom: z}; applyCamera(); changed(); },
+    fit() { if (!drawn || destroyed) return; const ps = drawn.visible.map(n => positions.get(n.id)); if (!ps.length) return; const minX = Math.min(0, ...ps.map(p => p.x)), minY = Math.min(0, ...drawn.regions.map(r => r.y)); const width = drawn.width + 90 - minX, height = Math.max(...drawn.regions.map(r => r.bottom)) + 20 - minY; const z = Math.min(1, 950 / width, 600 / height); camera = {x: 25 - minX * z, y: 25 - minY * z, zoom: z}; applyCamera(); changed(); },
     autoLayout() { const old = positions; positions = new Map(); if (!update({view: {...config, pinnedPositions: {}}})) positions = old; else { handle.fit(); changed(); } },
     exportSVG() {
       if (!svg) return '';
@@ -269,12 +407,12 @@ export function mount(element, {model, view = {}, theme = {}, callbacks = {}} = 
         for (const key of ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'font-family', 'font-size', 'font-weight']) copies[i].style.setProperty(key, cs.getPropertyValue(key));
       }
       copy.setAttribute('viewBox', '0 0 1000 740'); copy.style.background = computed.getPropertyValue('--viz-surface') || '#f7f8fa';
-      for (const [line, y] of [[`${current.system.id} · revision ${text(current.revision)}`, 680], [LEGEND.slice(0, 100), 705], [LEGEND.slice(100), 725]]) copy.append(el('text', line, {x: 15, y, fill: computed.color, 'font-size': 12}, true));
+      for (const [line, y] of [[config.mode === 'data-flow' ? 'Flow: source → consumer; reads run resource → reader. Arrows are relations, not clock time.' : 'Structural: left → right depends on. Dashed imports are observations. ↶ feedback.', 655], [`${current.system.id} · revision ${text(current.revision)}`, 680], [LEGEND.slice(0, 100), 705], [LEGEND.slice(100), 725]]) copy.append(el('text', line, {x: 15, y, fill: computed.color, 'font-size': 12}, true));
       return new XMLSerializer().serializeToString(copy);
     },
     exportText() { if (!drawn) return ''; return [`${current.system.id} · revision ${text(current.revision)}`, ...drawn.visible.map(n => `${crumbs(n.id).map(c => c.name).join(' / ')}: ${n.description || ''} (${badge(n)})`), ...drawn.edges.map(r => `${r.from.systemId}/${r.from.nodeId} → ${r.to.systemId}/${r.to.nodeId}: ${r.label || r.kind} (${badge(r)})\n${(r.evidence || []).map(e => `${e.path || e.file}:${e.line || ''}`).join('\n')}`), `${drawn.hidden} nodes outside drawn view; ${drawn.edgeLimit} edges exceed bound; ${drawn.filtered} filtered edges.`, LEGEND].join('\n'); },
     getState,
-    destroy() { destroyed = true; generation++; root.remove(); content.replaceChildren(); root.replaceChildren(); for (const [key, value] of oldTokens) { if (value) element.style.setProperty(key, value); else element.style.removeProperty(key); } svg = world = inspector = drawn = current = index = null; positions.clear(); callbacks = {}; },
+    destroy() { destroyed = true; generation++; root.remove(); content.replaceChildren(); root.replaceChildren(); for (const [key, value] of oldTokens) { if (value) element.style.setProperty(key, value); else element.style.removeProperty(key); } svg = world = inspector = drawn = current = index = null; positions.clear(); modePositions.clear(); callbacks = {}; },
   };
   if (update({model, view})) handle.fit();
   return handle;
