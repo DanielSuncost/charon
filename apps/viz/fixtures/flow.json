@@ -1,0 +1,106 @@
+{
+  "model": {
+    "version": 2,
+    "system": {
+      "id": "small",
+      "name": "Small system",
+      "description": "Shared fixture"
+    },
+    "revision": 7,
+    "nodes": [
+      {
+        "id": "store",
+        "parentId": null,
+        "name": "store",
+        "kind": "component"
+      },
+      {
+        "id": "reader",
+        "parentId": null,
+        "name": "reader",
+        "kind": "component"
+      },
+      {
+        "id": "processor",
+        "parentId": null,
+        "name": "processor",
+        "kind": "component"
+      },
+      {
+        "id": "output",
+        "parentId": null,
+        "name": "output",
+        "kind": "component"
+      },
+      {
+        "id": "archive",
+        "parentId": null,
+        "name": "archive",
+        "kind": "component"
+      }
+    ],
+    "relationships": [
+      {
+        "id": "read",
+        "from": {
+          "systemId": "small",
+          "nodeId": "reader"
+        },
+        "to": {
+          "systemId": "small",
+          "nodeId": "store"
+        },
+        "kind": "reads",
+        "label": "reads",
+        "claim": "declared"
+      },
+      {
+        "id": "call",
+        "from": {
+          "systemId": "small",
+          "nodeId": "reader"
+        },
+        "to": {
+          "systemId": "small",
+          "nodeId": "processor"
+        },
+        "kind": "calls",
+        "label": "calls",
+        "claim": "declared"
+      },
+      {
+        "id": "produce",
+        "from": {
+          "systemId": "small",
+          "nodeId": "processor"
+        },
+        "to": {
+          "systemId": "small",
+          "nodeId": "output"
+        },
+        "kind": "produces",
+        "label": "produces",
+        "claim": "declared"
+      },
+      {
+        "id": "write",
+        "from": {
+          "systemId": "small",
+          "nodeId": "output"
+        },
+        "to": {
+          "systemId": "small",
+          "nodeId": "archive"
+        },
+        "kind": "writes",
+        "label": "writes",
+        "claim": "declared"
+      }
+    ],
+    "extensions": {}
+  },
+  "view": {
+    "visibleDepth": 1,
+    "mode": "data-flow"
+  }
+}
