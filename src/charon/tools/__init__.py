@@ -60,6 +60,7 @@ class ToolContext:
     cancel_event: threading.Event | None = None
     topology_depth: int = 0  # depth in the delegation tree (0 = root agent)
     topology_budget: dict[str, Any] | None = None  # set for shades: governs further spawning
+    browser_session_grants: list[str] | None = None  # trusted attached-session capabilities
 
 
 _active_bash_lock = threading.Lock()
@@ -1779,6 +1780,15 @@ def _check_scope(name: str, params: dict, ctx: ToolContext) -> str | None:
     Returns an error message if blocked, None if allowed.
     Only enforced when ctx.scope is set (shade agents).
     """
+    if name == 'Browser':
+        from charon.tools.browser_tool import attached_scope_error
+        error = attached_scope_error(params, ctx)
+        if error and str(params.get('action', '')).strip().lower() in {'attach', 'cdp', 'detach'}:
+            _diag('browser_audit', 'browser operation', state_dir=ctx.state_dir,
+                  action=str(params.get('action')), operation=str(params.get('operation', ''))[:80],
+                  actor=ctx.agent_id, outcome='refused_or_failed')
+        return error
+
     if not ctx.scope and not ctx.frozen:
         return None  # No restrictions
 
@@ -1844,6 +1854,13 @@ def execute_tool(name: str, params: dict, ctx: ToolContext) -> ToolResult:
     scope_error = _check_scope(name, params, ctx)
     if scope_error:
         return ToolResult(content=scope_error, is_error=True)
+
+    # Attachment privileges are checked inside the serialized browser executor,
+    # including direct callers. Avoid a second, generic network approval prompt.
+    if name == 'Browser' and _HAS_BROWSER:
+        from charon.tools import browser_tool
+        if browser_tool._attached or str(params.get('action', '')).strip().lower() in {'attach', 'cdp', 'detach'}:
+            return browser_tool.execute_browser(params, ctx)
 
     # Scope is checked above and now covers Bash and Git, but it only answers
     # "where" — approval still answers "whether". A destructive command aimed

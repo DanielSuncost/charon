@@ -28,12 +28,14 @@ import base64
 import importlib.util
 import inspect
 import json
+import os
 import re
 import secrets
 import threading
 import time
 from collections import deque
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from charon.tools import ToolContext, ToolResult
 from charon.infra import config
@@ -106,6 +108,244 @@ _pw = None
 _browser = None
 _page = None
 _context = None
+
+# All public calls are serialized, including approval and session transitions.
+_call_lock = threading.RLock()
+_attached: dict | None = None
+_cdp = None
+_cdp_events: deque = deque(maxlen=100)
+_console_contexts: set[int] = set()
+
+# No caller-supplied protocol method, target ID, JS, or arbitrary parameters.
+CDP_OPERATIONS = {
+    'dom_document', 'network_status', 'console_messages', 'downloads',
+    'dialogs', 'dialog_policy',
+}
+ATTACHED_READ_ACTIONS = {
+    'get_state', 'assert_text', 'assert_selector', 'screenshot', 'vision', 'wait',
+}
+
+
+def _origin(url: str) -> str:
+    parsed = urlsplit(url)
+    if parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError('Only HTTP(S) origins without credentials are allowed.')
+    host = parsed.hostname.lower()
+    if ':' in host:
+        host = f'[{host}]'
+    port = parsed.port if parsed.port is not None else (443 if parsed.scheme == 'https' else 80)
+    return f'{parsed.scheme}://{host}:{port}'
+
+
+def _allowed_origins() -> frozenset[str]:
+    # Operator configuration, never model-supplied tool arguments.
+    values = os.environ.get('CHARON_BROWSER_ALLOWED_ORIGINS', '').split(',')
+    origins = set()
+    for value in values:
+        value = value.strip()
+        if not value:
+            continue
+        parsed = urlsplit(value)
+        if parsed.path not in ('', '/') or parsed.query or parsed.fragment:
+            raise ValueError('CHARON_BROWSER_ALLOWED_ORIGINS must contain exact origins.')
+        origins.add(_origin(value))
+    if not origins:
+        raise ValueError('Set CHARON_BROWSER_ALLOWED_ORIGINS before attaching.')
+    return frozenset(origins)
+
+
+def _url_allowed(url: str, origins) -> bool:
+    try:
+        return _origin(url) in origins
+    except ValueError:
+        return False
+
+
+def attached_scope_error(params: dict, ctx: ToolContext) -> str | None:
+    """Trusted context grants cannot be supplied through Browser arguments."""
+    action = str(params.get('action', '')).strip().lower()
+    scoped = bool(ctx.scope or ctx.frozen or ctx.parent_agent_id or ctx.topology_depth)
+    if action == 'attach' and scoped:
+        return 'Scope violation: shades cannot attach; the owner must grant an existing browser session.'
+    if _attached:
+        session = _attached['session_id']
+        granted = session in (ctx.browser_session_grants or [])
+        if (scoped and not granted) or (not scoped and ctx.agent_id != _attached['owner'] and not granted):
+            return 'Scope violation: attached browser session was not granted to this caller.'
+        if params.get('session_id') != session:
+            return 'Scope violation: attached calls require the current browser session_id.'
+    return None
+
+
+def attached_action_requires_approval(params: dict) -> bool:
+    action = str(params.get('action', '')).strip().lower()
+    if action == 'attach':
+        return True
+    if not _attached:
+        return False
+    if action == 'cdp':
+        return params.get('operation') == 'dialog_policy'
+    return action not in ATTACHED_READ_ACTIONS
+
+
+def _guard_attached_page(page) -> None:
+    if not _attached:
+        return
+    if page.is_closed() or not _browser or not _browser.is_connected():
+        raise ValueError('Attached page disconnected; detach before launching or reattaching.')
+    # Fail closed on mixed-origin pages, including screenshots and vision.
+    for frame in page.frames:
+        if not frame.is_detached() and not _url_allowed(frame.url, _attached['origins']):
+            raise ValueError('Domain allowlist refused the page or one of its frames.')
+
+
+async def _attached_request(event: dict) -> None:
+    client = _cdp
+    if client is None:
+        return
+    method = 'Fetch.continueRequest' if _attached and _url_allowed(event['request']['url'], _attached['origins']) else 'Fetch.failRequest'
+    args = {'requestId': event['requestId']}
+    if method == 'Fetch.failRequest':
+        args['errorReason'] = 'BlockedByClient'
+    try:
+        await client.send(method, args)
+    except Exception:
+        pass  # Target may have closed while a request was paused.
+
+
+def _console_context(event: dict) -> None:
+    context = event['context']
+    if _attached and _url_allowed(context.get('origin', ''), _attached['origins']):
+        _console_contexts.add(context['id'])
+
+
+def _console_message(event: dict) -> None:
+    if event.get('executionContextId') in _console_contexts:
+        values = [str(arg.get('value', ''))[:500] for arg in event.get('args', [])[:10]
+                  if arg.get('type') in {'string', 'number', 'boolean'}]
+        _on_cdp_event('console', {'source': 'console-api', 'level': event.get('type', ''), 'text': ' '.join(values)})
+
+
+def _on_cdp_event(kind: str, event: dict) -> None:
+    try:
+        _guard_attached_page(_page)
+        entry = event.get('entry', event)
+        url = entry.get('url')
+        if url and not _url_allowed(url, _attached['origins']):
+            return
+        # Bounded metadata only. No remote objects, stacks, bodies or headers.
+        keys = {
+            'console': ('source', 'level', 'text'),
+            'download': ('suggestedFilename',),
+            'dialog': ('type', 'message'),
+        }[kind]
+        _cdp_events.append({'kind': kind, **{k: str(entry[k])[:1000] for k in keys if k in entry}})
+    except Exception:
+        return
+
+
+async def _attach(params: dict, ctx: ToolContext) -> str:
+    global _pw, _browser, _context, _page, _attached, _cdp
+    if _browser is not None or _attached:
+        raise ValueError('Close or detach the current browser before attaching.')
+    origins = _allowed_origins()
+    endpoint = str(params.get('endpoint', ''))
+    parsed = urlsplit(endpoint)
+    # Local CDP endpoints only; do not send credentials or allow arbitrary SSRF.
+    if parsed.scheme != 'http' or parsed.hostname not in ('localhost', '127.0.0.1', '::1') or parsed.username or parsed.password or parsed.path not in ('', '/') or parsed.query or parsed.fragment:
+        raise ValueError('endpoint must be a loopback HTTP CDP endpoint without credentials or path.')
+    target_url = str(params.get('url', ''))
+    if not _url_allowed(target_url, origins):
+        raise ValueError('Domain allowlist refused the requested page.')
+    from playwright.async_api import async_playwright
+    _pw = await async_playwright().start()
+    try:
+        _browser = await _pw.chromium.connect_over_cdp(endpoint, timeout=15000)
+        matches = [(context, page) for context in _browser.contexts for page in context.pages if page.url == target_url]
+        if len(matches) != 1:
+            raise ValueError('url must identify exactly one existing page; no page was selected.')
+        _context, _page = matches[0]
+        _attached = {'session_id': secrets.token_hex(16), 'owner': ctx.agent_id, 'origins': origins,
+                     'previous_policy': dict(_dialog_policy)}
+        _guard_attached_page(_page)
+        _cdp = await _context.new_cdp_session(_page)
+        _cdp.on('Fetch.requestPaused', _attached_request)
+        await _cdp.send('Fetch.enable', {'patterns': [{'urlPattern': '*', 'requestStage': 'Request'}]})
+        _cdp.on('Runtime.executionContextCreated', _console_context)
+        _cdp.on('Runtime.executionContextDestroyed', lambda event: _console_contexts.discard(event['executionContextId']))
+        _cdp.on('Runtime.executionContextsCleared', lambda _: _console_contexts.clear())
+        _cdp.on('Runtime.consoleAPICalled', _console_message)
+        await _cdp.send('Runtime.enable')
+        _cdp.on('Log.entryAdded', lambda event: _on_cdp_event('console', event))
+        _cdp.on('Page.downloadWillBegin', lambda event: _on_cdp_event('download', event))
+        _cdp.on('Page.javascriptDialogOpening', lambda event: _on_cdp_event('dialog', event))
+        await _cdp.send('Log.enable')
+        await _cdp.send('Page.enable')
+        _reset_identity()
+        _dialog_log.clear()
+        _dialogs_unreported.clear()
+        _cdp_events.clear()
+        _set_dialog_policy('dismiss', '')
+        _page.on('dialog', _on_dialog)
+        return json.dumps({'session_id': _attached['session_id'], 'origin': _origin(_page.url), 'mode': 'attached'})
+    except BaseException:
+        await _detach()
+        raise
+
+
+async def _detach() -> None:
+    global _pw, _browser, _context, _page, _attached, _cdp
+    try:
+        if _page is not None:
+            _page.remove_listener('dialog', _on_dialog)
+        if _cdp is not None:
+            await _cdp.send('Fetch.disable')
+            await _cdp.detach()
+    except Exception as exc:
+        _diag('browser_tool', 'attached target already disconnected during detach',
+              state_dir=_state_dir_ctx, error=type(exc).__name__)
+    finally:
+        # Stopping our Playwright transport disconnects; never close the user's
+        # context, tabs or browser. Also used to clean up failed attachment.
+        try:
+            if _pw is not None:
+                await _pw.stop()
+        finally:
+            if _attached:
+                _dialog_policy.clear()
+                _dialog_policy.update(_attached['previous_policy'])
+            _pw = _browser = _context = _page = _attached = _cdp = None
+            _console_contexts.clear()
+            _reset_identity()
+            _cdp_events.clear()
+            _dialog_log.clear()
+            _dialogs_unreported.clear()
+
+
+async def _do_cdp(params: dict) -> str:
+    if not _attached or _cdp is None:
+        raise ValueError('CDP requires an explicitly attached session.')
+    _guard_attached_page(_page)
+    operation = params.get('operation')
+    if operation not in CDP_OPERATIONS:
+        raise ValueError('CDP operation is not allowlisted.')
+    allowed_keys = {'action', 'session_id', 'operation'}
+    if operation == 'dialog_policy':
+        allowed_keys |= {'policy', 'text'}
+    if set(params) - allowed_keys:
+        raise ValueError('Unexpected CDP arguments; arbitrary protocol parameters are refused.')
+    if operation == 'dom_document':
+        result = await _cdp.send('DOM.getDocument', {'depth': 1, 'pierce': False})
+    elif operation == 'network_status':
+        result = await _cdp.send('Network.getSecurityIsolationStatus')
+    elif operation == 'dialog_policy':
+        return _set_dialog_policy(str(params.get('policy', '')), str(params.get('text', '')))
+    else:
+        kind = {'console_messages': 'console', 'downloads': 'download', 'dialogs': 'dialog'}[operation]
+        result = [e for e in _cdp_events if e['kind'] == kind]
+    _guard_attached_page(_page)
+    return json.dumps(result)[:15000]
+
 
 # ── Browser visibility context (set per execute_browser call) ─────────────────
 _session_id_ctx: str = ''
@@ -202,6 +442,10 @@ async def _on_dialog(dialog) -> None:
 async def _ensure_page():
     global _pw, _browser, _page, _context
 
+    if _attached:
+        _guard_attached_page(_page)
+        return _page
+
     if _page is not None and not _page.is_closed() and _browser is not None and _browser.is_connected():
         return _page
 
@@ -235,6 +479,9 @@ async def _ensure_page():
 async def _shutdown() -> None:
     """Close the browser and forget every ref. Safe to call when nothing is open."""
     global _pw, _browser, _page, _context
+    if _attached:
+        await _detach()
+        return
     for closer in ((_context, 'close'), (_browser, 'close'), (_pw, 'stop')):
         obj, meth = closer
         if obj is not None:
@@ -436,6 +683,7 @@ async def _snapshot_frame(frame, *, is_main: bool, fresh: bool) -> dict | None:
 
 async def _collect(page, *, fresh: bool = False) -> dict:
     """Walk every frame; rebuild the ref maps; return {'main', 'frames'}."""
+    _guard_attached_page(page)
     main = page.main_frame
     live_frames = set()
     result = {'main': None, 'frames': []}
@@ -445,6 +693,7 @@ async def _collect(page, *, fresh: bool = False) -> dict:
     for frame in page.frames:
         if frame.is_detached():
             continue
+        _guard_attached_page(page)
         is_main = frame is main
         data = await _snapshot_frame(frame, is_main=is_main, fresh=fresh)
         live_frames.add(frame)
@@ -467,6 +716,7 @@ async def _collect(page, *, fresh: bool = False) -> dict:
         if frame not in live_frames:
             _snapshot_cache.pop(frame, None)
             _frame_numbers.pop(frame, None)
+    _guard_attached_page(page)
     return result
 
 
@@ -875,7 +1125,9 @@ BROWSER_TOOL_DEF = {
         'gives coordinate refs [v1], [v2]. '
         'Actions: navigate, click, input, screenshot, scroll, go_back, wait, get_state, '
         'click_selector, input_selector, assert_text, assert_selector, vision, click_at, '
-        'dialog_policy, close.'
+        'dialog_policy, close, attach, detach, cdp. Attach requires operator-configured '
+        'CHARON_BROWSER_ALLOWED_ORIGINS, endpoint and exact existing page url. Attached calls '
+        'require the returned session_id; CDP accepts only named operations.'
     ),
     'input_schema': {
         'type': 'object',
@@ -885,9 +1137,12 @@ BROWSER_TOOL_DEF = {
                 'enum': ['navigate', 'click', 'input', 'screenshot',
                          'scroll', 'go_back', 'wait', 'get_state',
                          'click_selector', 'input_selector', 'assert_text', 'assert_selector',
-                         'vision', 'click_at', 'dialog_policy', 'close'],
+                         'vision', 'click_at', 'dialog_policy', 'close', 'attach', 'detach', 'cdp'],
             },
-            'url': {'type': 'string', 'description': 'URL for navigate.'},
+            'url': {'type': 'string', 'description': 'URL for navigate or exact existing page URL for attach.'},
+            'endpoint': {'type': 'string', 'description': 'attach: loopback HTTP CDP endpoint.'},
+            'session_id': {'type': 'string', 'description': 'Required on every attached-session call.'},
+            'operation': {'type': 'string', 'enum': sorted(CDP_OPERATIONS)},
             'ref': {'type': 'string', 'description': 'Element ref from the listing, e.g. "e12", "f1.e3" or "v2" (vision).'},
             'index': {'type': 'number', 'description': 'Legacy positional index from the last listing; prefer ref.'},
             'selector': {'type': 'string', 'description': 'CSS selector for selector-based actions (searched in every frame).'},
@@ -904,7 +1159,7 @@ BROWSER_TOOL_DEF = {
 }
 
 
-def execute_browser(params: dict, ctx: ToolContext) -> ToolResult:
+def _execute_browser(params: dict, ctx: ToolContext) -> ToolResult:
     """Execute a browser action."""
     action = str(params.get('action', '')).strip().lower()
 
@@ -920,6 +1175,16 @@ def execute_browser(params: dict, ctx: ToolContext) -> ToolResult:
     _state_dir_ctx = ctx.state_dir
 
     try:
+        if action == 'attach':
+            return ToolResult(content=_run(_attach(params, ctx), timeout=60))
+        if action == 'detach':
+            if not _attached:
+                return ToolResult(content='No attached browser.', is_error=True)
+            _run(_detach())
+            return ToolResult(content='Browser detached; user tabs remain open.')
+        if action == 'cdp':
+            content = _run(_do_cdp(params))
+            return ToolResult(content=content, is_error=content.startswith('Error:'))
         if action == 'navigate':
             url = str(params.get('url', '')).strip()
             if not url:
@@ -1014,3 +1279,40 @@ def execute_browser(params: dict, ctx: ToolContext) -> ToolResult:
         return ToolResult(content=f'Browser error: {e}', is_error=True)
     except Exception as e:
         return ToolResult(content=f'Browser error: {e}', is_error=True)
+
+
+def execute_browser(params: dict, ctx: ToolContext) -> ToolResult:
+    """Enforce attachment privileges even for direct executor calls."""
+    with _call_lock:
+        action = str(params.get('action', '')).strip().lower()
+        audited = action in {'attach', 'cdp', 'detach'}
+        audit_session = (_attached or {}).get('session_id')
+        result = ToolResult(content='Browser call failed.', is_error=True)
+        try:
+            if not _playwright_available():
+                result = ToolResult(content=_BROWSER_INSTALL_ERROR, is_error=True)
+                return result
+            error = attached_scope_error(params, ctx)
+            if error:
+                result = ToolResult(content=error, is_error=True)
+                return result
+            if attached_action_requires_approval(params):
+                from charon.infra.tool_approval import request_attached_browser_approval
+                if not request_attached_browser_approval(params, ctx):
+                    result = ToolResult(content='Blocked: attached browser action requires approval.', is_error=True)
+                    return result
+            if _attached and action not in {'detach', 'close'}:
+                _guard_attached_page(_page)
+                if action == 'navigate' and not _url_allowed(str(params.get('url', '')), _attached['origins']):
+                    raise ValueError('Domain allowlist refused navigation.')
+            result = _execute_browser(params, ctx)
+            return result
+        except Exception as exc:
+            result = ToolResult(content=f'Browser error: {exc}', is_error=True)
+            return result
+        finally:
+            if audited:
+                _diag('browser_audit', 'browser operation', state_dir=ctx.state_dir,
+                      action=action, operation=str(params.get('operation', ''))[:80],
+                      actor=ctx.agent_id, session_id=(_attached or {}).get('session_id') or audit_session,
+                      outcome='refused_or_failed' if result.is_error else 'success')
