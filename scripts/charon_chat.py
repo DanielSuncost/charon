@@ -161,6 +161,15 @@ async def one_shot(engine: ConversationEngine, query: str) -> int:
         'cache_write_tokens': 0,
         'total_tokens': 0,
     }
+    usage_checkpointed = False
+
+    def emit_usage_checkpoint() -> None:
+        usage['total_tokens'] = usage['input_tokens'] + usage['output_tokens']
+        print(
+            json.dumps({'usage': usage}, separators=(',', ':')),
+            file=sys.stderr,
+            flush=True,
+        )
 
     async for event in engine.submit(query):
         if event.type == 'text_delta':
@@ -182,6 +191,8 @@ async def one_shot(engine: ConversationEngine, query: str) -> int:
                     usage[field] += max(0, int(turn_usage.get(field, 0) or 0))
                 except (TypeError, ValueError):
                     continue
+            emit_usage_checkpoint()
+            usage_checkpointed = True
         elif event.type == 'turn_end':
             # Separate turns so a marker line stays on its own line
             if text_parts and not text_parts[-1].endswith('\n'):
@@ -193,8 +204,8 @@ async def one_shot(engine: ConversationEngine, query: str) -> int:
 
     if text_parts and not text_parts[-1].endswith('\n'):
         print(flush=True)
-    usage['total_tokens'] = usage['input_tokens'] + usage['output_tokens']
-    print(json.dumps({'usage': usage}, separators=(',', ':')), file=sys.stderr, flush=True)
+    if not usage_checkpointed:
+        emit_usage_checkpoint()
     return 1 if (saw_error and not ''.join(text_parts).strip()) else 0
 
 

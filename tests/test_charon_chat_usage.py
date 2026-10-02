@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'scripts' / 'charon_chat.py'
@@ -55,7 +57,7 @@ class FakeEngine:
         )
 
 
-def test_one_shot_emits_aggregate_usage_only_on_stderr(capsys):
+def test_one_shot_checkpoints_aggregate_usage_only_on_stderr(capsys):
     chat = _load_chat_module()
 
     exit_code = asyncio.run(chat.one_shot(FakeEngine(), 'test query'))
@@ -66,13 +68,53 @@ def test_one_shot_emits_aggregate_usage_only_on_stderr(capsys):
 
     stderr_lines = captured.err.splitlines()
     assert stderr_lines[0].startswith('[tool] Read ')
-    assert json.loads(stderr_lines[-1]) == {
+    usage_lines = [
+        json.loads(line) for line in stderr_lines if line.startswith('{"usage":')
+    ]
+    assert usage_lines == [
+        {
+            'usage': {
+                'input_tokens': 100,
+                'output_tokens': 20,
+                'cache_read_tokens': 40,
+                'cache_write_tokens': 0,
+                'total_tokens': 120,
+            }
+        },
+        {
+            'usage': {
+                'input_tokens': 225,
+                'output_tokens': 25,
+                'cache_read_tokens': 50,
+                'cache_write_tokens': 3,
+                'total_tokens': 250,
+            }
+        },
+    ]
+
+
+class InterruptingEngine:
+    async def submit(self, query: str):
+        assert query == 'test query'
+        yield SimpleNamespace(
+            type='message_end',
+            data={'usage': {'input_tokens': 30, 'output_tokens': 7}},
+        )
+        raise RuntimeError('stream interrupted')
+
+
+def test_one_shot_flushes_usage_before_an_interrupted_stream(capsys):
+    chat = _load_chat_module()
+
+    with pytest.raises(RuntimeError, match='stream interrupted'):
+        asyncio.run(chat.one_shot(InterruptingEngine(), 'test query'))
+
+    assert json.loads(capsys.readouterr().err.strip()) == {
         'usage': {
-            'input_tokens': 225,
-            'output_tokens': 25,
-            'cache_read_tokens': 50,
-            'cache_write_tokens': 3,
-            'total_tokens': 250,
+            'input_tokens': 30,
+            'output_tokens': 7,
+            'cache_read_tokens': 0,
+            'cache_write_tokens': 0,
+            'total_tokens': 37,
         }
     }
-    assert sum(line.startswith('{"usage":') for line in stderr_lines) == 1
