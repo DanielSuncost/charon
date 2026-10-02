@@ -1,0 +1,599 @@
+{
+  "version": 1,
+  "system": {
+    "id": "charon",
+    "name": "Charon",
+    "description": "A single-user agent operating system: a Rust TUI over a Python backend that runs conversation engines, workers (shades), memory and providers."
+  },
+  "subsystems": [
+    {
+      "id": "core",
+      "name": "Core runtime",
+      "description": "Conversation engine, agents, context assembly, the main loop and shared infrastructure."
+    },
+    {
+      "id": "tools",
+      "name": "Tools",
+      "description": "The tool surface an agent calls: files, shell, git, browser, delegation, memory, the system map."
+    },
+    {
+      "id": "providers",
+      "name": "Providers",
+      "description": "LLM adapters, routing between them, auth, model registry and effort policy."
+    },
+    {
+      "id": "memory",
+      "name": "Memory",
+      "description": "Three-tier memory, recall and assimilation."
+    },
+    {
+      "id": "orchestration",
+      "name": "Orchestration",
+      "description": "Shades, judge loops, automation, fleet and the workspace control plane."
+    },
+    {
+      "id": "ui",
+      "name": "User interface",
+      "description": "The Rust TUI, its Python backend, Graph Studio, charon-viz and the CLI."
+    },
+    {
+      "id": "research",
+      "name": "Research & evaluation",
+      "description": "Libris, IPMS, benchmarks, the gym and the test suite."
+    },
+    {
+      "id": "docs",
+      "name": "Documentation & assets",
+      "description": "Docs, plans, skills, the design library, examples and repo metadata."
+    }
+  ],
+  "components": [
+    {
+      "id": "core.engine",
+      "subsystem": "core",
+      "name": "Conversation engine",
+      "kind": "service",
+      "description": "Streams a provider, dispatches tool calls, persists the transcript.",
+      "code": [
+        "src/charon/conversation/**"
+      ],
+      "depends_on": [
+        "providers.adapters",
+        "tools.registry",
+        "core.context"
+      ]
+    },
+    {
+      "id": "core.agents",
+      "subsystem": "core",
+      "name": "Agents",
+      "kind": "service",
+      "description": "Agent records, lifecycle, runtime, topology budgets.",
+      "code": [
+        "src/charon/agents/**"
+      ],
+      "depends_on": [
+        "core.engine",
+        "providers.registry"
+      ]
+    },
+    {
+      "id": "core.context",
+      "subsystem": "core",
+      "name": "Context",
+      "kind": "module",
+      "description": "Context assembly, compaction and provider-switch transfer.",
+      "code": [
+        "src/charon/context/**"
+      ],
+      "depends_on": [
+        "memory.engine"
+      ]
+    },
+    {
+      "id": "core.loop",
+      "subsystem": "core",
+      "name": "Main loop",
+      "kind": "process",
+      "description": "The autonomous loop, devop and its interventions.",
+      "code": [
+        "src/charon/charon_loop.py",
+        "src/charon/devop/**"
+      ],
+      "depends_on": [
+        "core.engine",
+        "core.agents",
+        "orchestration.shades"
+      ]
+    },
+    {
+      "id": "core.infra",
+      "subsystem": "core",
+      "name": "Infrastructure",
+      "kind": "module",
+      "description": "Config, diagnostics, atomic file IO, tool approval, tracing, package root.",
+      "code": [
+        "src/charon/infra/**",
+        "src/charon/__init__.py"
+      ]
+    },
+    {
+      "id": "tools.registry",
+      "subsystem": "tools",
+      "name": "Tool registry",
+      "kind": "module",
+      "description": "Tool definitions, executors, scope, approval gates, dynamic tools.",
+      "code": [
+        "src/charon/tools/__init__.py",
+        "src/charon/tools/tool_catalog.py",
+        "src/charon/tools/dynamic_loader.py",
+        "src/charon/tools/file_snapshots.py",
+        "src/charon/tools/shell_scope.py"
+      ],
+      "depends_on": [
+        "core.infra"
+      ]
+    },
+    {
+      "id": "tools.browser",
+      "subsystem": "tools",
+      "name": "Browser",
+      "kind": "module",
+      "description": "Playwright Chromium with stable element refs, frames, dialogs and a vision fallback.",
+      "code": [
+        "src/charon/tools/browser_tool.py"
+      ],
+      "depends_on": [
+        "tools.registry",
+        "providers.adapters"
+      ]
+    },
+    {
+      "id": "tools.delegation",
+      "subsystem": "tools",
+      "name": "Delegation tools",
+      "kind": "module",
+      "description": "SpawnShade, SpawnBatch, SpawnJudgeLoop, Clarify, Refine.",
+      "code": [
+        "src/charon/tools/shade_tool.py",
+        "src/charon/tools/batch_tool.py",
+        "src/charon/tools/judge_loop_tool.py",
+        "src/charon/tools/clarify_tool.py",
+        "src/charon/tools/refine_tool.py"
+      ],
+      "depends_on": [
+        "tools.registry",
+        "orchestration.shades",
+        "orchestration.judge"
+      ]
+    },
+    {
+      "id": "tools.research",
+      "subsystem": "tools",
+      "name": "Research tools",
+      "kind": "module",
+      "description": "Web, Paper, SourceDiscovery, Research, X, Http.",
+      "code": [
+        "src/charon/tools/web_tool.py",
+        "src/charon/tools/paper_tool.py",
+        "src/charon/tools/source_discovery_tool.py",
+        "src/charon/tools/research_tool.py",
+        "src/charon/tools/x_tool.py",
+        "src/charon/tools/http_tool.py"
+      ],
+      "depends_on": [
+        "tools.registry"
+      ]
+    },
+    {
+      "id": "tools.memory",
+      "subsystem": "tools",
+      "name": "Memory tools",
+      "kind": "module",
+      "description": "Recall, Timeline, UserModel, ProjectKnowledge, Skills, Search.",
+      "code": [
+        "src/charon/tools/memory_tools.py",
+        "src/charon/tools/recall_tool.py",
+        "src/charon/tools/timeline_tool.py",
+        "src/charon/tools/skills_tool.py",
+        "src/charon/tools/search_tool.py"
+      ],
+      "depends_on": [
+        "tools.registry",
+        "memory.engine"
+      ]
+    },
+    {
+      "id": "tools.system_map",
+      "subsystem": "tools",
+      "name": "System map",
+      "kind": "module",
+      "description": "The system-map skill as a tool: validate, extract, query.",
+      "code": [
+        "src/charon/tools/system_map_tool.py",
+        "skills/system-map/**"
+      ],
+      "depends_on": [
+        "tools.registry"
+      ]
+    },
+    {
+      "id": "tools.misc",
+      "subsystem": "tools",
+      "name": "Other tools",
+      "kind": "module",
+      "description": "Code execution, persistent kernel, cron, git, office readers, overseer and fleet tools.",
+      "code": [
+        "src/charon/tools/execute_code_tool.py",
+        "src/charon/tools/pykernel_tool.py",
+        "src/charon/tools/_pykernel_worker.py",
+        "src/charon/tools/cron_tool.py",
+        "src/charon/tools/git_tool.py",
+        "src/charon/tools/office_read.py",
+        "src/charon/tools/overseer_tool.py",
+        "src/charon/tools/fleet_tool.py"
+      ],
+      "depends_on": [
+        "tools.registry"
+      ]
+    },
+    {
+      "id": "providers.adapters",
+      "subsystem": "providers",
+      "name": "Provider adapters",
+      "kind": "module",
+      "description": "Anthropic, OpenAI-compatible and Codex transports; auth; structured output; image content.",
+      "code": [
+        "src/charon/providers/__init__.py",
+        "src/charon/providers/anthropic.py",
+        "src/charon/providers/browser_settings.py",
+        "src/charon/providers/charon_auth.py",
+        "src/charon/providers/http_client.py",
+        "src/charon/providers/http_errors.py",
+        "src/charon/providers/httpx_anthropic.py",
+        "src/charon/providers/httpx_codex.py",
+        "src/charon/providers/httpx_openai.py",
+        "src/charon/providers/image_content.py",
+        "src/charon/providers/llm_adapter.py",
+        "src/charon/providers/oauth_lock.py",
+        "src/charon/providers/openai_compat.py",
+        "src/charon/providers/provider_bridge.py",
+        "src/charon/providers/structured_output.py",
+        "src/charon/providers/worker_provider.py"
+      ],
+      "depends_on": [
+        "core.infra"
+      ]
+    },
+    {
+      "id": "providers.registry",
+      "subsystem": "providers",
+      "name": "Model registry & routing",
+      "kind": "module",
+      "description": "Worker model tiers, effort per task complexity, multi-objective routing.",
+      "code": [
+        "src/charon/providers/model_registry.py",
+        "src/charon/providers/effort.py",
+        "src/charon/routing/**"
+      ],
+      "depends_on": [
+        "providers.adapters"
+      ]
+    },
+    {
+      "id": "memory.engine",
+      "subsystem": "memory",
+      "name": "Memory engine",
+      "kind": "datastore",
+      "description": "SQLite + local embeddings, episodic timeline, consolidation, assimilation.",
+      "code": [
+        "src/charon/memory/**"
+      ],
+      "depends_on": [
+        "core.infra"
+      ]
+    },
+    {
+      "id": "orchestration.shades",
+      "subsystem": "orchestration",
+      "name": "Shades",
+      "kind": "service",
+      "description": "Ephemeral and retained worker agents under contracts.",
+      "code": [
+        "src/charon/shade/**"
+      ],
+      "depends_on": [
+        "core.engine",
+        "providers.registry"
+      ]
+    },
+    {
+      "id": "orchestration.judge",
+      "subsystem": "orchestration",
+      "name": "Judge loops",
+      "kind": "service",
+      "description": "Implement → judge → keep/rollback loops over shadow-git checkpoints.",
+      "code": [
+        "src/charon/judge/**"
+      ],
+      "depends_on": [
+        "core.engine",
+        "orchestration.automation"
+      ]
+    },
+    {
+      "id": "orchestration.automation",
+      "subsystem": "orchestration",
+      "name": "Automation",
+      "kind": "job",
+      "description": "Scheduled checks, browser workflows, batches, checkpoint manager.",
+      "code": [
+        "src/charon/automation/**"
+      ],
+      "depends_on": [
+        "tools.browser",
+        "core.infra"
+      ]
+    },
+    {
+      "id": "orchestration.fleet",
+      "subsystem": "orchestration",
+      "name": "Fleet",
+      "kind": "service",
+      "description": "Remote agent teams over tmux/SSH.",
+      "code": [
+        "src/charon/fleet/**"
+      ],
+      "depends_on": [
+        "core.infra"
+      ]
+    },
+    {
+      "id": "orchestration.workspace",
+      "subsystem": "orchestration",
+      "name": "Workspace",
+      "kind": "service",
+      "description": "The overseer control plane: hash-chained records, leases, gates, proposals, the MCP server.",
+      "code": [
+        "src/charon/workspace/**",
+        "src/charon/orchestration/**",
+        "src/charon/mcp_server.py"
+      ],
+      "depends_on": [
+        "core.infra"
+      ]
+    },
+    {
+      "id": "ui.tui",
+      "subsystem": "ui",
+      "name": "Rust TUI",
+      "kind": "interface",
+      "description": "Chat, dashboard, session grid and agent-graph views.",
+      "code": [
+        "crates/charon-tui/**"
+      ],
+      "depends_on": [
+        "ui.backend"
+      ]
+    },
+    {
+      "id": "ui.backend",
+      "subsystem": "ui",
+      "name": "TUI backend",
+      "kind": "process",
+      "description": "NDJSON protocol over stdout; slash commands; setup; rooms.",
+      "code": [
+        "apps/tui/**"
+      ],
+      "depends_on": [
+        "core.engine",
+        "core.agents",
+        "orchestration.shades",
+        "providers.adapters",
+        "memory.engine"
+      ]
+    },
+    {
+      "id": "ui.graph_studio",
+      "subsystem": "ui",
+      "name": "Graph Studio",
+      "kind": "interface",
+      "description": "Local HTML/JS control plane for graph orchestration.",
+      "code": [
+        "apps/graph_studio/**",
+        "src/charon/graph_studio_server.py",
+        "scripts/charon_graph.py",
+        "scripts/generate_routing_fixture.py"
+      ],
+      "depends_on": [
+        "core.infra"
+      ]
+    },
+    {
+      "id": "ui.viz",
+      "subsystem": "ui",
+      "name": "charon-viz",
+      "kind": "interface",
+      "description": "The shared system-model renderer bundle and fixtures, the model adapter and the standalone exporter.",
+      "code": [
+        "apps/viz/**",
+        "src/charon/viz.py",
+        "scripts/charon_viz.py"
+      ],
+      "depends_on": [
+        "tools.system_map"
+      ]
+    },
+    {
+      "id": "ui.boat",
+      "subsystem": "ui",
+      "name": "Charon's Boat",
+      "kind": "process",
+      "description": "Session connectivity helper.",
+      "code": [
+        "tools/charons-boat/**"
+      ],
+      "depends_on": [
+        "core.infra"
+      ]
+    },
+    {
+      "id": "ui.cli",
+      "subsystem": "ui",
+      "name": "CLI & install",
+      "kind": "interface",
+      "description": "charon launcher, setup/chat scripts, installers.",
+      "code": [
+        "charon",
+        "scripts/charon_agents.py",
+        "scripts/charon_chat.py",
+        "scripts/cleanup_think_tags.py",
+        "scripts/install.sh",
+        "scripts/install-dev.sh",
+        "scripts/install-release.sh",
+        "scripts/install-remote.sh"
+      ],
+      "depends_on": [
+        "core.engine"
+      ]
+    },
+    {
+      "id": "research.libris",
+      "subsystem": "research",
+      "name": "Libris",
+      "kind": "service",
+      "description": "Research swarm.",
+      "code": [
+        "src/charon/libris/**"
+      ],
+      "depends_on": [
+        "orchestration.shades",
+        "tools.research"
+      ]
+    },
+    {
+      "id": "research.eval",
+      "subsystem": "research",
+      "name": "Evaluation",
+      "kind": "module",
+      "description": "IPMS, agentic benchmarks, the gym, experiment runners.",
+      "code": [
+        "src/charon/ipms/**",
+        "src/charon/evaluation/**",
+        "src/charon/charon_gym.py",
+        "scripts/charon_gym_runner.py",
+        "scripts/exp_ipms_matrix.py",
+        "scripts/exp_ipms_replication.py",
+        "scripts/ipms_smoke.py",
+        "scripts/judge_loop_example.py",
+        "scripts/run_judge_loop_live.py",
+        "scripts/run_judge_loop_aesthetic_live.py",
+        "scripts/run_judge_loop_opt_live.py",
+        "scripts/experiments/**"
+      ],
+      "depends_on": [
+        "core.engine",
+        "orchestration.judge"
+      ]
+    },
+    {
+      "id": "research.tests",
+      "subsystem": "research",
+      "name": "Test suite",
+      "kind": "module",
+      "description": "pytest suite and fixtures.",
+      "code": [
+        "tests/**"
+      ]
+    },
+    {
+      "id": "docs.documentation",
+      "subsystem": "docs",
+      "name": "Documentation",
+      "kind": "module",
+      "description": "Docs, architecture, plans, contracts, repo metadata and CI config.",
+      "code": [
+        "docs/**",
+        "README.md",
+        "CHANGELOG.md",
+        "LICENSE",
+        "pyproject.toml",
+        "requirements.txt",
+        "system-map.json",
+        "src/charon/README.md",
+        ".github/**",
+        ".gitignore"
+      ]
+    },
+    {
+      "id": "docs.skills",
+      "subsystem": "docs",
+      "name": "Engineering skills",
+      "kind": "module",
+      "description": "The skills an agent working in this repo follows (the system-map skill is owned by tools.system_map).",
+      "code": [
+        "skills/README.md",
+        "skills/code-review/**",
+        "skills/exploratory-qa/**",
+        "skills/spikes/**",
+        "skills/systematic-debugging/**",
+        "skills/tdd/**"
+      ]
+    },
+    {
+      "id": "docs.design_library",
+      "subsystem": "docs",
+      "name": "Design library",
+      "kind": "module",
+      "description": "Design patterns, sources and the ingest/annotate scripts.",
+      "code": [
+        "design-library/**",
+        "scripts/design_library_ingest.py",
+        "scripts/design_library_annotate.py"
+      ]
+    },
+    {
+      "id": "docs.examples",
+      "subsystem": "docs",
+      "name": "Examples, demos & assets",
+      "kind": "module",
+      "description": "Example workspaces, demos and static assets.",
+      "code": [
+        "examples/**",
+        "demos/**",
+        "assets/**"
+      ]
+    }
+  ],
+  "externals": [
+    {
+      "id": "ext.playwright",
+      "name": "Playwright",
+      "kind": "process",
+      "description": "Chromium automation used by the Browser and X tools.",
+      "packages": [
+        "playwright"
+      ]
+    },
+    {
+      "id": "ext.httpx",
+      "name": "httpx",
+      "kind": "library",
+      "description": "HTTP client under every provider adapter.",
+      "packages": [
+        "httpx",
+        "websockets"
+      ]
+    },
+    {
+      "id": "ext.sqlite",
+      "name": "SQLite",
+      "kind": "datastore",
+      "description": "Memory and state stores (sqlite-vec for embeddings).",
+      "packages": [
+        "sqlite3",
+        "sqlite_vec"
+      ]
+    }
+  ]
+}
