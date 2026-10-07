@@ -53,3 +53,4 @@ charon_job_application_answer.md
 .DS_Store
 .ipms_smoke/
 .ipms_runs/
+.ruff_cache/

@@ -11,13 +11,14 @@ under `src/charon`, and a launcher under `scripts/`.
 ```
 
 The project must have a valid V1 `system-map.json`. Reading never migrates or writes
-it. `--map` accepts an explicit map path. This checkout has no root map; the partial
-`charon-example-map.json` provides four explicitly authored components for a demo:
+it. `--map` accepts an explicit map path. This checkout has a root map (33 components
+in 8 subsystems, 100% file coverage), so Charon renders itself:
 
 ```sh
-.venv/bin/python scripts/charon_viz.py render --root /Users/doppo/Projects/charon \
-  --map "$PWD/apps/viz/charon-example-map.json" --out /tmp/charon-viz.html
+.venv/bin/python scripts/charon_viz.py render --root /Users/doppo/Projects/charon --out /tmp/charon-viz.html
 ```
+
+`charon-example-map.json` remains as a four-component demo map (`--map`).
 
 Gaps are deliberately retained. The adapter calls the same `validate_map`,
 `extract_facts`, and `report_table` functions as the SystemMap validate/extract/query
