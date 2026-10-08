@@ -148,3 +148,42 @@ instead of `os.environ`.
 | `CHARON_PROVIDER` | unset | Provider requested at TUI launch (e.g. `local`, `claude-code`). |
 | `CHARON_RESUME` | unset | Agent id (or `latest`) whose conversation the TUI resumes at launch. |
 | `CHARON_AGENT` | unset | Agent id/name the TUI session binds to at launch. |
+
+### Task execution policy
+
+`charon_chat.py --query` creates a non-interactive engine: Clarify is omitted from
+both the active tools and ToolCatalog, direct calls are rejected without creating
+pending questions, and browser-visibility prompts are disabled. Embedders should
+pass `ConversationEngine(..., interactive=False)` when there is no response channel,
+or set `CHARON_NON_INTERACTIVE=1`. Explicit `interactive=True` overrides that default.
+Assumptions belong in the persisted assistant response; permissions are not inferred.
+
+All engine prompts, including custom benchmark prompts, require inspection of
+available task tests/fixtures, exact output forms, explicit target-runtime discovery,
+and actual comparisons before claims such as “verified” or “byte-identical.” These
+are model instructions, not a semantic proof that the model complied.
+
+Per-submission limits:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `CHARON_CONSECUTIVE_TOOL_ERRORS` | 3 | Consecutive failed tool results |
+| `CHARON_STAGNANT_TOOL_CALLS` | 8 | Repeated observations without new evidence |
+| `CHARON_TASK_TIME_BUDGET_SECONDS` | 300 | Elapsed time across provider/tool work |
+
+Limits are positive integers, clamped to a minimum of 1. The first error/stagnation
+threshold asks the model to change strategy; the next threshold stops that submission.
+The guard hashes tool name and output (not arguments), and accepts tool result
+`details.state_changed=True` as explicit progress. Novel output is evidence of
+progress, not proof of a filesystem/service change. Changing timestamps can evade
+this heuristic; legitimate identical-output operations can trigger it. Concurrent
+calls already in a batch may complete before the guard reacts.
+
+The deadline signals tool cancellation and interrupts the provider stream. Existing
+artifacts are retained; a persisted incomplete notice and `budget_stop` event explain
+why work stopped. The one-shot CLI exits 1 on that event even if partial text exists.
+Cancellation is cooperative: tools that ignore their cancellation token, blocking
+native calls, and compaction may outlive the deadline; Python cannot forcibly kill
+an arbitrary tool thread. A process-owning harness still needs its shutdown timeout.
+
+Focused tests: `tests/test_task_execution_policy.py`.
