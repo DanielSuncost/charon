@@ -358,9 +358,16 @@ class HttpxOpenAIProvider:
 
                         chunk_usage = chunk.get('usage') or {}
                         if chunk_usage:
+                            prompt_details = (
+                                chunk_usage.get('prompt_tokens_details')
+                                or chunk_usage.get('input_tokens_details')
+                                or {}
+                            )
                             usage_data = {
                                 'input_tokens': int(chunk_usage.get('prompt_tokens', 0) or chunk_usage.get('input_tokens', 0) or 0),
                                 'output_tokens': int(chunk_usage.get('completion_tokens', 0) or chunk_usage.get('output_tokens', 0) or 0),
+                                'cache_read_tokens': int(prompt_details.get('cached_tokens', 0) or 0),
+                                'cache_write_tokens': int(prompt_details.get('cache_write_tokens', 0) or 0),
                                 'total_tokens': int(chunk_usage.get('total_tokens', 0) or 0),
                             }
                             if not usage_data['total_tokens']:

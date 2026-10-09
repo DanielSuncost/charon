@@ -11,7 +11,11 @@ from charon.providers.worker_provider import get_worker_provider_status
 
 
 def _sse() -> bytes:
-    return b'data: {"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1}}\n\ndata: [DONE]\n\n'
+    return (
+        b'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3,'
+        b'"prompt_tokens_details":{"cached_tokens":8,"cache_write_tokens":2}}}\n\n'
+        b'data: [DONE]\n\n'
+    )
 
 
 async def _send(provider: HttpxOpenAIProvider, effort: str) -> dict:
@@ -66,6 +70,35 @@ async def test_openrouter_emits_explicit_reasoning_effort(level, wire):
     assert body['reasoning_effort'] == wire
     assert provider.last_request_metrics['reasoning_effort_requested'] == level
     assert provider.last_request_metrics['reasoning_effort_emitted'] == wire
+
+
+@pytest.mark.asyncio
+async def test_openrouter_reports_cache_usage_for_spend_accounting():
+    provider = HttpxOpenAIProvider(
+        base_url='https://router.example/v1',
+        api_key='test-secret',
+        provider_name='openrouter',
+    )
+    deltas = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=_sse())
+
+    provider._mock_handler = handler
+    model = ModelInfo(provider='openrouter', model_id='vendor/model')
+    async for delta in provider.stream(
+        [Message(role='user', content='hello')], model, '', thinking_level='medium',
+    ):
+        deltas.append(delta)
+
+    usage = json.loads(deltas[-1].text)['usage']
+    assert usage == {
+        'input_tokens': 12,
+        'output_tokens': 3,
+        'cache_read_tokens': 8,
+        'cache_write_tokens': 2,
+        'total_tokens': 15,
+    }
 
 
 @pytest.mark.asyncio
