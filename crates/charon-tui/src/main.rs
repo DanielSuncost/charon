@@ -145,14 +145,14 @@ fn main() -> io::Result<()> {
     let mut stdout = io::stdout();
     stdout.queue(EnterAlternateScreen)?;
     stdout.queue(EnableBracketedPaste)?;
-    // Enable alternate scroll mode: terminal converts scroll wheel into
-    // Up/Down arrow key sequences when in the alternate screen buffer.
-    // This lets us receive scroll events as key events WITHOUT capturing
-    // the mouse — so terminal-native selection, right-click, and Cmd+C
-    // all work normally.
+    // Alternate-scroll fallback when the user disables app mouse mode (F6).
+    // Normal chat scrolling uses mouse reports, independent of terminal support
+    // for translating wheel gestures to arrow keys.
     stdout.write_all(b"\x1b[?1007h")?;
     let mut mouse_capture_enabled = false;
-    if app.active_view == View::Sessions {
+    if (app.active_view == View::Chat && app.chat.app_mouse_mode)
+        || app.active_view == View::Sessions
+    {
         stdout.queue(EnableMouseCapture)?;
         mouse_capture_enabled = true;
     }
@@ -542,12 +542,11 @@ impl EventLoop {
 
     /// Enable/disable terminal mouse capture to match the active view's needs.
     fn sync_mouse_capture(&mut self) -> io::Result<()> {
-        // Mouse capture is only enabled for Session Grid and Inter-Agent views
-        // (clicking panes, drag-select). Chat view never captures mouse — terminal
-        // handles selection, copy, right-click, paste natively. Scroll in chat uses
-        // PgUp/PgDn/arrow keys.
+        // Chat needs mouse reports for wheel events, including while typing.
+        // F6 opts out for terminal-native selection/copy; do not depend on 1007.
         let want_mouse_capture =
-            (self.app.active_view == View::Sessions && !self.app.sessions.terminal_mode && self.app.sessions.app_mouse_mode)
+            (self.app.active_view == View::Chat && self.app.chat.app_mouse_mode)
+            || (self.app.active_view == View::Sessions && !self.app.sessions.terminal_mode && self.app.sessions.app_mouse_mode)
             || (self.app.active_view == View::InterAgent && self.app.inter_agent.app_mouse_mode);
         if want_mouse_capture != self.mouse_capture_enabled {
             if want_mouse_capture {
@@ -612,14 +611,12 @@ impl EventLoop {
             match self.app.chat.view_mode {
                 ChatViewMode::Transcript => {
                     self.app.chat.info_pane_open = false;
-                    self.app.chat.app_mouse_mode = false;
                     self.app.chat.selection_anchor = None;
                     self.app.chat.selection_focus = None;
                     self.app.chat.selection_dragging = false;
                 }
                 ChatViewMode::Workspace => {
                     self.app.chat.info_pane_open = true;
-                    self.app.chat.app_mouse_mode = false;
                     self.app.chat.selection_anchor = None;
                     self.app.chat.selection_focus = None;
                     self.app.chat.selection_dragging = false;
