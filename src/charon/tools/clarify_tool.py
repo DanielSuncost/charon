@@ -71,6 +71,12 @@ def _save(state_dir: Path, data: dict) -> None:
 
 
 def execute_clarify(params: dict, ctx: ToolContext) -> ToolResult:
+    from charon.infra import config
+    interactive = (ctx.metadata or {}).get('interactive', not config.non_interactive())
+    if not interactive:
+        return ToolResult(content='Clarify is unavailable in a non-interactive run. '
+                          'Inspect local evidence, record a reasonable assumption, and proceed.',
+                          is_error=True)
     action = str(params.get('action') or '').strip().lower()
     state_dir = _state_dir(ctx)
     data = _load(state_dir)

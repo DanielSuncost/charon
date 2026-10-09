@@ -393,3 +393,24 @@ def requested_agent() -> str:
 def requested_project() -> str:
     """CHARON_PROJECT_ROOT: per-launch project override; does not change onboarding."""
     return os.environ.get('CHARON_PROJECT_ROOT', '').strip()
+
+
+# Task execution limits (per submission, including provider and tool time).
+def non_interactive() -> bool:
+    """CHARON_NON_INTERACTIVE=1 disables unanswered user prompts."""
+    return os.environ.get('CHARON_NON_INTERACTIVE', '0') == '1'
+
+
+def consecutive_tool_errors() -> int:
+    """CHARON_CONSECUTIVE_TOOL_ERRORS: default 3, minimum 1."""
+    return max(1, _get_int('CHARON_CONSECUTIVE_TOOL_ERRORS', 3))
+
+
+def stagnant_tool_calls() -> int:
+    """CHARON_STAGNANT_TOOL_CALLS: default 8 repeated observations, minimum 1."""
+    return max(1, _get_int('CHARON_STAGNANT_TOOL_CALLS', 8))
+
+
+def task_time_budget_seconds() -> int:
+    """CHARON_TASK_TIME_BUDGET_SECONDS: default 300 seconds, minimum 1."""
+    return max(1, _get_int('CHARON_TASK_TIME_BUDGET_SECONDS', 300))

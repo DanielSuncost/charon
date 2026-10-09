@@ -30,6 +30,7 @@ from charon.providers import (
 from charon.tools import ALL_TOOL_DEFS, ToolContext, ToolResult, execute_tool
 from charon.tools.tool_catalog import CORE_TOOL_NAMES
 from charon.memory.execution_memory import record_tool_event
+from charon.conversation.task_policy import LoopGuard, TASK_GUIDANCE, NON_INTERACTIVE_GUIDANCE
 from charon.infra import config
 from charon.infra.performance import TurnTimer, persist_turn_metrics
 from charon.conversation.tool_scheduler import (
@@ -420,6 +421,7 @@ class ConversationEngine:
         operation_role: str = '',
         runtime_role: str = '',
         parent_agent_id: str = '',
+        interactive: bool | None = None,
         max_turns: int = 50,
         max_tool_calls_per_turn: int = 25,
         max_tokens: int = 32768,
@@ -448,6 +450,9 @@ class ConversationEngine:
         self.frozen: list[str] | None = None  # paths that must not be modified
         self.topology_depth: int = 0  # depth in the delegation tree (0 = root agent)
         self.topology_budget: dict[str, Any] | None = None  # set for shades: governs further spawning
+        self.interactive = not config.non_interactive() if interactive is None else interactive
+        self._guard_reason = ""
+        self._loop_guard = None
         self.max_turns = max_turns
         self.max_tool_calls_per_turn = max_tool_calls_per_turn
         self.max_tokens = max_tokens
@@ -492,7 +497,7 @@ class ConversationEngine:
         except Exception as e:
             _diag('conversation_engine', 'dynamic tool loading failed; using built-in tool defs only', error=e)
             available_tools = list(ALL_TOOL_DEFS)
-        self._available_tools = list(available_tools)
+        self._available_tools = [t for t in available_tools if self.interactive or t.get('name') != 'Clarify']
         self._tool_lock = threading.RLock()
         if config.adaptive_tools():
             initial_names = set(CORE_TOOL_NAMES)
@@ -808,7 +813,10 @@ class ConversationEngine:
 
     def _get_system_prompt(self) -> str:
         """Get system prompt with optional recall guidance appended."""
-        base = self.system_prompt
+        base = self.system_prompt + '\n\n' + TASK_GUIDANCE
+        if not self.interactive:
+            base += '\n' + NON_INTERACTIVE_GUIDANCE
+        base += f'\nTask time budget: {config.task_time_budget_seconds()} seconds per submission. Preserve partial work before it expires.'
         guidance = getattr(self, '_recall_guidance', None)
         if guidance:
             return f"{base}\n\n{guidance}"
@@ -837,6 +845,7 @@ class ConversationEngine:
     def _tool_catalog_metadata(self) -> dict[str, Any]:
         with self._tool_lock:
             return {
+                'interactive': self.interactive,
                 'tool_catalog': {
                     'available': list(self._available_tools),
                     'active_names': [
@@ -899,7 +908,7 @@ class ConversationEngine:
                 started = time.monotonic()
 
                 def on_output(tool_name: str, chunk: str) -> None:
-                    if tool_name != call.name or not chunk:
+                    if self._aborted or loop.is_closed() or tool_name != call.name or not chunk:
                         return
                     loop.call_soon_threadsafe(
                         event_queue.put_nowait,
@@ -930,6 +939,11 @@ class ConversationEngine:
 
         tasks = [asyncio.create_task(run_one(call)) for call in calls]
         while True:
+            if self._aborted:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                break
             if all(task.done() for task in tasks) and event_queue.empty():
                 break
             try:
@@ -974,7 +988,8 @@ class ConversationEngine:
                     duration_ms=outcome.duration_ms,
                 )
 
-        outcomes = await asyncio.gather(*tasks)
+        gathered = await asyncio.gather(*tasks, return_exceptions=True)
+        outcomes = [outcome for outcome in gathered if isinstance(outcome, ToolExecutionOutcome)]
         yield _evt('_tool_batch_complete', outcomes=outcomes)
 
     async def _stream_provider_interruptibly(
@@ -1094,7 +1109,7 @@ class ConversationEngine:
 
     def _needs_browser_prompt(self) -> bool:
         """True if we should ask the user about browser visibility this session."""
-        if not _HAS_BROWSER_SETTINGS:
+        if not self.interactive or not _HAS_BROWSER_SETTINGS:
             return False
         session_id = self.agent_id or ''
         # Only prompt for interactive sessions (not shade agents)
@@ -1174,7 +1189,15 @@ class ConversationEngine:
         """Run one submission with lifecycle cleanup and hot-path metrics."""
         self._aborted = False
         self._running = True
-        self._turn_cancel_event.clear()
+        self._guard_reason = ''
+        self._loop_guard = LoopGuard(config.consecutive_tool_errors(), config.stagnant_tool_calls())
+        # Old tool threads retain their cancelled token if a new submission starts.
+        self._turn_cancel_event = threading.Event()
+        async def deadline():
+            await asyncio.sleep(config.task_time_budget_seconds())
+            self._guard_reason = 'task time budget exhausted'
+            self.abort()
+        watchdog = asyncio.create_task(deadline())
         self._activate_tools_for_text(user_message)
         timer = TurnTimer()
         counts = {'turns': 0, 'tool_calls': 0}
@@ -1199,6 +1222,15 @@ class ConversationEngine:
                 elif event.type == 'tool_execution_end':
                     timer.mark('last_tool_end')
                 elif event.type == 'done':
+                    if self._guard_reason:
+                        note = ('Stopped: ' + self._guard_reason + '. Existing artifacts are retained. '
+                                'Task is incomplete; do not treat prior claims as final verification.')
+                        message = Message(role='assistant', content=note, timestamp=time.time())
+                        self.messages.append(message)
+                        self._persist_message(message)
+                        yield _evt('text_delta', text='\n' + note + '\n')
+                        yield _evt('budget_stop', reason=self._guard_reason)
+                        event.data['stop_reason'] = 'budget_exhausted'
                     timer.mark('completed')
                     provider_metrics = dict(
                         getattr(self.provider, 'last_request_metrics', {}) or {}
@@ -1215,8 +1247,11 @@ class ConversationEngine:
                     yield _evt('performance', **metrics)
                 yield event
         finally:
+            watchdog.cancel()
+            await asyncio.gather(watchdog, return_exceptions=True)
             self._running = False
-            self._turn_cancel_event.clear()
+            if not self._guard_reason:
+                self._turn_cancel_event.clear()
 
     async def _submit_impl(self, user_message: str) -> AsyncIterator[EngineEvent]:
         """Submit a user message and run the agent loop.
@@ -1479,6 +1514,7 @@ class ConversationEngine:
             completed_ids: set[str] = set()
             started_count = 0
             steered = False
+            guard_notice = None
 
             for batch in batches:
                 if self._aborted:
@@ -1499,6 +1535,12 @@ class ConversationEngine:
                     if result is None:
                         continue
                     tc = outcome.call
+                    notice = self._loop_guard.observe(tc.name, result) if self._loop_guard else None
+                    if notice:
+                        guard_notice = notice
+                        if notice[0] == 'stop':
+                            self._guard_reason = notice[1]
+                            self.abort()
                     completed_ids.add(tc.id)
                     tool_msg = Message(
                         role='tool_result',
@@ -1516,6 +1558,8 @@ class ConversationEngine:
                         outcome.duration_ms,
                     )
 
+                if guard_notice:
+                    break
                 if self._steering_queue:
                     steered = True
                     break
@@ -1536,6 +1580,8 @@ class ConversationEngine:
                     reason = 'run aborted before tool completed'
                 elif self._steering_queue:
                     reason = 'steering message interrupted pending tool'
+                elif guard_notice:
+                    reason = 'loop guard: change strategy before further tools'
                 else:
                     reason = 'tool was not executed'
                 result = synthetic_tool_result(reason)
@@ -1577,6 +1623,15 @@ class ConversationEngine:
                 )
                 steered = True
 
+            if guard_notice and guard_notice[0] == 'warn' and not self._aborted:
+                content = ('Loop guard: ' + guard_notice[1] + '. Change strategy now: inspect local '
+                           'tests/setup and target runtime, avoid repeating these calls, preserve the '
+                           'best partial artifact and state what remains unverified. Another threshold '
+                           'breach will stop this submission.')
+                message = Message(role='user', content=content, timestamp=time.time())
+                self.messages.append(message)
+                self._persist_message(message)
+                yield _evt('strategy_change', reason=guard_notice[1])
             yield _evt('turn_end', turn=turn,
                        stop_reason='steer' if steered else 'tool_use')
             # Loop back to stream next LLM response

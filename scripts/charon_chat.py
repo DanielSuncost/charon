@@ -155,6 +155,7 @@ async def one_shot(engine: ConversationEngine, query: str) -> int:
     harness can parse the reply from stdout alone.
     """
     saw_error = False
+    budget_stopped = False
     text_parts: list[str] = []
     usage = {
         'input_tokens': 0,
@@ -200,6 +201,8 @@ async def one_shot(engine: ConversationEngine, query: str) -> int:
             if text_parts and not text_parts[-1].endswith('\n'):
                 text_parts.append('\n')
                 print(flush=True)
+        elif event.type == 'budget_stop':
+            budget_stopped = True
         elif event.type == 'error':
             saw_error = True
             print(f'[error] {event.data.get("error", "unknown error")}', file=sys.stderr, flush=True)
@@ -208,7 +211,7 @@ async def one_shot(engine: ConversationEngine, query: str) -> int:
         print(flush=True)
     if not usage_checkpointed:
         emit_usage_checkpoint()
-    return 1 if (saw_error and not ''.join(text_parts).strip()) else 0
+    return 1 if budget_stopped or (saw_error and not ''.join(text_parts).strip()) else 0
 
 
 def main():
@@ -323,6 +326,7 @@ def main():
         system_prompt=system_prompt,
         state_dir=state,
         thinking_level=args.reasoning_effort,
+        interactive=False if args.query is not None else None,
         **engine_kwargs,
     )
 
