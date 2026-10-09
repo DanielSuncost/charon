@@ -6,6 +6,7 @@ Uses httpx for async streaming — the only dependency beyond stdlib.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from typing import Any, AsyncIterator
 from charon.infra import config
@@ -83,6 +84,7 @@ from charon.providers import Message, ModelInfo, StreamDelta, ToolCall  # noqa: 
 from charon.providers.http_client import AsyncClientPool  # noqa: E402
 from charon.providers.http_errors import exception_error, http_error  # noqa: E402
 from charon.providers.image_content import has_image_block, to_chat_completions_parts  # noqa: E402
+from charon.providers.request_observability import observe_reasoning_request  # noqa: E402
 
 try:
     from charon.infra.diagnostics import record as _diag
@@ -209,12 +211,14 @@ class HttpxOpenAIProvider:
         base_url: str | None = None,
         api_key: str | None = None,
         timeout: float = 300.0,
+        provider_name: str = 'openai-compatible',
     ):
         self._base_url = (
             base_url or config.local_base_url() or config.DEFAULT_LOCAL_BASE_URL
         ).rstrip('/')
         self._api_key = api_key or config.local_api_key()
         self._timeout = timeout
+        self._provider_name = provider_name
         # Optional httpx handler for tests; when set, requests are served by
         # an in-process MockTransport instead of a real network connection.
         self._mock_handler = None
@@ -253,9 +257,36 @@ class HttpxOpenAIProvider:
             if openai_tools:
                 body['tools'] = openai_tools
 
-        if thinking_level != 'off':
-            effort_map = {'minimal': 'low', 'low': 'low', 'medium': 'medium', 'high': 'high', 'xhigh': 'high'}
-            body['reasoning_effort'] = effort_map.get(str(thinking_level).strip().lower(), 'medium')
+        requested_effort = str(thinking_level).strip().lower()
+        require_effort = str(os.environ.get('CHARON_REQUIRE_REASONING_EFFORT') or '').lower() in {
+            '1', 'true', 'yes', 'on',
+        }
+        if self._provider_name == 'openrouter':
+            # OpenRouter accepts Charon's ladder directly except for the two
+            # spelling differences at its ends: off -> none, ultra -> max.
+            wire_effort = {'off': 'none', 'ultra': 'max'}.get(
+                requested_effort, requested_effort,
+            )
+            body['reasoning_effort'] = wire_effort
+        elif requested_effort != 'off':
+            effort_map = {
+                'minimal': 'low', 'low': 'low', 'medium': 'medium',
+                'high': 'high', 'xhigh': 'high',
+            }
+            body['reasoning_effort'] = effort_map.get(requested_effort, 'medium')
+        elif require_effort:
+            # OpenAI-compatible servers commonly use "none" for an explicit
+            # no-reasoning request. Preserve the historical omission unless
+            # the caller has asked for a verifiable wire setting.
+            body['reasoning_effort'] = 'none'
+
+        reasoning_observation = observe_reasoning_request(
+            provider=self._provider_name,
+            model=model.model_id,
+            requested=requested_effort,
+            wire_field='reasoning_effort' if 'reasoning_effort' in body else None,
+            wire_value=body.get('reasoning_effort'),
+        )
 
         headers = {
             'Content-Type': 'application/json',
@@ -276,6 +307,7 @@ class HttpxOpenAIProvider:
                 'request_json_bytes': len(json.dumps(body, separators=(',', ':')).encode('utf-8')),
                 'transport_reused': reused,
                 'transport': 'http2' if getattr(client, 'http2', False) else 'http',
+                **reasoning_observation,
             }
             async with client.stream(
                     'POST', url,

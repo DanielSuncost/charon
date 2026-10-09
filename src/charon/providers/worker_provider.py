@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from charon.providers.provider_secrets import read_secret_env
+
 try:
     from charon.infra.diagnostics import record as _diag
 except Exception:  # diagnostics is best-effort and must never block import
@@ -50,6 +52,13 @@ def list_available_worker_providers(state_dir: Path) -> list[str]:
     codex_tokens = codex.get('tokens') or {}
     if str(codex_tokens.get('access_token') or '').strip() or str(codex.get('api_key') or '').strip():
         available.append('codex')
+
+    try:
+        if read_secret_env('OPENROUTER_API_KEY', 'OPENROUTER_API_KEY_FILE'):
+            available.append('openrouter')
+    except ValueError:
+        # Readiness below reports an unreadable/missing secret as unready.
+        pass
 
     # Always offer LM Studio as a local worker option.
     # Reachability can be validated later; this keeps setup discoverable.
@@ -121,6 +130,26 @@ def get_worker_provider_status(state_dir: Path) -> dict[str, Any]:
                 'configured_provider': shade_provider,
                 'configured_model': shade_model,
                 'base_url': shade_base_url or 'http://127.0.0.1:1234/v1',
+            }
+        is_openrouter = (
+            shade_provider in ('openrouter', 'api')
+            or 'openrouter.ai' in shade_base_url.lower()
+        )
+        if is_openrouter:
+            try:
+                openrouter_key = shade_api_key or read_secret_env(
+                    'OPENROUTER_API_KEY', 'OPENROUTER_API_KEY_FILE',
+                )
+            except ValueError:
+                openrouter_key = ''
+            return {
+                'ok': bool(openrouter_key),
+                'reason': '' if openrouter_key else 'unready',
+                'available_providers': available,
+                'mode': mode,
+                'configured_provider': shade_provider,
+                'configured_model': shade_model,
+                'base_url': shade_base_url or 'https://openrouter.ai/api/v1',
             }
         if shade_provider in ('codex', 'openai', 'openai-codex'):
             auth = _read_json(state_dir / 'auth' / 'auth.json', {})

@@ -92,6 +92,19 @@ def test_codex_body_has_no_reasoning_block_when_off(monkeypatch):
     assert 'reasoning' not in body
 
 
+def test_codex_verification_makes_off_explicit_and_reports_wire_value(monkeypatch, capsys):
+    monkeypatch.setenv('CHARON_REQUIRE_REASONING_EFFORT', '1')
+    monkeypatch.setenv('CHARON_EMIT_REQUEST_CONFIG', '1')
+
+    body = _send(monkeypatch, model_id='gpt-6-astra', thinking_level='off')
+
+    assert body['reasoning'] == {'effort': 'none', 'summary': 'auto'}
+    event = json.loads(capsys.readouterr().err.strip())['provider_request']
+    assert event['reasoning_effort_requested'] == 'off'
+    assert event['reasoning_field'] == 'reasoning.effort'
+    assert event['reasoning_effort_emitted'] == 'none'
+
+
 def test_codex_body_sends_ultra_as_max_and_minimal_as_the_floor(monkeypatch):
     # Both ends pinned by live 400s: 'ultra' is a CLI mode, 'minimal' is not an astra level.
     assert _send(monkeypatch, model_id='gpt-6-astra', thinking_level='ultra')['reasoning']['effort'] == 'max'

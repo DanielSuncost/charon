@@ -23,6 +23,7 @@ from charon.providers import Message, ModelInfo, StreamDelta, ToolCall
 from charon.providers.http_client import AsyncClientPool
 from charon.providers.http_errors import exception_error, http_error
 from charon.providers.effort import clamp_effort
+from charon.providers.request_observability import observe_reasoning_request
 from charon.providers.image_content import has_image_block, to_responses_input_parts
 
 try:
@@ -658,8 +659,21 @@ class HttpxCodexProvider:
         # folded into high, 'ultra' (a CLI-only mode) is sent as max, and
         # levels stay clamped on models that stop lower.
         effort = clamp_effort(thinking_level, model.model_id)
-        if effort != 'off':
-            body['reasoning'] = {'effort': effort, 'summary': 'auto'}
+        require_effort = str(os.environ.get('CHARON_REQUIRE_REASONING_EFFORT') or '').lower() in {
+            '1', 'true', 'yes', 'on',
+        }
+        if effort != 'off' or require_effort:
+            body['reasoning'] = {
+                'effort': 'none' if effort == 'off' else effort,
+                'summary': 'auto',
+            }
+        observe_reasoning_request(
+            provider='codex',
+            model=model.model_id,
+            requested=str(thinking_level).strip().lower(),
+            wire_field='reasoning.effort' if 'reasoning' in body else None,
+            wire_value=(body.get('reasoning') or {}).get('effort'),
+        )
 
         # Codex WebSocket v2 avoids a new HTTP request/response setup on each
         # model turn. A failure before semantic output transparently falls back

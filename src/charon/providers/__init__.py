@@ -134,6 +134,22 @@ def get_provider(provider_name: str) -> Provider:
                 api_key=os.environ.get('OPENAI_API_KEY', ''),
             )
 
+    if name == 'openrouter':
+        from charon.providers.httpx_openai import HttpxOpenAIProvider
+        from charon.providers.provider_secrets import read_secret_env
+
+        api_key = read_secret_env('OPENROUTER_API_KEY', 'OPENROUTER_API_KEY_FILE')
+        if not api_key:
+            raise ValueError(
+                'OpenRouter credential missing. Set OPENROUTER_API_KEY or '
+                'OPENROUTER_API_KEY_FILE.'
+            )
+        return HttpxOpenAIProvider(
+            base_url=os.environ.get('OPENAI_BASE_URL', 'https://openrouter.ai/api/v1'),
+            api_key=api_key,
+            provider_name='openrouter',
+        )
+
     if name in ('local', 'lmstudio', 'ollama'):
         base_url = config.local_base_url() or config.DEFAULT_LOCAL_BASE_URL
         api_key = config.local_api_key()
