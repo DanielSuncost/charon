@@ -1232,9 +1232,14 @@ class ConversationEngine:
                         yield _evt('budget_stop', reason=self._guard_reason)
                         event.data['stop_reason'] = 'budget_exhausted'
                     timer.mark('completed')
-                    provider_metrics = dict(
-                        getattr(self.provider, 'last_request_metrics', {}) or {}
-                    )
+                    reserved_metrics = {'provider', 'model', 'agent_id', *counts}
+                    provider_metrics = {
+                        key: value
+                        for key, value in dict(
+                            getattr(self.provider, 'last_request_metrics', {}) or {}
+                        ).items()
+                        if key not in reserved_metrics
+                    }
                     timer.set(
                         provider=self.provider_name,
                         model=self.model.model_id,
