@@ -626,7 +626,8 @@ EDIT_TOOL_DEF = {
     'description': (
         'Atomically edit one or more exact text blocks or inclusive line ranges. '
         'Pass Read\'s baseHash to reject stale edits. All hunks are validated '
-        'before any content is written.'
+        'before any content is written. Supply either oldText and newText, '
+        'or a nonempty edits array.'
     ),
     'input_schema': {
         'type': 'object',
@@ -668,10 +669,8 @@ EDIT_TOOL_DEF = {
             },
         },
         'required': ['path'],
-        'anyOf': [
-            {'required': ['oldText', 'newText']},
-            {'required': ['edits']},
-        ],
+        # Anthropic rejects top-level schema combinators (also via OpenRouter).
+        # The Edit implementation validates these alternatives before writing.
     },
 }
 

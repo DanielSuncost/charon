@@ -11,6 +11,31 @@ def _enabled(name: str) -> bool:
     return str(os.environ.get(name) or '').strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
+def observe_provider_error(
+    *, provider: str, model: str, status_code: int, raw_body: str,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    """Persist the complete response, including nested upstream errors.
+
+    Never record request headers. Redact the credential if a server echoes it.
+    The benchmark's existing telemetry switch also writes this event to its
+    captured stderr, surviving deletion of the container's runtime state.
+    """
+    from charon.infra.diagnostics import record
+
+    if api_key:
+        raw_body = raw_body.replace(api_key, '[REDACTED]')
+    event = {
+        'provider': provider, 'model': model,
+        'status_code': status_code, 'raw_body': raw_body,
+    }
+    record('provider', 'HTTP response error', **event)
+    if _enabled('CHARON_EMIT_REQUEST_CONFIG'):
+        print(json.dumps({'provider_error': event}, separators=(',', ':')),
+              file=sys.stderr, flush=True)
+    return event
+
+
 def observe_reasoning_request(
     *,
     provider: str,

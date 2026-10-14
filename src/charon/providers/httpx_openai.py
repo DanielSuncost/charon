@@ -84,7 +84,7 @@ from charon.providers import Message, ModelInfo, StreamDelta, ToolCall  # noqa: 
 from charon.providers.http_client import AsyncClientPool  # noqa: E402
 from charon.providers.http_errors import exception_error, http_error  # noqa: E402
 from charon.providers.image_content import has_image_block, to_chat_completions_parts  # noqa: E402
-from charon.providers.request_observability import observe_reasoning_request  # noqa: E402
+from charon.providers.request_observability import observe_provider_error, observe_reasoning_request  # noqa: E402
 
 try:
     from charon.infra.diagnostics import record as _diag
@@ -317,6 +317,12 @@ class HttpxOpenAIProvider:
                     if response.status_code != 200:
                         error_body = await response.aread()
                         error_text = error_body.decode('utf-8', errors='replace')
+                        self.last_request_metrics['provider_error'] = observe_provider_error(
+                            provider=self._provider_name, model=model.model_id,
+                            status_code=response.status_code, raw_body=error_text,
+                            api_key=self._api_key,
+                        )
+                        error_text = self.last_request_metrics['provider_error']['raw_body']
                         try:
                             err_json = json.loads(error_text)
                             error_text = err_json.get('error', {}).get('message', error_text)
