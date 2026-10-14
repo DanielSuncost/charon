@@ -29,11 +29,27 @@ in provider metrics and diagnostics. With the benchmark's existing
 in the attempt's stderr. A reflected API key is redacted. Other provider
 implementations and in-stream HTTP-200 error events are outside this change.
 
-Validation: `tests/test_openrouter_error_body.py`, 3 passing cases covering
-nested/long JSON and HTML error bodies, credential redaction, attempt stderr,
-diagnostics, metrics, and Edit validation. No broad suite was run.
+Product follow-up: Edit explicitly checks for oldText+newText or edits before
+file access and returns an actionable error. Ast's existing _paths handler
+already enforces exactly one of path or paths before file access; its top-level
+oneOf was removed and the requirement documented in its description. The Ast
+implementation was present as uncommitted workspace work, absent at the old
+benchmark pin; only Ast and its registration were carried into this branch.
+Other pending IDE work was not included.
 
-Resume was not launched: applying this fix changes executed source beyond the
-non-negotiable base pin. A recorded compatibility overlay needs explicit
-permission; reporting patched source as an unchanged commit would be misleading.
-No images were pulled or deleted. The separate testbed PATH defect is untouched.
+The complete registered-tool payload (58 tools, no failed optional imports)
+returned HTTP 200 with $0.0025643 spend; see full-tools-response-200-usage.json.
+The registry/dynamic-loader sweep found zero remaining top-level anyOf/oneOf/
+allOf. The only remaining combinator was Edit.edits.items.anyOf. It was present
+in both successful probes, confirming nested anyOf is accepted. The raw 400
+explicitly rejects top-level oneOf, allOf, or anyOf; the actual first failing
+schema was Edit.anyOf. No provider-specific conversion is used.
+
+Validation: tests/test_openrouter_error_body.py, 9 passing cases covering
+full error telemetry and redaction, actionable Edit/Ast contract validation,
+and the entire registered schema set. No broad suite was run.
+
+The user authorized re-pinning the same run to this product fix. The separate
+testbed PATH defect is untouched. Host probe cost is separate from benchmark
+estimated spend. A 200 response does not independently prove internal model
+reasoning behavior (the response reported zero reasoning tokens).

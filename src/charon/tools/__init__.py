@@ -702,6 +702,12 @@ def execute_edit(params: dict, ctx: ToolContext) -> ToolResult:
     if not path_str:
         return ToolResult(content='Error: path is required', is_error=True)
 
+    if not ('edits' in params or {'oldText', 'newText'} <= params.keys()):
+        return ToolResult(
+            content='Error: supply oldText and newText for a single edit, or a nonempty edits array for batch edits.',
+            is_error=True,
+        )
+
     raw_edits = params.get('edits')
     if raw_edits is None:
         if not params.get('oldText'):
@@ -1371,6 +1377,7 @@ from charon.tools.skills_tool import SKILLS_TOOL_DEF, execute_skills
 from charon.tools.execute_code_tool import EXECUTE_CODE_TOOL_DEF, execute_execute_code
 from charon.tools.pykernel_tool import PYKERNEL_TOOL_DEF, execute_pykernel
 from charon.tools.refine_tool import REFINE_TOOL_DEF, execute_refine
+from charon.tools.ast_tool import AST_TOOL_DEF, execute_ast
 from charon.tools.clarify_tool import CLARIFY_TOOL_DEF, execute_clarify
 
 # Optional tools may legitimately be missing (uninstalled extras) — that is an
@@ -1474,13 +1481,14 @@ ALL_TOOL_DEFS = [
     SHADE_TOOL_DEF, LIST_RETAINED_SHADES_TOOL_DEF, SPAWN_BATCH_TOOL_DEF, JUDGE_LOOP_TOOL_DEF,
     SEARCH_TOOL_DEF, WEB_TOOL_DEF, PAPER_TOOL_DEF, SOURCE_DISCOVERY_TOOL_DEF, RESEARCH_TOOL_DEF, X_TOOL_DEF,
     CRON_TOOL_DEF, SKILLS_TOOL_DEF, EXECUTE_CODE_TOOL_DEF, CLARIFY_TOOL_DEF,
-    PYKERNEL_TOOL_DEF, REFINE_TOOL_DEF,
+    PYKERNEL_TOOL_DEF, REFINE_TOOL_DEF, AST_TOOL_DEF,
 ] + ([BROWSER_TOOL_DEF] if _HAS_BROWSER else []) + ([RECALL_TOOL_DEF] if _HAS_RECALL else []) + ([TIMELINE_TOOL_DEF] if _HAS_TIMELINE else []) + (_FLEET_DEFS if _HAS_FLEET else []) + (_OVERSEER_DEFS if _HAS_OVERSEER else []) + (_SYSTEM_MAP_DEFS if _HAS_SYSTEM_MAP else [])
 
 TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
     'Read': execute_read,
     'Bash': execute_bash,
     'Edit': execute_edit,
+    'Ast': execute_ast,
     'Write': execute_write,
     'ToolCatalog': execute_tool_catalog,
     'RunProcess': execute_run_process,

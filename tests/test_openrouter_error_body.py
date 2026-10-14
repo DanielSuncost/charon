@@ -58,3 +58,29 @@ def test_edit_schema_accepted_without_weakening_runtime_validation(tmp_path):
     result = execute_edit({'path': str(target)}, ToolContext(project_root=tmp_path))
     assert result.is_error
     assert target.read_text() == 'original\n'
+
+
+@pytest.mark.parametrize('params', [{}, {'oldText': 'original'}, {'newText': 'changed'}])
+def test_edit_alternatives_actionable_before_file_access(tmp_path, params):
+    result = execute_edit({'path': 'absent.txt', **params}, ToolContext(project_root=tmp_path))
+    assert result.is_error
+    assert 'oldText and newText' in result.content
+    assert 'edits array' in result.content
+
+
+@pytest.mark.parametrize('params', [{}, {'path': 'absent.txt', 'paths': ['absent.txt']}])
+def test_ast_exclusive_paths_before_file_access(tmp_path, params):
+    from charon.tools.ast_tool import execute_ast
+    result = execute_ast({'language': 'python', 'pattern': 'foo($A)', **params},
+                         ToolContext(project_root=tmp_path))
+    assert result.is_error
+    assert 'exactly one of path or paths' in result.content
+
+
+def test_registered_tool_schemas_have_no_top_level_combinators():
+    from charon.tools import ALL_TOOL_DEFS
+    for tool in ALL_TOOL_DEFS:
+        schema = tool.get('input_schema', tool.get('parameters', {}))
+        assert schema.get('type') == 'object', tool['name']
+        assert not ({'anyOf', 'oneOf', 'allOf'} & schema.keys()), tool['name']
+    assert 'anyOf' in EDIT_TOOL_DEF['input_schema']['properties']['edits']['items']
