@@ -57,6 +57,7 @@ def test_cli_passes_explicit_effort_and_state_dir_to_engine(tmp_path, monkeypatc
     assert exc.value.code == 0
     assert captured['state_dir'] == state
     assert captured['thinking_level'] == 'xhigh'
+    assert captured['interactive'] is False
     assert captured['model'].model_id == 'vendor/model'
     assert os.environ['CHARON_REQUIRE_REASONING_EFFORT'] == '1'
     assert os.environ['CHARON_EMIT_REQUEST_CONFIG'] == '1'
