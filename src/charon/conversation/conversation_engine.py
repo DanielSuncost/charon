@@ -131,6 +131,45 @@ def _load_default_thinking_level(state_dir: Path | None) -> str:
         return _normalize_thinking_level(data.get('reasoning_effort') or data.get('thinking_level'))
     except Exception:
         return 'off'
+
+
+# Markers a model emits when it "calls a tool" as prose instead of returning a
+# structured tool_calls field. Nearly always means the served model has no
+# usable chat template, so the tool schema was never rendered into the prompt
+# and there is nothing to parse the reply back out of.
+_DEGRADED_TOOL_MARKUP = (
+    '<tool_call>', '<function=', '<|tool_call', '[tool_call]', '"tool_calls"',
+)
+# Chat-template fallbacks are typically raw completion formats, so the model
+# runs past its turn and starts writing the next speaker's line.
+_ROLE_LEAK_MARKERS = ('Human:', 'Assistant:', 'AI:', 'User:')
+
+
+def _detect_degraded_tool_calling(
+    text: str, tools_were_sent: bool, tool_call_count: int,
+) -> str | None:
+    """Explain why a tools-enabled turn produced no tool calls, or None.
+
+    Catches the case where the provider accepted a tool schema but the model
+    replied with tool-call syntax as plain text. Without this the turn just
+    looks like the agent chatting, and the real fault (a broken or missing
+    chat template on the model being served) stays invisible.
+    """
+    if not tools_were_sent or tool_call_count:
+        return None
+    stripped = (text or '').strip()
+    if not stripped:
+        return None
+    lowered = stripped.lower()
+    for marker in _DEGRADED_TOOL_MARKUP:
+        if marker in lowered:
+            return f'the model wrote tool-call markup ({marker}) as plain text'
+    for marker in _ROLE_LEAK_MARKERS:
+        if stripped.endswith(marker) or f'\n{marker}' in stripped:
+            return f'the model leaked the {marker!r} role marker into its reply'
+    return None
+
+
 try:
     from charon.context.context_store import ContextStore
     from charon.context.context_compactor import ContextCompactor, CompactionConfig
@@ -1448,6 +1487,25 @@ class ConversationEngine:
             # Record assistant message
             full_text = _sanitize_assistant_text(''.join(assistant_text))
             full_thinking = ''.join(assistant_thinking)
+
+            # A tools-enabled turn that produced no tool calls but is full of
+            # tool-call syntax means the model cannot actually call tools.
+            # Surface it instead of letting the agent look merely chatty.
+            degraded = _detect_degraded_tool_calling(
+                full_text, bool(self.tools), len(tool_calls),
+            )
+            if degraded:
+                notice = (
+                    f'[charon] This model returned no tool calls: {degraded}. '
+                    'The served model most likely has no usable chat template, '
+                    'so the tool schema was never put in its prompt. '
+                    'Check the model in your inference server before trusting '
+                    'this reply.'
+                )
+                _diag('conversation_engine',
+                      'degraded tool calling detected', reason=degraded)
+                yield _evt('error', error=notice, turn=turn)
+                full_text = f'{notice}\n\n{full_text}' if full_text else notice
 
             assistant_msg = Message(
                 role='assistant',

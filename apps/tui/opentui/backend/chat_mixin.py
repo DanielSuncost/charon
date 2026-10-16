@@ -366,10 +366,14 @@ class ChatMixin:
             try:
                 async for event in engine.submit(message):
                     if event.type == 'thinking_delta':
-                        if not thinking_started:
-                            common.emit({'type': 'thinking_start', 'request_id': request_id})
-                            thinking_started = True
+                        # Only open the thoughts bubble when the deltas that
+                        # fill it will actually be sent. thinking_start alone
+                        # renders a bare "visible thoughts" header with nothing
+                        # under it, which reads as a bug.
                         if self.visible_thoughts and self._thoughts_supported():
+                            if not thinking_started:
+                                common.emit({'type': 'thinking_start', 'request_id': request_id})
+                                thinking_started = True
                             common.emit({
                                 'type': 'thinking_delta',
                                 'text': event.data.get('text', ''),

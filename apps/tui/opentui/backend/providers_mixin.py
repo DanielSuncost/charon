@@ -361,4 +361,7 @@ class ProvidersMixin:
         name = self._current_provider_name()
         # Anthropic has native thinking. Local/OpenAI-compatible providers may
         # also surface thoughts via reasoning fields or inline <think> blocks.
-        return name in {'anthropic', 'openai', 'local'}
+        # 'lmstudio' and 'ollama' are spelled differently in config but resolve
+        # to the same provider class as 'local' (see providers.get_provider),
+        # so they are equally capable of surfacing thoughts.
+        return name in {'anthropic', 'openai', 'local', 'lmstudio', 'ollama'}
