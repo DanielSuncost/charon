@@ -4,6 +4,7 @@ import argparse
 import difflib
 import json
 import os
+import shutil
 import sys
 import time
 import subprocess
@@ -1151,6 +1152,94 @@ def cmd_setup_auth_start(args):
     if token_data.get('auth_url'):
         print(f"auth_url={token_data.get('auth_url')}")
 
+def cmd_setup_claude_code(args):
+    """Configure Claude Code hook integration for a project."""
+    project = Path(str(args.project or ROOT)).resolve()
+    claude_path = shutil.which('claude')
+    if not claude_path:
+        print('Error: Claude Code CLI not found in PATH.')
+        print('Install it from https://docs.anthropic.com/en/docs/claude-code')
+        raise SystemExit(2)
+
+    hooks_dir = ROOT / 'tools' / 'claude-code-hooks'
+    bridge = hooks_dir / 'charon_hook_bridge.py'
+    if not bridge.exists():
+        print(f'Error: Hook bridge not found at {bridge}')
+        raise SystemExit(2)
+
+    # Write hook settings.
+    sys.path.insert(0, str(hooks_dir))
+    from generate_settings import write_settings
+    settings_path = write_settings(project, bridge)
+    print(f'Wrote hook config to {settings_path}')
+
+    # Test bridge with a synthetic SessionStart event.
+    test_ok = False
+    if not getattr(args, 'skip_test', False):
+        import subprocess as _sp
+        test_json = json.dumps({'session_id': 'test-setup', 'hook_event_name': 'SessionStart'})
+        env = dict(os.environ)
+        env['CHARON_STATE_DIR'] = str(STATE_DIR)
+        env['CHARON_ROOM_ID'] = 'nonexistent-room'
+        try:
+            r = _sp.run(
+                [sys.executable, str(bridge), 'session-start'],
+                input=test_json, capture_output=True, text=True,
+                env=env, timeout=5,
+            )
+            test_ok = r.returncode == 0
+        except Exception:
+            pass
+        if test_ok:
+            print('Hook bridge test: OK')
+        else:
+            print('Hook bridge test: FAILED (non-critical, may work at runtime)')
+
+    # Save onboarding state.
+    state = _load_onboarding_state()
+    state['claude_code_configured'] = True
+    state['claude_code_path'] = claude_path
+    _save_onboarding_state(state)
+
+    print()
+    print('Claude Code hook integration configured.')
+    print(f'  Claude Code: {claude_path}')
+    print(f'  Bridge:      {bridge}')
+    print(f'  Settings:    {settings_path}')
+    print()
+    print('Next steps:')
+    print(f'  charon_agents.py claude-code "your task" --project {project}')
+    print('  Or launch interactively:')
+    print(f'  charon_agents.py claude-code --interactive --project {project}')
+
+
+def cmd_claude_code_launch(args):
+    """Launch a Claude Code session orchestrated by Charon."""
+    from charon.fleet.external_session_launcher import launch_claude_code_session
+
+    instruction = str(args.instruction or '').strip()
+    interactive = getattr(args, 'interactive', False)
+    if not instruction and not interactive:
+        print('Error: provide a task instruction or use --interactive')
+        raise SystemExit(2)
+
+    result = launch_claude_code_session(
+        state_dir=STATE_DIR,
+        project_root=Path(str(args.project or ROOT)).resolve(),
+        task_instruction=instruction or '(interactive session)',
+        judge_eval_command=getattr(args, 'judge_eval_command', '') or '',
+        judge_target_score=float(getattr(args, 'judge_target_score', 1.0) or 1.0),
+        interactive=interactive,
+        max_turns=int(getattr(args, 'max_turns', 25) or 25),
+    )
+
+    if not result.get('ok'):
+        print(f"Error: {result.get('error', 'unknown')}")
+        raise SystemExit(2)
+
+    print(json.dumps(result, indent=2, default=str))
+
+
 def add_create_parser(sub, name: str):
     c = sub.add_parser(name)
     c.add_argument('--mode', choices=['temp', 'persistent'], default='persistent')
@@ -1359,6 +1448,20 @@ def main():
     sas = setup_sub.add_parser('auth-start')
     sas.add_argument('--no-open', action='store_true', help='Do not auto-open auth URL in browser')
     sas.set_defaults(func=cmd_setup_auth_start)
+
+    scc = setup_sub.add_parser('claude-code', help='Configure Claude Code hook integration')
+    scc.add_argument('--project', default='', help='Target project directory')
+    scc.add_argument('--skip-test', action='store_true', help='Skip bridge test')
+    scc.set_defaults(func=cmd_setup_claude_code)
+
+    cc = sub.add_parser('claude-code', help='Launch a Claude Code session orchestrated by Charon')
+    cc.add_argument('instruction', nargs='?', default='', help='Task instruction (batch mode)')
+    cc.add_argument('--project', default=str(ROOT))
+    cc.add_argument('--interactive', action='store_true', help='Launch interactive session')
+    cc.add_argument('--judge-eval-command', default='', help='Command to evaluate result (score on stdout)')
+    cc.add_argument('--judge-target-score', type=float, default=1.0, help='Minimum passing score')
+    cc.add_argument('--max-turns', type=int, default=25, help='Max agentic turns')
+    cc.set_defaults(func=cmd_claude_code_launch)
 
     args = p.parse_args()
     args.func(args)
