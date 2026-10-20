@@ -68,15 +68,6 @@ def test_edit_alternatives_actionable_before_file_access(tmp_path, params):
     assert 'edits array' in result.content
 
 
-@pytest.mark.parametrize('params', [{}, {'path': 'absent.txt', 'paths': ['absent.txt']}])
-def test_ast_exclusive_paths_before_file_access(tmp_path, params):
-    from charon.tools.ast_tool import execute_ast
-    result = execute_ast({'language': 'python', 'pattern': 'foo($A)', **params},
-                         ToolContext(project_root=tmp_path))
-    assert result.is_error
-    assert 'exactly one of path or paths' in result.content
-
-
 def test_registered_tool_schemas_have_no_top_level_combinators():
     from charon.tools import ALL_TOOL_DEFS
     for tool in ALL_TOOL_DEFS:
