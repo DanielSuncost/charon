@@ -36,6 +36,25 @@ def observe_provider_error(
     return event
 
 
+def observe_provider_response(
+    *, provider: str, model: str, upstream: str | None,
+    generation_id: str | None, response_model: str | None,
+) -> dict[str, Any]:
+    """Report which upstream served one completed request.
+
+    Routers such as OpenRouter choose a backend per request and name it in
+    the response's ``provider`` field. Only routing identifiers are recorded.
+    """
+    event = {
+        'provider': provider, 'model': model, 'upstream': upstream,
+        'generation_id': generation_id, 'response_model': response_model,
+    }
+    if _enabled('CHARON_EMIT_REQUEST_CONFIG'):
+        print(json.dumps({'provider_response': event}, separators=(',', ':')),
+              file=sys.stderr, flush=True)
+    return event
+
+
 def observe_reasoning_request(
     *,
     provider: str,

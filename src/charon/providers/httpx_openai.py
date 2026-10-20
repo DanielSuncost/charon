@@ -84,7 +84,9 @@ from charon.providers import Message, ModelInfo, StreamDelta, ToolCall  # noqa: 
 from charon.providers.http_client import AsyncClientPool  # noqa: E402
 from charon.providers.http_errors import exception_error, http_error  # noqa: E402
 from charon.providers.image_content import has_image_block, to_chat_completions_parts  # noqa: E402
-from charon.providers.request_observability import observe_provider_error, observe_reasoning_request  # noqa: E402
+from charon.providers.request_observability import (  # noqa: E402
+    observe_provider_error, observe_provider_response, observe_reasoning_request,
+)
 
 try:
     from charon.infra.diagnostics import record as _diag
@@ -342,6 +344,9 @@ class HttpxOpenAIProvider:
                     current_tool_calls: dict[int, dict[str, str]] = {}
                     finish_reason: str | None = None
                     usage_data: dict[str, int] = {}
+                    upstream: str | None = None
+                    generation_id: str | None = None
+                    response_model: str | None = None
                     # Track <think> blocks that some models (Qwen, DeepSeek)
                     # emit inline rather than via a dedicated reasoning field.
                     in_think_block = False
@@ -362,6 +367,9 @@ class HttpxOpenAIProvider:
                         except json.JSONDecodeError:
                             continue
 
+                        upstream = chunk.get('provider') or upstream
+                        generation_id = chunk.get('id') or generation_id
+                        response_model = chunk.get('model') or response_model
                         chunk_usage = chunk.get('usage') or {}
                         if chunk_usage:
                             prompt_details = (
@@ -443,6 +451,12 @@ class HttpxOpenAIProvider:
                                 arguments=args,
                             ),
                         )
+
+                    self.last_request_metrics['provider_response'] = observe_provider_response(
+                        provider=self._provider_name, model=model.model_id,
+                        upstream=upstream, generation_id=generation_id,
+                        response_model=response_model,
+                    )
 
                     # Report usage accumulated from the streamed chunks above
                     # (OpenAI-style providers emit it on the final chunk when

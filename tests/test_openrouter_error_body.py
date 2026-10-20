@@ -75,3 +75,37 @@ def test_registered_tool_schemas_have_no_top_level_combinators():
         assert schema.get('type') == 'object', tool['name']
         assert not ({'anyOf', 'oneOf', 'allOf'} & schema.keys()), tool['name']
     assert 'anyOf' in EDIT_TOOL_DEF['input_schema']['properties']['edits']['items']
+
+
+@pytest.mark.asyncio
+async def test_upstream_provider_recorded_per_request(monkeypatch, capsys):
+    monkeypatch.setenv('CHARON_EMIT_REQUEST_CONFIG', '1')
+    provider = HttpxOpenAIProvider(
+        base_url='https://openrouter.ai/api/v1', api_key='test-secret',
+        provider_name='openrouter',
+    )
+    chunks = [
+        {'id': 'gen-1', 'provider': 'Amazon Bedrock', 'model': 'anthropic/claude-haiku-5.5',
+         'choices': [{'delta': {'content': 'ok'}}]},
+        {'id': 'gen-1', 'provider': 'Amazon Bedrock', 'choices': [],
+         'usage': {'prompt_tokens': 3, 'completion_tokens': 1}},
+    ]
+    body = ''.join(f'data: {json.dumps(c)}\n\n' for c in chunks) + 'data: [DONE]\n\n'
+    provider._mock_handler = lambda request: httpx.Response(
+        200, text=body, headers={'content-type': 'text/event-stream'})
+    try:
+        [delta async for delta in provider.stream(
+            messages=[Message(role='user', content='test')],
+            model=ModelInfo(provider='openrouter', model_id='anthropic/claude-haiku-5.5'),
+            system_prompt='test', thinking_level='medium',
+        )]
+    finally:
+        await provider.aclose()
+    expected = {
+        'provider': 'openrouter', 'model': 'anthropic/claude-haiku-5.5',
+        'upstream': 'Amazon Bedrock', 'generation_id': 'gen-1',
+        'response_model': 'anthropic/claude-haiku-5.5',
+    }
+    assert provider.last_request_metrics['provider_response'] == expected
+    emitted = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert {'provider_response': expected} in emitted
