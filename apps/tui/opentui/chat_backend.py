@@ -246,17 +246,7 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, CoreCommandsMixin, A
             request_id = msg.get('request_id')
 
             if req_type == 'chat':
-                message = msg.get('message', '')
-                if self._chat_busy:
-                    # Be defensive when a client has stale lifecycle state.
-                    # Starting a second worker would only block on _engine_lock
-                    # and leave the user's question invisible to the active run.
-                    self.handle_steer(message, request_id)
-                else:
-                    # Run chat on a worker thread so main loop stays responsive.
-                    self._chat_busy = True
-                    t = threading.Thread(target=self._chat_worker, args=(message, request_id), daemon=True)
-                    t.start()
+                self.handle_chat_input(msg.get('message', ''), request_id)
             elif req_type == 'command':
                 self.handle_command(msg.get('command', ''), request_id)
             elif req_type == 'refresh':
@@ -290,6 +280,14 @@ class ChatBackend(ProvidersMixin, ChatMixin, CommandsMixin, CoreCommandsMixin, A
                 self.handle_steer(msg.get('message', ''), request_id)
             elif req_type == 'follow_up':
                 self.handle_follow_up(msg.get('message', ''), request_id)
+            elif req_type == 'input_queue_state':
+                from backend.input_lifecycle import mailbox
+                inputs = mailbox(self)
+                with inputs.lock:
+                    self._tui_deferred_depth = max(0, int(msg.get('deferred_depth', 0)))
+                    inputs.event('queue_state', {
+                        'request_id': request_id, 'kind': 'queue_state', 'message': '',
+                    })
             elif req_type == 'send_steer':
                 target = msg.get('target_session', '')
                 steer_msg = msg.get('message', '')

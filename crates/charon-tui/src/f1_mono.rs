@@ -218,25 +218,27 @@ fn draw_footer(buf: &mut ScreenBuf, app: &App, w: u16, h: u16) {
     let chat_in = app.chat.usage.input_tokens;
     let chat_out = app.chat.usage.output_tokens;
     let ctx = app.chat.usage.context_pct.map(|v| format!("{:.0}%", v)).unwrap_or_else(|| "-".into());
-    let queue_str = format!("  queued:{}", app.chat.pending_queue.len());
+    let queue_str = format!("  {}", app.chat.input_queue_label());
     let left = format!("  ❈ CHARON  {}  ctx:{}  chat:{}↑ {}↓{}", provider, ctx, fmt_k(chat_in), fmt_k(chat_out), queue_str);
     let right = if app.chat.streaming {
         "F7 interrupt/next  Enter steer  /queue later  PgUp/PgDn scroll"
     } else {
         "F7 next  Enter send  / commands  PgUp/PgDn scroll"
     };
+    let input_status = app.chat.input_notice.as_ref().map(|notice| format!("{notice}  F7 interrupt/next"));
+    let right = input_status.as_deref().unwrap_or(right);
     let fg1 = Color::Rgb { r: 120, g: 100, b: 70 };
     let fg2 = Color::Rgb { r: 90, g: 90, b: 110 };
     buf.fill(y0, 0, w, ' ', Color::Reset, Color::Reset);
     buf.fill(y0 + 1, 0, w, ' ', Color::Reset, Color::Reset);
+    buf.put_str(0, y0, &tail_visible_text(&left, w as usize), fg1, Color::Reset, false);
+    buf.put_str(0, y0 + 1, &tail_visible_text(right, w as usize), fg2, Color::Reset, false);
     if let Some(reason) = &app.chat.last_failure {
         let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
         let notice: String = format!("  Last failure: {reason}").chars().take(w as usize).collect();
         buf.fill(y0 + 1, 0, w, ' ', Color::Reset, Color::Reset);
         buf.put_str(0, y0 + 1, &notice, Color::Red, Color::Reset, false);
     }
-    buf.put_str(0, y0, &tail_visible_text(&left, w as usize), fg1, Color::Reset, false);
-    buf.put_str(0, y0 + 1, &tail_visible_text(right, w as usize), fg2, Color::Reset, false);
 }
 
 fn draw_menu(buf: &mut ScreenBuf, app: &App, anchor: Rect) {

@@ -702,14 +702,14 @@ def execute_edit(params: dict, ctx: ToolContext) -> ToolResult:
     if not path_str:
         return ToolResult(content='Error: path is required', is_error=True)
 
-    raw_edits = params.get('edits')
-    if raw_edits is None:
     if not ('edits' in params or {'oldText', 'newText'} <= params.keys()):
         return ToolResult(
             content='Error: supply oldText and newText, or a nonempty edits array.',
             is_error=True,
         )
 
+    raw_edits = params.get('edits')
+    if raw_edits is None:
         if not params.get('oldText'):
             return ToolResult(content='Error: oldText is required', is_error=True)
         if 'newText' not in params:

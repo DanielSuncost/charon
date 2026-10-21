@@ -9,6 +9,7 @@ import time
 from backend import common
 from backend.nlparse import _natural_language_to_cron
 from backend.settings_io import _full_messages_from_store
+from backend.input_lifecycle import mailbox
 
 try:
     from charon.infra.diagnostics import record as _diag
@@ -525,17 +526,23 @@ class ChatMixin:
                     elif event.type == 'strategy_change':
                         common.emit({'type': 'status', 'message': 'Loop guard warning: ' + event.data.get('reason', ''), 'request_id': request_id})
                     elif event.type == 'steer_delivered':
+                        input_id = mailbox(self).delivered_by_engine(
+                            'steer', event.data.get('content', ''), request_id)
                         common.emit({
                             'type': 'steer_delivered',
                             'content': event.data.get('content', ''),
                             'skipped_tools': event.data.get('skipped_tools', 0),
                             'request_id': request_id,
+                            'input_request_id': input_id,
                         })
                     elif event.type == 'follow_up_delivered':
+                        input_id = mailbox(self).delivered_by_engine(
+                            'follow_up', event.data.get('content', ''), request_id)
                         common.emit({
                             'type': 'follow_up_delivered',
                             'content': event.data.get('content', ''),
                             'request_id': request_id,
+                            'input_request_id': input_id,
                         })
                     elif event.type == 'retry':
                         attempt = event.data.get('attempt', 1)
@@ -688,28 +695,93 @@ class ChatMixin:
             asyncio.run(_run())
 
     def _chat_worker(self, message: str, request_id: str | None):
-        """Run handle_chat on a worker thread."""
-        self._chat_busy = True
-        self._active_chat_request_id = request_id
-        self._active_chat_message = message
-        self._active_chat_started_at = time.time()
-        self._active_tool = {}
-        deferred_completions: list[dict] = []
-        try:
-            with common.defer_chat_complete() as deferred_completions:
-                with self._engine_lock:
-                    self.handle_chat(message, request_id)
-        finally:
-            self._chat_busy = False
-            self._active_chat_request_id = None
-            self._active_chat_message = ''
-            self._active_chat_started_at = 0.0
+        """Own the engine until every accepted input has a delivery path."""
+        inputs = mailbox(self)
+        with inputs.lock:
+            self._chat_busy = True
+            initial = next((r for r in inputs.records if r['request_id'] == request_id
+                            and r['stage'] == 'acknowledged'), None)
+            if initial:
+                inputs.deliver(initial, request_id)
+        while True:
+            self._active_chat_request_id = request_id
+            self._active_chat_message = message
+            self._active_chat_started_at = time.time()
             self._active_tool = {}
-            # Let the frontend submit its next turn only after this worker no
-            # longer owns the engine. Otherwise an immediate reply can be
-            # mistaken for steering the just-finished turn.
-            for event in deferred_completions:
-                common.emit(event)
+            deferred_completions: list[dict] = []
+            try:
+                with common.defer_chat_complete() as deferred_completions:
+                    with self._engine_lock:
+                        self.handle_chat(message, request_id)
+            except Exception as error:
+                common.emit({'type': 'error', 'error': f'Chat worker failed: {error}',
+                             'request_id': request_id})
+            finally:
+                # Both input acceptance and the final empty check hold this
+                # lock. A late Enter is either in this mailbox or starts a new
+                # worker; there is no gap with a queue and no consumer.
+                with inputs.lock:
+                    self._active_chat_message = ''
+                    self._active_chat_started_at = 0.0
+                    self._active_tool = {}
+                    inputs.complete(request_id)
+                    following = inputs.next_pending()
+                    if following:
+                        engine = getattr(self, 'engine', None)
+                        if engine:
+                            engine.withdraw_pending_input(following['kind'], following['message'])
+                        inputs.stalled(following, 'accepted input remained at worker exit; resuming now')
+                        inputs.deliver(following, request_id)
+                        message = following['message']
+                    else:
+                        self._chat_busy = False
+                        self._active_chat_request_id = None
+                        if initial:
+                            inputs.event('worker_exit', initial, worker_request_id=request_id)
+                        # Early returns and worker exceptions also need a
+                        # terminal event, otherwise the TUI stays busy forever.
+                        for event in deferred_completions or [{
+                            'type': 'chat_complete', 'summary': '', 'request_id': request_id,
+                        }]:
+                            common.emit(event)
+            if not following:
+                break
+
+    def handle_chat_input(self, message: str, request_id: str | None):
+        ChatMixin._accept_input(self, message, request_id, 'chat')
+
+    def _accept_input(self, message: str, request_id: str | None, kind: str):
+        if not message or not message.strip():
+            return
+        message = message.strip()
+        inputs = mailbox(self)
+        with inputs.lock:
+            busy = bool(self._chat_busy)
+            # A chat sent with stale frontend state has the same delivery
+            # semantics as Enter during an active turn.
+            if busy and kind == 'chat':
+                kind = 'steer'
+            record = inputs.accept(message, request_id, kind)
+            if busy:
+                engine = getattr(self, 'engine', None)
+                if engine:
+                    if kind == 'follow_up':
+                        engine.follow_up(message)
+                    else:
+                        engine.steer(message)
+                common.emit({'type': 'follow_up_queued' if kind == 'follow_up' else 'steer_queued',
+                             'message': message, 'request_id': record['request_id'],
+                             'pending': sum(r['stage'] == 'acknowledged' for r in inputs.records),
+                             **inputs.snapshot()})
+            else:
+                self._chat_busy = True
+                try:
+                    threading.Thread(target=self._chat_worker,
+                                     args=(message, record['request_id']), daemon=True).start()
+                except Exception as error:
+                    self._chat_busy = False
+                    inputs.stalled(record, f'could not start worker: {error}')
+                    common.emit({'type': 'chat_complete', 'summary': '', 'request_id': record['request_id']})
 
     def _start_background_worker(self):
         """Start a daemon thread that runs periodic background tasks.
@@ -1002,11 +1074,8 @@ class ChatMixin:
 
     def handle_steer(self, message: str, request_id: str | None):
         """Interrupt the agent mid-execution with a new instruction."""
-        if self.engine and self._chat_busy:
-            self.engine.steer(message)
-            common.emit({'type': 'steer_queued', 'message': message,
-                  'pending': self.engine.pending_messages,
-                  'request_id': request_id})
+        ChatMixin._accept_input(self, message, request_id, 'steer')
+        if self._chat_busy:
             tool = dict(getattr(self, '_active_tool', {}) or {})
             if tool:
                 elapsed = max(0, int(time.time() - float(tool.get('started_at') or time.time())))
@@ -1017,17 +1086,7 @@ class ChatMixin:
             else:
                 status = 'I received your message and am interrupting the current turn to answer it.'
             common.emit({'type': 'status', 'message': status, 'request_id': request_id})
-        else:
-            common.emit({'type': 'error', 'error': 'No active chat run to steer.',
-                  'request_id': request_id})
 
     def handle_follow_up(self, message: str, request_id: str | None):
         """Queue a message for after the agent finishes."""
-        if self.engine:
-            self.engine.follow_up(message)
-            common.emit({'type': 'follow_up_queued', 'message': message,
-                  'pending': self.engine.pending_messages,
-                  'request_id': request_id})
-        else:
-            common.emit({'type': 'error', 'error': 'No active engine for follow-up.',
-                  'request_id': request_id})
+        ChatMixin._accept_input(self, message, request_id, 'follow_up')
