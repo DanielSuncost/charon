@@ -1250,7 +1250,7 @@ class ConversationEngine:
             watchdog.cancel()
             await asyncio.gather(watchdog, return_exceptions=True)
             self._running = False
-            if not self._guard_reason:
+            if not self._guard_reason and not self._aborted:
                 self._turn_cancel_event.clear()
 
     async def _submit_impl(self, user_message: str) -> AsyncIterator[EngineEvent]:

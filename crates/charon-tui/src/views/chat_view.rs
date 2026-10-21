@@ -1310,7 +1310,12 @@ fn draw_chat_chrome<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::
     match variant {
         ChatLayoutVariant::Full => { draw_chat_status_line(stdout, h.saturating_sub(3), left_w, &left1, &right1, style::Color::Rgb { r: 85, g: 85, b: 112 })?; draw_chat_status_line(stdout, h.saturating_sub(2), left_w, &left2, &right2, if app.chat.streaming { style::Color::Rgb { r: 180, g: 83, b: 9 } } else { style::Color::Rgb { r: 59, g: 59, b: 79 } })?; }
         ChatLayoutVariant::Mid => { let combined = format!("{}  │  {}", left2, right2); draw_chat_status_line(stdout, h.saturating_sub(2), left_w, &combined, "", style::Color::Rgb { r: 59, g: 59, b: 79 })?; }
-        ChatLayoutVariant::Tiny => { let hint = if app.chat.streaming { "Enter: steer  /queue: later" } else { "interactive" }; draw_chat_status_line(stdout, h.saturating_sub(1), left_w, &format!("  {}", hint), "", style::Color::Rgb { r: 59, g: 59, b: 79 })?; }
+        ChatLayoutVariant::Tiny => { let hint = format!("  queued:{}  F7:interrupt/next", app.chat.pending_queue.len()); draw_chat_status_line(stdout, h.saturating_sub(1), left_w, &hint, "", style::Color::Rgb { r: 59, g: 59, b: 79 })?; }
+    }
+    if let Some(reason) = &app.chat.last_failure {
+        let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+        let y = h.saturating_sub(if variant == ChatLayoutVariant::Tiny { 1 } else { 2 });
+        draw_chat_status_line(stdout, y, left_w, &format!("  queued:{}  Last failure: {reason}", app.chat.pending_queue.len()), "", style::Color::Red)?;
     }
     let helper_lines = onboarding_lines(app);
     if variant != ChatLayoutVariant::Tiny && !helper_lines.is_empty() && !app.chat.menu_open() && app.chat.auth_url.is_none() && !app.chat.approval_open() {
@@ -1324,6 +1329,7 @@ fn draw_chat_chrome<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::
         let anchor = input_area.unwrap_or(Rect { x: 1, y: h.saturating_sub(2), width: left_w.saturating_sub(2), height: 1 });
         let menu_w = anchor.width.min(96).max(24);
         let desired_h = (app.chat.menu_items.len() as u16).min(10) + 2;
+    let left2 = format!("  queued:{}  F7:interrupt/next  {}", app.chat.pending_queue.len(), left2.trim());
         let menu_h = desired_h.min(anchor.y.saturating_sub(2).max(4));
         let menu_x = anchor.x.saturating_sub(1);
         let menu_y = anchor.y.saturating_sub(menu_h + 1);

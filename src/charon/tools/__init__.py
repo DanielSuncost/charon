@@ -626,7 +626,8 @@ EDIT_TOOL_DEF = {
     'description': (
         'Atomically edit one or more exact text blocks or inclusive line ranges. '
         'Pass Read\'s baseHash to reject stale edits. All hunks are validated '
-        'before any content is written.'
+        'before any content is written. Supply either oldText and newText, '
+        'or a nonempty edits array.'
     ),
     'input_schema': {
         'type': 'object',
@@ -668,10 +669,8 @@ EDIT_TOOL_DEF = {
             },
         },
         'required': ['path'],
-        'anyOf': [
-            {'required': ['oldText', 'newText']},
-            {'required': ['edits']},
-        ],
+        # Anthropic (including OpenRouter upstreams) rejects root combinators.
+        # execute_edit validates the alternatives before accessing the file.
     },
 }
 
@@ -705,6 +704,12 @@ def execute_edit(params: dict, ctx: ToolContext) -> ToolResult:
 
     raw_edits = params.get('edits')
     if raw_edits is None:
+    if not ('edits' in params or {'oldText', 'newText'} <= params.keys()):
+        return ToolResult(
+            content='Error: supply oldText and newText, or a nonempty edits array.',
+            is_error=True,
+        )
+
         if not params.get('oldText'):
             return ToolResult(content='Error: oldText is required', is_error=True)
         if 'newText' not in params:

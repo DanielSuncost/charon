@@ -363,6 +363,7 @@ class ChatMixin:
             _total_input_tokens = 0
             _total_output_tokens = 0
             _total_turns = 0
+            failures = []
             try:
                 async for event in engine.submit(message):
                     if event.type == 'thinking_delta':
@@ -453,6 +454,9 @@ class ChatMixin:
                             'request_id': request_id,
                         })
                     elif event.type == 'message_end':
+                        # A successful retry resolves earlier transient failures.
+                        if event.data.get('stop_reason') != 'error':
+                            failures.clear()
                         usage = event.data.get('usage', {})
                         input_tokens = int(usage.get('input_tokens', 0) or 0)
                         output_tokens = int(usage.get('output_tokens', 0) or 0)
@@ -508,11 +512,18 @@ class ChatMixin:
                             'request_id': request_id,
                         })
                     elif event.type == 'error':
+                        failures.append(event.data.get('error', 'unknown error'))
                         common.emit({
                             'type': 'error',
                             'error': event.data.get('error', 'unknown error'),
                             'request_id': request_id,
                         })
+                    elif event.type == 'budget_stop':
+                        reason = 'Stopped: ' + event.data.get('reason', 'execution guard')
+                        failures.append(reason)
+                        common.emit({'type': 'error', 'error': reason, 'request_id': request_id})
+                    elif event.type == 'strategy_change':
+                        common.emit({'type': 'status', 'message': 'Loop guard warning: ' + event.data.get('reason', ''), 'request_id': request_id})
                     elif event.type == 'steer_delivered':
                         common.emit({
                             'type': 'steer_delivered',
@@ -536,6 +547,7 @@ class ChatMixin:
                         common.emit({'type': 'status', 'message': 'Context compacted.', 'request_id': request_id})
 
             except Exception as e:
+                failures.append(str(e))
                 common.emit({'type': 'error', 'error': str(e), 'request_id': request_id})
 
             full_text = ''.join(text_parts)
@@ -557,7 +569,7 @@ class ChatMixin:
                         instruction=user_msg,
                         tool_calls=_tool_calls_record,
                         response_text=full_text,
-                        errors=[],
+                        errors=failures,
                         total_turns=_total_turns,
                     )
                 except Exception as exc:
@@ -572,7 +584,9 @@ class ChatMixin:
                         files_touched.append(path)
 
                 agent_concluded = bool(_tool_calls_record) or not self._is_question_message(full_text.strip())
-                new_status = 'completed' if agent_concluded else 'active'
+                new_status = 'failed' if failures else ('completed' if agent_concluded else 'active')
+                if failures:
+                    summary = failures[-1]
                 updated = False
                 for item in reversed(self._session_tasks):
                     if item.get('status') != 'active':
