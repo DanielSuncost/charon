@@ -221,11 +221,11 @@ fn draw_footer(buf: &mut ScreenBuf, app: &App, w: u16, h: u16) {
     let queue_str = format!("  {}", app.chat.input_queue_label());
     let left = format!("  ❈ CHARON  {}  ctx:{}  chat:{}↑ {}↓{}", provider, ctx, fmt_k(chat_in), fmt_k(chat_out), queue_str);
     let right = if app.chat.streaming {
-        "F7 interrupt/next  Enter steer  /queue later  PgUp/PgDn scroll"
+        "Esc/F7 interrupt/next  Enter steer  /queue later  PgUp/PgDn scroll"
     } else {
-        "F7 next  Enter send  / commands  PgUp/PgDn scroll"
+        "Esc/F7 next  Enter send  / commands  PgUp/PgDn scroll"
     };
-    let input_status = app.chat.input_notice.as_ref().map(|notice| format!("{notice}  F7 interrupt/next"));
+    let input_status = app.chat.input_notice.as_ref().map(|notice| format!("{notice}  Esc/F7 interrupt/next"));
     let right = input_status.as_deref().unwrap_or(right);
     let fg1 = Color::Rgb { r: 120, g: 100, b: 70 };
     let fg2 = Color::Rgb { r: 90, g: 90, b: 110 };

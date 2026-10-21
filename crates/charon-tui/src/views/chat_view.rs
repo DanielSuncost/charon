@@ -1276,7 +1276,7 @@ fn draw_chat_chrome<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::
     let consol = tokens.and_then(|t| t.get("consolidation_tokens")).and_then(|v| v.as_u64()).unwrap_or(0);
     let ctx = app.chat.usage.context_pct.map(|v| format!("{:.0}%", v)).unwrap_or_else(|| "-".to_string());
     let left2 = if app.chat.onboarding_complete() { let mut parts = vec!["  ♡ interactive".to_string(), format!("ctx:{}", ctx), format!("chat:{}↑ {}↓", fmt_k(chat_in), fmt_k(chat_out))]; if max_ctx > 0 { parts.push(format!("max:{}", fmt_k(max_ctx))); } if goal_inf > 0 { parts.push(format!("goal:{}", fmt_k(goal_inf))); } if consol > 0 { parts.push(format!("bg:{}", fmt_k(consol))); } if let Some(hint) = app.chat.orchestration_parse_hint() { parts.push(hint); } parts.push(format!("thoughts:{}{}", if app.chat.show_thoughts { "on" } else { "off" }, if app.chat.show_timestamps { "  ⏱" } else { "" })); parts.join("  ") } else { "  type / for commands".to_string() };
-    let left2 = format!("  {}  F7:interrupt/next  {}", app.chat.input_queue_label(), app.chat.input_notice.as_deref().unwrap_or(left2.trim()));
+    let left2 = format!("  {}  Esc/F7:interrupt/next  {}", app.chat.input_queue_label(), app.chat.input_notice.as_deref().unwrap_or(left2.trim()));
     let mode_label = match app.chat.view_mode { ChatViewMode::Transcript => "transcript", ChatViewMode::Workspace => "workspace" };
     let mouse_mode = if app.chat.app_mouse_mode { "mouse:app" } else { "mouse:terminal" };
     let mut right2 = match app.chat.view_mode {
@@ -1311,7 +1311,7 @@ fn draw_chat_chrome<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::
     match variant {
         ChatLayoutVariant::Full => { draw_chat_status_line(stdout, h.saturating_sub(3), left_w, &left1, &right1, style::Color::Rgb { r: 85, g: 85, b: 112 })?; draw_chat_status_line(stdout, h.saturating_sub(2), left_w, &left2, &right2, if app.chat.streaming { style::Color::Rgb { r: 180, g: 83, b: 9 } } else { style::Color::Rgb { r: 59, g: 59, b: 79 } })?; }
         ChatLayoutVariant::Mid => { let combined = format!("{}  │  {}", left2, right2); draw_chat_status_line(stdout, h.saturating_sub(2), left_w, &combined, "", style::Color::Rgb { r: 59, g: 59, b: 79 })?; }
-        ChatLayoutVariant::Tiny => { let hint = format!("  {}  F7:interrupt/next", app.chat.input_queue_label()); draw_chat_status_line(stdout, h.saturating_sub(1), left_w, &hint, "", style::Color::Rgb { r: 59, g: 59, b: 79 })?; }
+        ChatLayoutVariant::Tiny => { let hint = format!("  {}  Esc/F7:interrupt/next", app.chat.input_queue_label()); draw_chat_status_line(stdout, h.saturating_sub(1), left_w, &hint, "", style::Color::Rgb { r: 59, g: 59, b: 79 })?; }
     }
     if let Some(reason) = &app.chat.last_failure {
         let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");

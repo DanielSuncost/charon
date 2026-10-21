@@ -235,6 +235,49 @@ fn libris_intake_key_action(
     }
 }
 
+/// What Esc does in the chat view, highest precedence first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChatEscAction {
+    DenyApproval,
+    CancelLibrisIntake,
+    DismissAuth,
+    CloseMenu,
+    ExitCopyMode,
+    ClearSelection,
+    /// Same as F7: interrupt the running turn, or start the next queued input.
+    InterruptAndNext,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct ChatEscContext {
+    approval_open: bool,
+    libris_intake_open: bool,
+    auth_open: bool,
+    menu_open: bool,
+    copy_mode: bool,
+    has_selection: bool,
+}
+
+/// Open dialogs and selections keep Esc as "dismiss"; only a bare Esc
+/// interrupts and advances the queue.
+fn chat_esc_action(ctx: ChatEscContext) -> ChatEscAction {
+    if ctx.approval_open {
+        ChatEscAction::DenyApproval
+    } else if ctx.libris_intake_open {
+        ChatEscAction::CancelLibrisIntake
+    } else if ctx.auth_open {
+        ChatEscAction::DismissAuth
+    } else if ctx.menu_open {
+        ChatEscAction::CloseMenu
+    } else if ctx.copy_mode {
+        ChatEscAction::ExitCopyMode
+    } else if ctx.has_selection {
+        ChatEscAction::ClearSelection
+    } else {
+        ChatEscAction::InterruptAndNext
+    }
+}
+
 fn inter_agent_room_index_by_id(
     payload: Option<&serde_json::Value>,
     room_id: &str,
@@ -608,7 +651,36 @@ impl EventLoop {
 
     /// Keys for the F1 chat view (input, overlays, scrolling, selection).
     fn handle_chat_key(&mut self, key: event::KeyEvent) -> io::Result<()> {
-        if key.code == KeyCode::F(7) {
+        if key.code == KeyCode::Esc {
+            if key.kind != event::KeyEventKind::Press {
+                return Ok(());
+            }
+            let chat = &mut self.app.chat;
+            let ctx = ChatEscContext {
+                approval_open: chat.approval_open(),
+                libris_intake_open: chat.libris_intake_open(),
+                auth_open: chat.auth_open(),
+                menu_open: chat.menu_open(),
+                copy_mode: chat.copy_mode,
+                has_selection: chat.selection_anchor.is_some()
+                    || chat.selection_focus.is_some()
+                    || chat.selection_dragging,
+            };
+            match chat_esc_action(ctx) {
+                ChatEscAction::DenyApproval => chat.approval_deny(),
+                ChatEscAction::CancelLibrisIntake => chat.libris_intake_cancel(),
+                ChatEscAction::DismissAuth => chat.auth_dismiss(),
+                ChatEscAction::CloseMenu => chat.close_menu(),
+                ChatEscAction::ExitCopyMode => chat.copy_mode = false,
+                ChatEscAction::ClearSelection => {
+                    chat.selection_anchor = None;
+                    chat.selection_focus = None;
+                    chat.selection_dragging = false;
+                }
+                ChatEscAction::InterruptAndNext => chat.interrupt_and_next(),
+            }
+            self.local_view_dirty = true;
+        } else if key.code == KeyCode::F(7) {
             if key.kind == event::KeyEventKind::Press {
                 self.app.chat.interrupt_and_next();
             }
@@ -764,11 +836,6 @@ impl EventLoop {
                 self.app.chat.copy_mode = false;
                 self.local_view_dirty = true;
             }
-        } else if key.code == KeyCode::Esc {
-            self.app.chat.selection_anchor = None;
-            self.app.chat.selection_focus = None;
-            self.app.chat.selection_dragging = false;
-            self.local_view_dirty = true;
         } else if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             let _ = f1_mono::copy_selection(&mut self.app, &self.cached_chat);
             self.local_view_dirty = true;
@@ -1616,6 +1683,56 @@ mod tests {
 
     fn key(code: KeyCode) -> event::KeyEvent {
         event::KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn bare_esc_interrupts_and_advances_queue() {
+        assert_eq!(
+            chat_esc_action(ChatEscContext::default()),
+            ChatEscAction::InterruptAndNext
+        );
+    }
+
+    #[test]
+    fn esc_dismisses_before_it_interrupts() {
+        let all = ChatEscContext {
+            approval_open: true,
+            libris_intake_open: true,
+            auth_open: true,
+            menu_open: true,
+            copy_mode: true,
+            has_selection: true,
+        };
+        // Peel off one layer at a time; each must win over everything below it.
+        let mut ctx = all;
+        assert_eq!(chat_esc_action(ctx), ChatEscAction::DenyApproval);
+        ctx.approval_open = false;
+        assert_eq!(chat_esc_action(ctx), ChatEscAction::CancelLibrisIntake);
+        ctx.libris_intake_open = false;
+        assert_eq!(chat_esc_action(ctx), ChatEscAction::DismissAuth);
+        ctx.auth_open = false;
+        assert_eq!(chat_esc_action(ctx), ChatEscAction::CloseMenu);
+        ctx.menu_open = false;
+        assert_eq!(chat_esc_action(ctx), ChatEscAction::ExitCopyMode);
+        ctx.copy_mode = false;
+        assert_eq!(chat_esc_action(ctx), ChatEscAction::ClearSelection);
+        ctx.has_selection = false;
+        assert_eq!(chat_esc_action(ctx), ChatEscAction::InterruptAndNext);
+    }
+
+    #[test]
+    fn any_single_dismissable_state_blocks_the_interrupt() {
+        let singles = [
+            ChatEscContext { approval_open: true, ..Default::default() },
+            ChatEscContext { libris_intake_open: true, ..Default::default() },
+            ChatEscContext { auth_open: true, ..Default::default() },
+            ChatEscContext { menu_open: true, ..Default::default() },
+            ChatEscContext { copy_mode: true, ..Default::default() },
+            ChatEscContext { has_selection: true, ..Default::default() },
+        ];
+        for ctx in singles {
+            assert_ne!(chat_esc_action(ctx), ChatEscAction::InterruptAndNext, "{ctx:?}");
+        }
     }
 
     #[test]
