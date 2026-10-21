@@ -168,8 +168,10 @@ if ! command -v cargo &>/dev/null; then
   exit 1
 fi
 
-# Check Python deps used by the backend pieces the Rust TUI relies on.
-if ! python3 -c "import httpx" 2>/dev/null; then
+# Check Python deps used by the backend pieces the Rust TUI relies on. A file
+# test against the venv avoids starting an interpreter on every launch.
+if ! compgen -G "${CHARON_ROOT}/.venv/lib/python*/site-packages/httpx/__init__.py" >/dev/null \
+  && ! python3 -c "import httpx" 2>/dev/null; then
   echo "Python dependencies missing. Run: ./scripts/install-dev.sh"
   exit 1
 fi
@@ -186,7 +188,10 @@ fi
 
 if [ "${RUST_TUI_NEEDS_BUILD}" -eq 1 ]; then
   echo "Building updated Rust TUI..."
-  cargo build --release --manifest-path "${RUST_TUI_MANIFEST}"
+  # Offline first: dependencies are already in the local registry, and a
+  # networked build can stall on registry access. Fall back if a dep is new.
+  cargo build --offline --release --manifest-path "${RUST_TUI_MANIFEST}" \
+    || cargo build --release --manifest-path "${RUST_TUI_MANIFEST}"
 fi
 
 if [ ! -x "${RUST_TUI_BIN}" ]; then

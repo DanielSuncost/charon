@@ -647,27 +647,22 @@ class DashboardMixin:
                             tmux_pane_map[int(parts[1])] = parts[0]
                         except ValueError:
                             pass
-                # Map child and grandchild PIDs to their pane's tmux session
+                # Map child and grandchild PIDs to their pane's tmux session.
+                # One process-table read, not a pgrep per pane and per child:
+                # with ~60 panes that was ~130 serial spawns (5-10s) on every
+                # refresh, twice during startup.
+                children: dict[int, list[int]] = {}
+                ps = _sp.run(['ps', '-axo', 'pid=,ppid='], capture_output=True, text=True, timeout=5)
+                if ps.returncode == 0:
+                    for row in ps.stdout.splitlines():
+                        cols = row.split()
+                        if len(cols) == 2 and cols[0].isdigit() and cols[1].isdigit():
+                            children.setdefault(int(cols[1]), []).append(int(cols[0]))
                 for pane_pid, sess_name in pane_pids:
-                    try:
-                        cr = _sp.run(['pgrep', '-P', str(pane_pid)], capture_output=True, text=True, timeout=3)
-                        if cr.returncode == 0:
-                            for cl in cr.stdout.strip().splitlines():
-                                try:
-                                    cpid = int(cl.strip())
-                                    tmux_pane_map[cpid] = sess_name
-                                    # Grandchildren
-                                    gr = _sp.run(['pgrep', '-P', str(cpid)], capture_output=True, text=True, timeout=3)
-                                    if gr.returncode == 0:
-                                        for gl in gr.stdout.strip().splitlines():
-                                            try:
-                                                tmux_pane_map[int(gl.strip())] = sess_name
-                                            except ValueError:
-                                                pass
-                                except ValueError:
-                                    pass
-                    except Exception:
-                        pass
+                    for cpid in children.get(pane_pid, ()):
+                        tmux_pane_map[cpid] = sess_name
+                        for gpid in children.get(cpid, ()):
+                            tmux_pane_map[gpid] = sess_name
         except Exception as e:
             _diag('dashboard', 'tmux pane mapping failed; detected processes lack session names', error=e)
 
