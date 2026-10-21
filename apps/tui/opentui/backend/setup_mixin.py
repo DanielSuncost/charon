@@ -88,6 +88,12 @@ class SetupMixin:
                     self._save_onboarding(onboarding)
 
             def _continue_provider_setup_after_auth() -> None:
+                # Fresh sign-in: re-read what this account can use.
+                try:
+                    from charon.providers.model_catalog import get_models
+                    get_models(common.STATE_DIR, arg, refresh=True, session_id=self._active_agent_id)
+                except Exception as e:
+                    _diag('setup_mixin', 'model discovery after sign-in failed', error=e, provider=arg)
                 existing_model = str(target_state.get('model') or target_state.get('provider_model') or '').strip()
                 if existing_model:
                     self._run_setup_command(f'model {existing_model}', request_id)
@@ -234,55 +240,16 @@ class SetupMixin:
             if session_override:
                 provider_state.update(session_override)
             provider = str(provider_state.get('provider') or '').strip()
-            # Known models per provider
-            known_models = {
-                'claude-code': [
-                    # 4.6 (latest)
-                    {'id': 'claude-sonnet-4-6', 'desc': 'Sonnet 4.6 — latest, fast'},
-                    {'id': 'claude-opus-4-6', 'desc': 'Opus 4.6 — latest, most capable'},
-                    # 4.5
-                    {'id': 'claude-sonnet-4-5', 'desc': 'Sonnet 4.5'},
-                    {'id': 'claude-opus-4-5', 'desc': 'Opus 4.5'},
-                    # 4.1
-                    {'id': 'claude-opus-4-1', 'desc': 'Opus 4.1'},
-                    # 4.0
-                    {'id': 'claude-sonnet-4-20250514', 'desc': 'Sonnet 4.0'},
-                    {'id': 'claude-opus-4-20250514', 'desc': 'Opus 4.0'},
-                    # Haiku
-                    {'id': 'claude-haiku-4-5', 'desc': 'Haiku 4.5 — fastest'},
-                    # 3.x
-                    {'id': 'claude-3-7-sonnet-20250219', 'desc': 'Sonnet 3.7'},
-                    {'id': 'claude-3-5-sonnet-20241022', 'desc': 'Sonnet 3.5 v2'},
-                    {'id': 'claude-3-5-haiku-20241022', 'desc': 'Haiku 3.5'},
-                ],
-                'codex': [
-                    # Ladders per model come from charon.providers.effort (the Codex
-                    # backend's own model list); /setup effort shows them.
-                    {'id': 'gpt-6-astra', 'desc': 'GPT-6 Astra — most capable, 1.05M context, effort up to max'},
-                    {'id': 'gpt-5.5', 'desc': 'GPT 5.5 — effort up to xhigh'},
-                    {'id': 'gpt-5.4', 'desc': 'GPT 5.4'},
-                    {'id': 'gpt-5', 'desc': 'GPT 5'},
-                    # Note: o3, o4-mini, gpt-4.1, gpt-4o, codex-mini etc. are NOT supported
-                    # with Codex OAuth (ChatGPT subscription). Only the gpt-5/gpt-6 family works.
-                ],
-                'lmstudio': [],  # dynamic — detected from LM Studio
-                'api': [],
-                'opencode': [],
-            }
-
-            # For local providers, try to detect available models
-            if provider == 'lmstudio' and not known_models['lmstudio']:
-                try:
-                    import httpx
-                    resp = httpx.get('http://127.0.0.1:1234/v1/models', timeout=3.0)
-                    if resp.status_code == 200:
-                        for m in resp.json().get('data', []):
-                            mid = m.get('id', '')
-                            if mid:
-                                known_models['lmstudio'].append({'id': mid, 'desc': 'Local model'})
-                except Exception:
-                    pass
-            models = known_models.get(provider, [])
+            # Models come from the provider's own listing (cached with a TTL);
+            # Charon's built-in list is only the offline / not-signed-in fallback.
+            from charon.providers.model_catalog import describe_source, get_models
+            refresh = arg in ('refresh', '--refresh')
+            if refresh:
+                arg = ''
+            catalog = get_models(common.STATE_DIR, provider, refresh=refresh, session_id=self._active_agent_id)
+            models = catalog.models
+            if refresh or catalog.source not in ('live', 'cache'):
+                common.emit({'type': 'status', 'message': describe_source(catalog, provider or 'this provider'), 'request_id': request_id})
 
             if not arg:
                 # No model specified — show model picker

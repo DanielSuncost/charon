@@ -22,7 +22,7 @@ from charon.infra import config
 from charon.providers import Message, ModelInfo, StreamDelta, ToolCall
 from charon.providers.http_client import AsyncClientPool
 from charon.providers.http_errors import exception_error, http_error
-from charon.providers.effort import clamp_effort
+from charon.providers.effort import clamp_effort, parse_supported_efforts
 from charon.providers.request_observability import observe_reasoning_request
 from charon.providers.image_content import has_image_block, to_responses_input_parts
 
@@ -709,7 +709,8 @@ class HttpxCodexProvider:
 
         # Authentication refresh is provider-owned because it mutates the
         # credential. Transient transport/status retries are engine-owned.
-        for attempt in range(MAX_AUTH_RETRIES + 1):
+        effort_relearned = False
+        for attempt in range(MAX_AUTH_RETRIES + 2):
             try:
                 headers = self._build_headers()
                 client, reused = await self._clients.get()
@@ -737,6 +738,22 @@ class HttpxCodexProvider:
 
                             if response.status_code == 401 and self._refresh_token and attempt < MAX_AUTH_RETRIES:
                                 if await self._refresh_access_token():
+                                    continue
+
+                            # A model the effort table doesn't know names its
+                            # real ladder in the rejection: learn it, resend once.
+                            if (
+                                response.status_code == 400
+                                and not effort_relearned
+                                and 'reasoning' in body
+                                and parse_supported_efforts(error_text, model.model_id)
+                            ):
+                                effort_relearned = True
+                                retry_effort = clamp_effort(thinking_level, model.model_id)
+                                if retry_effort != body['reasoning']['effort']:
+                                    _diag('httpx_codex', 'effort rejected; retrying at learned level',
+                                          model=model.model_id, sent=body['reasoning']['effort'], retry=retry_effort)
+                                    body['reasoning']['effort'] = 'none' if retry_effort == 'off' else retry_effort
                                     continue
 
                             yield http_error(

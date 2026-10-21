@@ -41,6 +41,7 @@ class CommandsMixin:
             {'cmd': '/setup complete', 'desc': 'Finish setup'},
             {'cmd': '/setup no-provider', 'desc': 'Skip LLM setup (heuristic only)'},
             {'cmd': '/model', 'desc': 'Show current model'},
+            {'cmd': '/model refresh', 'desc': 'Re-fetch available models from the provider'},
             {'cmd': '/effort', 'desc': 'Show or set reasoning effort (off … ultra; the current model\'s ladder is shown)'},
             {'cmd': '/reset', 'desc': 'Clear conversation'},
             {'cmd': '/dashboard', 'desc': 'Switch to dashboard (F2)'},

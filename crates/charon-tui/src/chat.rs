@@ -2006,7 +2006,19 @@ impl ChatState {
         }
 
         if input.starts_with("/setup model") || input == "/model" || input.starts_with("/model ") {
-            let model_items: Vec<MenuItem> = match provider {
+            // The backend sends the provider's discovered (or cached/fallback)
+            // list; the table below only covers a backend that predates it.
+            let discovered: Vec<(String, String)> = self.refresh_payload.as_ref()
+                .and_then(|p| p.get("onboarding"))
+                .and_then(|o| o.get("models"))
+                .and_then(|v| v.as_array())
+                .map(|models| models.iter().filter_map(|m| {
+                    let id = m.get("id")?.as_str()?;
+                    let desc = m.get("desc").and_then(|d| d.as_str()).unwrap_or("");
+                    Some((id.to_string(), desc.to_string()))
+                }).collect())
+                .unwrap_or_default();
+            let builtin: Vec<(&str, &str)> = match provider {
                 "claude-code" => vec![
                     ("claude-sonnet-4-6", "Sonnet 4.6 — latest, fast"),
                     ("claude-opus-4-6", "Opus 4.6 — latest, most capable"),
@@ -2025,14 +2037,15 @@ impl ChatState {
                     ("gpt-5", "GPT 5"),
                 ],
                 _ => vec![],
-            }
-            .into_iter()
-            .map(|(id, desc)| {
-                let prefix = if input.starts_with("/model") { "/model" } else { "/setup model" };
-                item(&format!("{} {}", prefix, id), desc)
-            })
-            .collect();
-            items.extend(model_items);
+            };
+            let pairs: Vec<(String, String)> = if discovered.is_empty() {
+                builtin.into_iter().map(|(id, desc)| (id.to_string(), desc.to_string())).collect()
+            } else {
+                discovered
+            };
+            let prefix = if input.starts_with("/model") { "/model" } else { "/setup model" };
+            items.push(item(&format!("{} refresh", prefix), "Re-fetch the model list from the provider"));
+            items.extend(pairs.iter().map(|(id, desc)| item(&format!("{} {}", prefix, id), desc)));
         }
 
         let query = input.to_ascii_lowercase();

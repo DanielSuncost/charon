@@ -276,6 +276,7 @@ class DashboardMixin:
         provider = str(session_cfg.get('provider_raw') or effective_onboarding.get('provider') or '').strip()
         model = str(session_cfg.get('model_id') or effective_onboarding.get('model') or effective_onboarding.get('provider_model') or '').strip()
         complete = bool(session_cfg.get('ready') or effective_onboarding.get('complete'))
+        provider_raw = provider  # the engine reports the transport ('openai'), not the sign-in ('codex')
         if self.engine is not None:
             provider = str(getattr(self.engine, 'provider_name', '') or provider).strip()
             model = str(getattr(getattr(self.engine, 'model', None), 'model_id', '') or model).strip()
@@ -836,11 +837,21 @@ class DashboardMixin:
             _diag('dashboard', 'automation listing failed; automations empty', error=e)
             automations = []
 
+        # Cache-only (no network on refresh); also registers discovered effort ladders.
+        try:
+            from charon.providers.model_catalog import cached_models
+            catalog = cached_models(common.STATE_DIR, provider_raw) if provider_raw else None
+            provider_models = [{'id': m['id'], 'desc': m.get('desc', '')} for m in catalog.models] if catalog else []
+        except Exception as e:
+            _diag('dashboard', 'model catalog read failed; picker uses built-in list', error=e)
+            provider_models = []
+
         payload = {
             'onboarding': {
                 'complete': complete,
                 'provider': provider,
                 'model': model,
+                'models': provider_models,
                 'step': effective_onboarding.get('step', 'provider-mode'),
                 'project': str(effective_onboarding.get('project') or '').strip(),
             },
