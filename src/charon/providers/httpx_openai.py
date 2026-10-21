@@ -325,7 +325,13 @@ class HttpxOpenAIProvider:
                         error_text = self.last_request_metrics['provider_error']['raw_body']
                         try:
                             err_json = json.loads(error_text)
-                            error_text = err_json.get('error', {}).get('message', error_text)
+                            error = err_json.get('error', {})
+                            if isinstance(error, dict):
+                                metadata = error.get('metadata') or {}
+                                detail = metadata.get('raw', '') if isinstance(metadata, dict) else ''
+                                error_text = str(error.get('message') or error_text)
+                                if detail:
+                                    error_text += '\nUpstream: ' + (detail if isinstance(detail, str) else json.dumps(detail))
                         except Exception:
                             # Strip HTML from error responses (502/503 from Cloudflare etc)
                             if '<html' in error_text.lower():
@@ -333,7 +339,7 @@ class HttpxOpenAIProvider:
                                 title_match = re.search(r'<title>(.*?)</title>', error_text, re.IGNORECASE)
                                 error_text = title_match.group(1) if title_match else f'HTTP {response.status_code}'
                         yield http_error(
-                            error_text[:200],
+                            error_text,
                             status_code=response.status_code,
                             headers=response.headers,
                         )

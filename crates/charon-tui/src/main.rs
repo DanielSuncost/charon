@@ -608,7 +608,12 @@ impl EventLoop {
 
     /// Keys for the F1 chat view (input, overlays, scrolling, selection).
     fn handle_chat_key(&mut self, key: event::KeyEvent) -> io::Result<()> {
-        if key.code == KeyCode::F(5) {
+        if key.code == KeyCode::F(7) {
+            if key.kind == event::KeyEventKind::Press {
+                self.app.chat.interrupt_and_next();
+            }
+            self.local_view_dirty = true;
+        } else if key.code == KeyCode::F(5) {
             self.app.chat.view_mode = match self.app.chat.view_mode {
                 ChatViewMode::Transcript => ChatViewMode::Workspace,
                 ChatViewMode::Workspace => ChatViewMode::Transcript,

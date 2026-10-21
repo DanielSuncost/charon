@@ -682,6 +682,18 @@ class ConversationEngine:
         """Number of queued steering + follow-up messages."""
         return len(self._steering_queue) + len(self._follow_up_queue)
 
+    def withdraw_pending_input(self, kind: str, message: str) -> None:
+        """Transfer an undelivered input after submit has fully stopped.
+
+        The backend holds its input handoff lock and owns the engine between
+        submissions. Never call this while submit is consuming these queues.
+        """
+        if self._running:
+            raise RuntimeError('Cannot transfer input while the engine is running')
+        queue = self._follow_up_queue if kind == 'follow_up' else self._steering_queue
+        if message in queue:
+            queue.remove(message)
+
     def reset(self):
         """Clear conversation history and queues."""
         self.messages = []
@@ -1294,7 +1306,7 @@ class ConversationEngine:
             watchdog.cancel()
             await asyncio.gather(watchdog, return_exceptions=True)
             self._running = False
-            if not self._guard_reason:
+            if not self._guard_reason and not self._aborted:
                 self._turn_cancel_event.clear()
 
     async def _submit_impl(self, user_message: str) -> AsyncIterator[EngineEvent]:

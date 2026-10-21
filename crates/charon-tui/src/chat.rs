@@ -61,15 +61,19 @@ impl BackendProcess {
 
         // Writer thread — sends to backend stdin without blocking the UI
         let (stdin_tx, stdin_rx) = mpsc::channel::<String>();
+        let (tx, rx) = mpsc::channel();
+        let tx_write = tx.clone();
         thread::spawn(move || {
             for line in stdin_rx {
-                if stdin.write_all(line.as_bytes()).is_err() { break; }
-                if stdin.write_all(b"\n").is_err() { break; }
-                let _ = stdin.flush();
+                if stdin.write_all(line.as_bytes())
+                    .and_then(|_| stdin.write_all(b"\n"))
+                    .and_then(|_| stdin.flush()).is_err() {
+                    let _ = tx_write.send(BackendEvent::Eof);
+                    break;
+                }
             }
         });
 
-        let (tx, rx) = mpsc::channel();
         let tx_out = tx.clone();
         thread::spawn(move || {
             let reader = BufReader::new(stdout);
@@ -147,18 +151,19 @@ impl BackendProcess {
         self.send(json!({"type": "command", "command": command}))
     }
 
-    pub fn send_follow_up(&mut self, text: &str) -> io::Result<()> {
-        self.send(json!({"type": "follow_up", "message": text}))
+    fn reserve_input_id(&mut self) -> String {
+        self.request_id += 1;
+        format!("r{}", self.request_id)
     }
 
-    pub fn send_steer(&mut self, text: &str) -> io::Result<()> {
-        self.send(json!({"type": "steer", "message": text}))
+    fn send_input(&mut self, kind: &str, text: &str, request_id: &str) -> io::Result<()> {
+        self.send(json!({"type":kind, "message":text, "request_id":request_id}))
     }
 
     fn send(&mut self, mut v: Value) -> io::Result<()> {
         self.request_id += 1;
         if let Value::Object(ref mut map) = v {
-            map.insert("request_id".to_string(), Value::String(format!("r{}", self.request_id)));
+            map.entry("request_id".to_string()).or_insert_with(|| Value::String(format!("r{}", self.request_id)));
         }
         let line = serde_json::to_string(&v)?;
         self.stdin_tx.send(line).map_err(|e| io::Error::new(io::ErrorKind::BrokenPipe, e))?;
@@ -521,6 +526,7 @@ pub struct ChatState {
     pub messages: Vec<ChatMessage>,
     pub input: String,
     pub streaming: bool,
+    pub last_failure: Option<String>,
     pub backend: BackendProcess,
     pub refresh_payload: Option<Value>,
     pub session_id: String,
@@ -555,6 +561,17 @@ pub struct ChatState {
     pub pending_queue: Vec<String>,
     /// Full text from a multi-line paste. `input` shows condensed summary.
     pub paste_buffer: Option<String>,
+    active_queued: Option<String>,
+    active_request_id: Option<String>,
+    backend_alive: bool,
+    pending_queue_ids: VecDeque<String>,
+    active_queued_input_id: Option<String>,
+    pending_steering: Vec<(String, String)>,
+    backend_steering_depth: usize,
+    backend_pending_steering: Vec<String>,
+    backend_deferred_depth: usize,
+    pub input_notice: Option<String>,
+    input_trace_path: std::path::PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -569,11 +586,16 @@ impl ChatState {
     pub fn new(launch: LaunchOptions) -> io::Result<Self> {
         let mut backend = BackendProcess::start(&launch)?;
         let _ = backend.send(json!({"type": "refresh"}));
-        Ok(Self {
+        Ok(Self::with_backend(backend))
+    }
+
+    fn with_backend(backend: BackendProcess) -> Self {
+        Self {
             transcript: vec![],
             messages: vec![],
             input: String::new(),
             streaming: false,
+            last_failure: None,
             backend,
             refresh_payload: None,
             session_id: String::new(),
@@ -607,7 +629,18 @@ impl ChatState {
             context_menu: None,
             pending_queue: Vec::new(),
             paste_buffer: None,
-        })
+            active_queued: None,
+            active_request_id: None,
+            backend_alive: true,
+            pending_queue_ids: VecDeque::new(),
+            active_queued_input_id: None,
+            pending_steering: Vec::new(),
+            backend_steering_depth: 0,
+            backend_pending_steering: Vec::new(),
+            backend_deferred_depth: 0,
+            input_notice: None,
+            input_trace_path: project_root().join(".charon_state/input_lifecycle.jsonl"),
+        }
     }
 
     pub fn poll(&mut self) -> bool {
@@ -677,8 +710,13 @@ impl ChatState {
                 .unwrap_or("")
                 .trim();
             if !msg.is_empty() {
-                let _ = self.backend.send_follow_up(msg);
+                // Keep deferred input here until a request-level completion.
+                // The backend engine must not own a second copy of this queue.
                 self.pending_queue.push(msg.to_string());
+                let id = self.backend.reserve_input_id();
+                self.pending_queue_ids.push_back(id.clone());
+                self.record_input_accepted(&id, "follow_up", msg);
+                self.notify_queue_depth();
                 self.messages.push(ChatMessage::QueuedUser { text: msg.to_string(), tag: "queued".to_string() });
             }
         } else if text.starts_with('/') {
@@ -686,8 +724,7 @@ impl ChatState {
             if text.starts_with("/steer ") {
                 let msg = text.trim_start_matches("/steer ").trim();
                 if !msg.is_empty() {
-                    let _ = self.backend.send_steer(msg);
-                    self.messages.push(ChatMessage::QueuedUser { text: msg.to_string(), tag: "steering".to_string() });
+                    if !self.send_tracked_steer(msg) { return; }
                 }
             } else {
                 self.transcript.push(format!("> {}", text));
@@ -697,20 +734,120 @@ impl ChatState {
             // A live message should be heard promptly. The engine delivers the
             // steer after the current atomic tool call (or during text
             // streaming), then answers it on the next model turn.
-            let _ = self.backend.send_steer(&text);
-            self.messages.push(ChatMessage::QueuedUser { text: text.clone(), tag: "steering".to_string() });
+            if !self.send_tracked_steer(&text) { return; }
         } else {
             // Normal send
             self.transcript.push(format!("> {}", text));
             self.messages.push(ChatMessage::User { text: text.clone() });
             self.start_provisional_outcome(&text);
-            let _ = self.backend.send_chat(&text);
+            let id = self.backend.reserve_input_id();
+            self.record_input_accepted(&id, "chat", &text);
+            if let Err(error) = self.backend.send_input("chat", &text, &id) {
+                self.push_error(&format!("Could not send input: {error}"));
+                return;
+            }
+            self.active_request_id = Some(id);
             // Mark the request active immediately. Waiting for the first text
             // delta left a tool-only turn looking idle, so additional Enter
             // presses started overlapping backend workers instead of steering.
             self.streaming = true;
         }
         self.input.clear();
+    }
+
+    pub fn pending_input_depth(&self) -> usize {
+        self.pending_queue.len() + self.backend_deferred_depth
+            + self.steering_depth()
+    }
+
+    fn steering_depth(&self) -> usize {
+        let ids: std::collections::HashSet<&str> = self.pending_steering.iter().map(|(id, _)| id.as_str())
+            .chain(self.backend_pending_steering.iter().map(String::as_str)).collect();
+        ids.len().max(self.backend_steering_depth)
+    }
+
+    pub fn input_queue_label(&self) -> String {
+        format!("queued:{} (steer:{} deferred:{})", self.pending_input_depth(),
+            self.steering_depth(),
+            self.pending_queue.len() + self.backend_deferred_depth)
+    }
+
+    fn notify_queue_depth(&mut self) {
+        if let Err(error) = self.backend.send(json!({"type":"input_queue_state", "deferred_depth":self.pending_queue.len()})) {
+            self.push_error(&format!("Could not report queue depth: {error}. Input retained."));
+        }
+    }
+
+    fn record_input_accepted(&mut self, id: &str, kind: &str, text: &str) {
+        let event = json!({"type":"input_lifecycle", "stage":"accepted", "source":"tui",
+            "pid":std::process::id(),
+            "ts":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(),
+            "session_id":self.session_id, "request_id":id, "kind":kind, "chars":text.chars().count(),
+            "steering_depth":self.pending_steering.len(), "deferred_depth":self.pending_queue.len(),
+            "engine_running":null, "worker_busy":null, "frontend_streaming":self.streaming});
+        let result = std::fs::OpenOptions::new().create(true).append(true).open(&self.input_trace_path)
+            .and_then(|mut file| writeln!(file, "{event}"));
+        if let Err(error) = result {
+            self.push_error(&format!("Could not record accepted input {id}: {error}"));
+        }
+        self.input_notice = Some(format!("{id} accepted"));
+    }
+
+    fn send_tracked_steer(&mut self, text: &str) -> bool {
+        let id = self.backend.reserve_input_id();
+        self.pending_steering.push((id.clone(), text.to_string()));
+        self.record_input_accepted(&id, "steer", text);
+        if let Err(error) = self.backend.send_input("steer", text, &id) {
+            self.pending_steering.retain(|(pending, _)| pending != &id);
+            self.push_error(&format!("Could not send input {id}: {error}. Input retained in composer."));
+            return false;
+        }
+        self.messages.push(ChatMessage::QueuedUser { text: text.to_string(), tag: "steering".to_string() });
+        true
+    }
+
+    fn start_next_queued(&mut self) {
+        if self.streaming || !self.backend_alive { return; }
+        let Some(text) = self.pending_queue.first().cloned() else { return; };
+        let id = self.pending_queue_ids.front().cloned().unwrap_or_else(|| self.backend.reserve_input_id());
+        if let Err(error) = self.backend.send_input("chat", &text, &id) {
+            self.push_error(&format!("Could not start queued input: {error}. Item retained."));
+            return;
+        }
+        self.pending_queue.remove(0);
+        self.pending_queue_ids.pop_front();
+        self.notify_queue_depth();
+        self.active_queued = Some(text.clone());
+        self.active_queued_input_id = Some(id.clone());
+        self.active_request_id = Some(id);
+        if let Some(message) = self.messages.iter_mut().find(|message|
+            matches!(message, ChatMessage::QueuedUser { text: queued, tag } if queued == &text && tag == "queued")
+        ) {
+            *message = ChatMessage::User { text: text.clone() };
+        }
+        self.transcript.push(format!("> {text}"));
+        self.start_provisional_outcome(&text);
+        self.scroll = 0;
+        self.streaming = true;
+    }
+
+    pub fn interrupt_and_next(&mut self) {
+        if self.streaming {
+            match self.backend.send(json!({"type": "abort"})) {
+                Ok(()) => {
+                    self.approval = None;
+                    self.approval_queue.clear();
+                    if self.pending_queue.is_empty() {
+                        self.push_status("Interrupting current work; queue is empty.");
+                    } else {
+                        self.push_status("Interrupting; next queued input starts when the current worker stops.");
+                    }
+                }
+                Err(error) => self.push_error(&format!("Could not interrupt: {error}. Queue retained.")),
+            }
+        } else {
+            self.start_next_queued();
+        }
     }
 
     pub fn history_up(&mut self) {
@@ -1086,6 +1223,7 @@ impl ChatState {
     }
 
     fn push_error(&mut self, text: &str) {
+        self.last_failure = Some(text.to_string());
         self.transcript.push(format!("[error] {}", text));
         self.messages.push(ChatMessage::Error { text: text.to_string() });
     }
@@ -1189,7 +1327,24 @@ impl ChatState {
         match event {
             BackendEvent::Json(v) => self.handle_json(v),
             BackendEvent::Stderr(line) => self.push_stderr(&line),
-            BackendEvent::Eof => self.push_error("backend exited"),
+            BackendEvent::Eof => {
+                self.backend_alive = false;
+                self.active_request_id = None;
+                if let Some(text) = self.active_queued.take() {
+                    self.pending_queue.insert(0, text);
+                    let id = self.active_queued_input_id.take().unwrap_or_default();
+                    self.pending_queue_ids.push_front(id);
+                }
+                for (id, text) in self.pending_steering.drain(..).rev() {
+                    self.pending_queue.insert(0, text);
+                    self.pending_queue_ids.push_front(id);
+                }
+                self.backend_steering_depth = 0;
+                self.backend_pending_steering.clear();
+                self.backend_deferred_depth = 0;
+                self.streaming = false;
+                self.push_error("Backend exited. Pending queue retained; restart the backend before retrying.");
+            }
         }
         if was_following {
             self.scroll = 0;
@@ -1270,7 +1425,17 @@ impl ChatState {
                 self.messages.push(ChatMessage::ToolResult { tool: tool.to_string(), content: content.to_string(), is_error: v.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false) });
             }
             "chat_complete" => {
+                if self.active_request_id.as_deref().is_some_and(|active|
+                    v.get("request_id").and_then(Value::as_str) != Some(active)
+                ) { return; }
+                self.active_request_id = None;
                 self.streaming = false;
+                self.active_queued = None;
+                self.active_queued_input_id = None;
+                if !self.pending_steering.is_empty() {
+                    let ids = self.pending_steering.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>().join(", ");
+                    self.push_error(&format!("Stalled input {ids}: worker exited before delivery. Input retained."));
+                }
                 self.finish_latest_provisional_outcome();
                 self.request_refresh();
                 if let Some(ChatMessage::Assistant { streaming, .. }) = self.messages.last_mut() {
@@ -1279,6 +1444,7 @@ impl ChatState {
                 if let Some(ChatMessage::Thinking { streaming, .. }) = self.messages.last_mut() {
                     *streaming = false;
                 }
+                self.start_next_queued();
             }
             "turn_complete" => {
                 // A tool-using request may contain many model turns. Only the
@@ -1306,24 +1472,14 @@ impl ChatState {
                 // Backend acknowledged the follow-up; already tracked locally
             }
             "follow_up_delivered" => {
-                // Convert the QueuedUser message to a normal User message
-                if let Some(msg) = self.pending_queue.first().cloned() {
-                    self.pending_queue.remove(0);
-                    // Find and convert the matching QueuedUser in messages
-                    for m in self.messages.iter_mut().rev() {
-                        if let ChatMessage::QueuedUser { text, tag } = m {
-                            if *tag == "queued" && *text == msg {
-                                *m = ChatMessage::User { text: msg.clone() };
-                                break;
-                            }
-                        }
-                    }
-                }
+                // Engine-owned follow-ups (from other clients) do not own or
+                // acknowledge entries in the TUI's deferred input queue.
             }
             "steer_queued" => {
                 // Backend acknowledged — QueuedUser already in messages
             }
             "steer_delivered" => {
+                if v.get("input_request_id").and_then(Value::as_str).is_some() { return; }
                 // Convert the steering QueuedUser to a normal User message
                 for m in self.messages.iter_mut().rev() {
                     if let ChatMessage::QueuedUser { text, tag } = m {
@@ -1335,8 +1491,38 @@ impl ChatState {
                 }
             }
             "done" => {
-                self.streaming = false;
-                self.pending_queue.clear();
+                // Only chat_complete releases the backend worker. Engine-level
+                // done events must neither discard input nor start overlapping work.
+            }
+            "input_lifecycle" => {
+                let id = v.get("request_id").and_then(Value::as_str).unwrap_or("unknown");
+                let stage = v.get("stage").and_then(Value::as_str).unwrap_or("unknown");
+                self.backend_steering_depth = v.get("steering_depth").and_then(Value::as_u64).unwrap_or(0) as usize;
+                self.backend_pending_steering = v.get("pending_inputs").and_then(Value::as_array).into_iter().flatten()
+                    .filter(|entry| entry.get("kind").and_then(Value::as_str) != Some("follow_up"))
+                    .filter_map(|entry| entry.get("request_id").and_then(Value::as_str).map(str::to_string)).collect();
+                self.backend_deferred_depth = v.get("backend_deferred_depth").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let running = v.get("engine_running").and_then(Value::as_bool).unwrap_or(false);
+                let busy = v.get("worker_busy").and_then(Value::as_bool).unwrap_or(false);
+                if stage != "queue_state" {
+                    self.input_notice = Some(format!("{id} {stage} engine:{} worker:{}", running, busy));
+                }
+                if stage == "delivered" {
+                    if let Some(index) = self.pending_steering.iter().position(|(pending, _)| pending == id) {
+                        let (_, text) = self.pending_steering.remove(index);
+                        if let Some(message) = self.messages.iter_mut().find(|m|
+                            matches!(m, ChatMessage::QueuedUser { text: queued, tag } if queued == &text && tag == "steering")
+                        ) { *message = ChatMessage::User { text }; }
+                    }
+                    if let Some(worker) = v.get("worker_request_id").and_then(Value::as_str) {
+                        self.active_request_id = Some(worker.to_string());
+                        self.streaming = true;
+                    }
+                }
+            }
+            "input_stalled" => {
+                let message = v.get("message").and_then(Value::as_str).unwrap_or("Stalled input after worker exit");
+                self.push_error(message);
             }
             "approval_request" => {
                 let approval = ApprovalRequest::from_backend_event(&v);
@@ -1953,6 +2139,131 @@ fn copy_to_clipboard(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn queue_state() -> (ChatState, Receiver<String>) {
+        let (stdin_tx, requests) = mpsc::channel();
+        let (_events, rx) = mpsc::channel();
+        let mut child = Command::new("true").spawn().unwrap();
+        child.wait().unwrap();
+        let mut state = ChatState::with_backend(BackendProcess {
+            _child: child, stdin_tx, rx, request_id: 0, last_refresh: Instant::now(),
+        });
+        state.input_trace_path = "/dev/null".into();
+        (state, requests)
+    }
+
+    #[test]
+    fn queue_interrupt_waits_for_worker_then_drains_fifo() {
+        let (mut state, requests) = queue_state();
+        state.streaming = true;
+        state.active_request_id = Some("current".into());
+        for text in ["/queue first", "/queue second"] {
+            state.input = text.into();
+            state.submit_input();
+        }
+        let snapshots: Vec<Value> = requests.try_iter().map(|s| serde_json::from_str(&s).unwrap()).collect();
+        assert!(snapshots.iter().all(|v| v["type"] == "input_queue_state"), "queue must have one owner");
+        state.interrupt_and_next();
+        let abort: Value = serde_json::from_str(&requests.try_recv().unwrap()).unwrap();
+        assert_eq!(abort["type"], "abort");
+        state.handle_json(json!({"type":"done"}));
+        state.handle_json(json!({"type":"chat_complete", "request_id":"unrelated"}));
+        assert_eq!(state.pending_queue, ["first", "second"]);
+        assert!(requests.try_recv().is_err());
+        state.handle_json(json!({"type":"chat_complete", "request_id":"current"}));
+        let sent: Vec<Value> = requests.try_iter().map(|s| serde_json::from_str::<Value>(&s).unwrap()).filter(|v| v["type"] == "chat").collect();
+        assert_eq!(sent.last().unwrap()["message"], "first");
+        assert!(state.streaming);
+        assert_eq!(state.pending_queue, ["second"]);
+        let active = state.active_request_id.clone().unwrap();
+        state.handle_json(json!({"type":"chat_complete", "request_id":active}));
+        let sent: Vec<Value> = requests.try_iter().map(|s| serde_json::from_str::<Value>(&s).unwrap()).filter(|v| v["type"] == "chat").collect();
+        assert_eq!(sent.last().unwrap()["message"], "second");
+        let active = state.active_request_id.clone().unwrap();
+        state.handle_json(json!({"type":"chat_complete", "request_id":active}));
+        assert!(!state.streaming);
+        assert!(state.pending_queue.is_empty());
+    }
+
+    #[test]
+    fn queue_transport_failures_retain_pending_and_inflight_items() {
+        let (mut state, requests) = queue_state();
+        state.pending_queue = vec!["first".into(), "second".into()];
+        state.interrupt_and_next();
+        assert_eq!(state.active_queued.as_deref(), Some("first"));
+        state.handle_event(BackendEvent::Eof);
+        assert_eq!(state.pending_queue, ["first", "second"]);
+        assert!(!state.streaming);
+        state.interrupt_and_next();
+        assert_eq!(state.pending_queue.len(), 2);
+        drop(requests);
+        state.backend_alive = true;
+        state.interrupt_and_next();
+        assert_eq!(state.pending_queue.len(), 2);
+        assert!(!state.streaming);
+        assert!(state.last_failure.as_deref().unwrap().contains("Item retained"));
+    }
+
+    #[test]
+    fn input_steering_is_counted_until_its_own_delivery() {
+        let (mut state, requests) = queue_state();
+        state.streaming = true;
+        state.active_request_id = Some("worker".into());
+        for _ in 0..2 {
+            state.input = "same text".into();
+            state.submit_input();
+        }
+        let sent: Vec<Value> = requests.try_iter().map(|s| serde_json::from_str(&s).unwrap()).collect();
+        assert_eq!(state.pending_input_depth(), 2);
+        assert!(state.input_queue_label().contains("steer:2"));
+        let first = sent[0]["request_id"].as_str().unwrap();
+        state.handle_json(json!({"type":"input_lifecycle", "stage":"delivered",
+            "request_id":first, "worker_request_id":"worker", "steering_depth":1,
+            "deferred_depth":0, "engine_running":false, "worker_busy":true}));
+        assert_eq!(state.pending_input_depth(), 1);
+        assert_eq!(state.pending_steering[0].0, sent[1]["request_id"]);
+        state.handle_json(json!({"type":"chat_complete", "request_id":"worker"}));
+        assert!(state.last_failure.as_deref().unwrap().contains("Stalled input"));
+        assert_eq!(state.pending_input_depth(), 1, "completion must not hide undelivered steering");
+        state.handle_event(BackendEvent::Eof);
+        assert_eq!(state.pending_queue, ["same text"]);
+        assert_eq!(state.pending_input_depth(), 1);
+    }
+
+    #[test]
+    fn input_send_failure_preserves_composer_and_acceptance_trace() {
+        let (mut state, requests) = queue_state();
+        let path = std::env::temp_dir().join(format!("charon-input-test-{}.jsonl", std::process::id()));
+        state.input_trace_path = path.clone();
+        state.streaming = true;
+        state.input = "do the next thing".into();
+        drop(requests);
+        state.submit_input();
+        assert_eq!(state.input, "do the next thing");
+        assert!(state.last_failure.as_deref().unwrap().contains("Input retained"));
+        let trace = std::fs::read_to_string(&path).unwrap();
+        let record: Value = serde_json::from_str(trace.lines().last().unwrap()).unwrap();
+        assert_eq!(record["stage"], "accepted");
+        assert_eq!(record["kind"], "steer");
+        assert!(record.get("steering_depth").is_some());
+        assert!(record.get("deferred_depth").is_some());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn input_depth_unions_local_and_backend_request_ids() {
+        let (mut state, _requests) = queue_state();
+        state.pending_steering.push(("local".into(), "waiting for ack".into()));
+        state.pending_queue.push("deferred locally".into());
+        state.handle_json(json!({"type":"input_lifecycle", "stage":"acknowledged", "request_id":"other",
+            "steering_depth":1, "backend_deferred_depth":1, "deferred_depth":2,
+            "pending_inputs":[{"request_id":"other", "kind":"steer"}, {"request_id":"follow", "kind":"follow_up"}]}));
+        assert_eq!(state.pending_input_depth(), 4, "disjoint queues must be added, not hidden by max()");
+        state.handle_json(json!({"type":"input_lifecycle", "stage":"acknowledged", "request_id":"local",
+            "steering_depth":2, "backend_deferred_depth":1,
+            "pending_inputs":[{"request_id":"local", "kind":"steer"}, {"request_id":"other", "kind":"steer"}]}));
+        assert_eq!(state.pending_input_depth(), 4, "acknowledgement must not count an input twice");
+    }
 
     fn approval(approval_id: &str, selected: usize) -> ApprovalRequest {
         ApprovalRequest {

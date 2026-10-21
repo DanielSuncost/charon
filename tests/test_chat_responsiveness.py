@@ -81,7 +81,8 @@ def test_tool_result_preview_bounds_lines_and_long_single_lines():
     assert all(len(line) <= 241 for line in preview.splitlines() if 'omitted' not in line)
 
 
-def test_live_steer_is_acknowledged_with_current_tool_status(monkeypatch):
+def test_live_steer_is_acknowledged_with_current_tool_status(monkeypatch, tmp_path):
+    monkeypatch.setattr(common, 'STATE_DIR', tmp_path)
     emitted = []
     monkeypatch.setattr(common, 'emit', emitted.append)
     engine = _FakeEngine()
@@ -98,23 +99,24 @@ def test_live_steer_is_acknowledged_with_current_tool_status(monkeypatch):
     ChatMixin.handle_steer(backend, 'what is happening?', 'req-2')
 
     assert engine.messages == ['what is happening?']
-    assert [event['type'] for event in emitted] == ['steer_queued', 'status']
+    assert [event['type'] for event in emitted if event['type'] != 'input_lifecycle'] == ['steer_queued', 'status']
     assert 'Still working in Bash' in emitted[-1]['message']
     assert 'will answer' in emitted[-1]['message']
 
 
-def test_steer_rejects_an_idle_engine(monkeypatch):
+def test_steer_starts_an_idle_engine(monkeypatch, tmp_path):
+    monkeypatch.setattr(common, 'STATE_DIR', tmp_path)
     emitted = []
     monkeypatch.setattr(common, 'emit', emitted.append)
     backend = SimpleNamespace(engine=_FakeEngine(), _chat_busy=False, _active_tool={})
+    started = []
+    backend._chat_worker = lambda *args: started.append(args)
+    monkeypatch.setattr(threading, 'Thread', lambda target, args, daemon: SimpleNamespace(start=lambda: target(*args)))
 
     ChatMixin.handle_steer(backend, 'hello?', 'req-idle')
 
-    assert emitted == [{
-        'type': 'error',
-        'error': 'No active chat run to steer.',
-        'request_id': 'req-idle',
-    }]
+    assert started == [('hello?', 'req-idle')]
+    assert not any(event['type'] == 'error' for event in emitted)
 
 
 def test_tui_heartbeat_advances_graph_without_standalone_daemon(tmp_path):
