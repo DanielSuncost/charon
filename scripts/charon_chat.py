@@ -28,7 +28,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'src'))
 
 from charon.providers import ModelInfo, get_provider  # noqa: E402 — import requires sys.path setup above
+from charon.providers.effort import THINKING_LEVELS  # noqa: E402 — import requires sys.path setup above
 from charon.conversation.conversation_engine import ConversationEngine  # noqa: E402 — import requires sys.path setup above
+from charon.infra import config as charon_config  # noqa: E402 — import requires sys.path setup above
 
 
 # ANSI colors
@@ -215,7 +217,7 @@ async def one_shot(engine: ConversationEngine, query: str) -> int:
 def main():
     parser = argparse.ArgumentParser(description='Charon interactive chat')
     parser.add_argument('--provider', default='anthropic',
-                        help='LLM provider: anthropic, openai, local, auto (configured default '
+                        help='LLM provider: anthropic, openai, openrouter, local, auto (configured default '
                              'route incl. OAuth), codex, claude-code (default: anthropic)')
     parser.add_argument('--model', default=None,
                         help='Model ID (default depends on provider)')
@@ -233,17 +235,36 @@ def main():
                         help='Skip all tool approval gates (sets CHARON_SKIP_APPROVAL=1)')
     parser.add_argument('--profile', default=None,
                         help='Benchmark system-prompt profile (e.g. gaia)')
+    parser.add_argument(
+        '--reasoning-effort',
+        choices=THINKING_LEVELS,
+        default=None,
+        help=(
+            'Reasoning effort: ' + ', '.join(THINKING_LEVELS)
+            + ' (default: state-backed setting, then off)'
+        ),
+    )
+    parser.add_argument(
+        '--verify-reasoning-effort',
+        action='store_true',
+        help='Fail if the provider omits the reasoning setting and emit its sanitized wire value to stderr',
+    )
     args = parser.parse_args()
 
+    if args.verify_reasoning_effort and args.reasoning_effort is None:
+        parser.error('--verify-reasoning-effort requires an explicit --reasoning-effort')
+    if args.verify_reasoning_effort:
+        os.environ['CHARON_REQUIRE_REASONING_EFFORT'] = '1'
+        os.environ['CHARON_EMIT_REQUEST_CONFIG'] = '1'
+
     provider_name = args.provider
+    state = charon_config.state_dir() or (ROOT / '.charon_state')
 
     if provider_name in BRIDGE_PROVIDERS:
         # Route through provider_bridge: honors onboarding config + OAuth
         # credentials (codex, claude-code). 'auto' uses the configured default.
-        from charon.infra import config as charon_config
         from charon.providers.provider_bridge import ProviderRouteError, create_provider_and_model
 
-        state = charon_config.state_dir() or (ROOT / '.charon_state')
         route = None
         if provider_name != 'auto':
             if not args.model:
@@ -260,6 +281,8 @@ def main():
         if not ready:
             print(f'{YELLOW}Warning: provider not fully configured; using local fallback{RESET}', file=sys.stderr)
     else:
+        if provider_name == 'openrouter' and not args.model:
+            parser.error('--provider openrouter requires --model')
         model_defaults = DEFAULT_MODELS.get(provider_name, ('gpt-4o', 128000))
         model_id = args.model or model_defaults[0]
         context_window = args.context_window or model_defaults[1]
@@ -268,7 +291,7 @@ def main():
             provider=provider_name,
             model_id=model_id,
             context_window=context_window,
-            supports_thinking=(provider_name == 'anthropic'),
+            supports_thinking=(provider_name in {'anthropic', 'openrouter'}),
         )
 
         try:
@@ -301,6 +324,8 @@ def main():
         project_root=cwd,
         max_tokens=args.max_tokens,
         system_prompt=system_prompt,
+        state_dir=state,
+        thinking_level=args.reasoning_effort,
         interactive=False if args.query is not None else None,
         **engine_kwargs,
     )

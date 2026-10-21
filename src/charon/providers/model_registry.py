@@ -11,10 +11,10 @@ Also configurable via /setup shade-model and onboarding.
 from __future__ import annotations
 
 import json
-import os
 import threading
 from pathlib import Path
 from charon.infra import config
+from charon.providers.provider_secrets import read_secret_env
 
 try:
     from charon.infra.diagnostics import record as _diag
@@ -186,7 +186,9 @@ def _get_shared_shade(state_dir: Path, reg: dict):
         )
 
         base_url = reg.get('shade_base_url')
-        api_key = reg.get('shade_api_key') or os.environ.get('OPENROUTER_API_KEY', '')
+        api_key = reg.get('shade_api_key') or read_secret_env(
+            'OPENROUTER_API_KEY', 'OPENROUTER_API_KEY_FILE',
+        )
 
         if shade_provider_name == 'anthropic':
             from charon.providers.anthropic import AnthropicProvider
@@ -196,6 +198,7 @@ def _get_shared_shade(state_dir: Path, reg: dict):
             provider = HttpxOpenAIProvider(
                 base_url=base_url or 'http://127.0.0.1:1234/v1',
                 api_key=api_key or 'not-needed',
+                provider_name=shade_provider_name,
             )
 
         is_local = shade_provider_name in ('local', 'lmstudio', 'ollama')

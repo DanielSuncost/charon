@@ -101,6 +101,39 @@ def test_structured_retry_has_one_owner_and_emits_metrics(tmp_path):
     assert performance.data['elapsed_ms'] >= 0
 
 
+def test_submit_filters_provider_metrics_that_collide_with_engine_metrics(tmp_path):
+    class CollidingMetricsProvider:
+        last_request_metrics = {
+            'provider': 'provider-supplied',
+            'model': 'provider-supplied',
+            'agent_id': 'provider-supplied',
+            'turns': 999,
+            'tool_calls': 999,
+            'transport': 'mock-transport',
+        }
+
+        async def stream(self, **_kwargs):
+            yield StreamDelta(type='text', text='completed')
+            yield StreamDelta(
+                type='done',
+                text=json.dumps({'usage': {}, 'stop_reason': 'end_turn'}),
+            )
+
+    provider = CollidingMetricsProvider()
+    engine = ConversationEngine(provider, MODEL, project_root=tmp_path)
+
+    _, events = asyncio.run(engine.submit_and_collect('hello'))
+
+    assert events[-1].type == 'done'
+    performance = next(event for event in events if event.type == 'performance')
+    assert performance.data['provider'] == 'mock'
+    assert performance.data['model'] == 'mock'
+    assert performance.data['agent_id'] == engine.agent_id
+    assert performance.data['turns'] == 1
+    assert performance.data['tool_calls'] == 0
+    assert performance.data['transport'] == 'mock-transport'
+
+
 def test_non_retryable_structured_error_is_not_retried(tmp_path):
     provider = RetryProvider(retryable=False)
     engine = ConversationEngine(provider, MODEL, project_root=tmp_path)
