@@ -33,7 +33,7 @@ pub enum BackendEvent {
 impl BackendProcess {
     pub fn start(launch: &LaunchOptions) -> io::Result<Self> {
         let root = project_root();
-        let script = root.join("apps/tui/opentui/chat_backend.py");
+        let script = root.join(crate::util::BACKEND_SCRIPT);
 
         let mut cmd = Command::new("python3");
         cmd.arg(script)

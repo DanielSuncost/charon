@@ -22,6 +22,58 @@ except Exception:  # diagnostics is best-effort and must never block import
         return None
 
 
+def _other_state_dirs() -> list[tuple[str, Path]]:
+    """(label, state_dir) for this install's other git checkouts that hold conversations.
+
+    State stays per checkout; this only lets /resume see the others instead of
+    reporting "nothing found" from the wrong one.
+    """
+    import subprocess
+    current = Path(common.STATE_DIR).resolve()
+    try:
+        out = subprocess.run(
+            ['git', '-C', str(common.ROOT), 'worktree', 'list', '--porcelain'],
+            capture_output=True, text=True, timeout=3,
+        ).stdout
+    except Exception as e:
+        _diag('commands_core', 'git worktree list failed; /resume searches only this checkout', error=e)
+        return []
+    found = []
+    for line in out.splitlines():
+        if not line.startswith('worktree '):
+            continue
+        root = Path(line[len('worktree '):].strip())
+        state = (root / '.charon_state').resolve()
+        if state != current and any((state / 'conversations').glob('*.jsonl')):
+            found.append((root.name, state))
+    return found
+
+
+def _conversation_preview(state_dir: Path, agent_id: str) -> str:
+    from charon.conversation.conversation_store import load_conversation
+    try:
+        for msg in reversed(load_conversation(state_dir, agent_id)):
+            if msg.get('role') == 'user' and str(msg.get('content') or '').strip():
+                first_line = str(msg['content']).strip().split('\n')[0]
+                return first_line[:60] + ('…' if len(first_line) > 60 else '')
+    except Exception:
+        pass
+    return ''
+
+
+def _age(ts: float) -> str:
+    if not ts:
+        return ''
+    secs = time.time() - ts
+    if secs < 60:
+        return f'{int(secs)}s ago'
+    if secs < 3600:
+        return f'{int(secs/60)}m ago'
+    if secs < 86400:
+        return f'{int(secs/3600)}h ago'
+    return f'{int(secs/86400)}d ago'
+
+
 class CoreCommandsMixin:
     """Handlers for the setup/config/provider/model/settings command families."""
 
@@ -129,8 +181,15 @@ class CoreCommandsMixin:
                         saved = [message_to_dict(m) for m in store_msgs]
 
                     if not restored_count:
-                        # Fall back to JSONL
+                        # Fall back to JSONL — this checkout's, then another
+                        # checkout's (read only; the session continues here).
                         saved = _sanitize_saved_messages(load_conversation(common.STATE_DIR, arg))
+                        if not saved:
+                            for label, other_dir in _other_state_dirs():
+                                saved = _sanitize_saved_messages(load_conversation(other_dir, arg))
+                                if saved:
+                                    common.emit({'type': 'status', 'message': f'Resuming {arg} from the {label} checkout ({other_dir}).', 'request_id': request_id})
+                                    break
                         if saved and engine:
                             msgs = [dict_to_message(m) for m in saved]
                             engine.messages = msgs
@@ -153,7 +212,7 @@ class CoreCommandsMixin:
                         })
                     else:
                         common.emit({'type': 'error', 'error': f'No saved conversation for {arg}', 'request_id': request_id})
-                elif convos:
+                else:
                     # Show session picker with last user message preview
                     # Pre-load SQLite counts + last user messages for accuracy
                     _store_info = {}
@@ -181,17 +240,7 @@ class CoreCommandsMixin:
 
                     items = []
                     for c in sorted(convos, key=lambda x: x.get('last_timestamp', 0), reverse=True):
-                        age = ''
-                        if c.get('last_timestamp'):
-                            secs = time.time() - c['last_timestamp']
-                            if secs < 60:
-                                age = f'{int(secs)}s ago'
-                            elif secs < 3600:
-                                age = f'{int(secs/60)}m ago'
-                            elif secs < 86400:
-                                age = f'{int(secs/3600)}h ago'
-                            else:
-                                age = f'{int(secs/86400)}d ago'
+                        age = _age(c.get('last_timestamp', 0))
                         # Use SQLite info when available and more complete
                         aid = c['agent_id']
                         si = _store_info.get(aid)
@@ -201,22 +250,25 @@ class CoreCommandsMixin:
                             msg_count = si['count']
                             preview = si.get('preview', '')
                         if not preview:
-                            try:
-                                saved = load_conversation(common.STATE_DIR, aid)
-                                for msg in reversed(saved):
-                                    if msg.get('role') == 'user' and msg.get('content', '').strip():
-                                        first_line = msg['content'].strip().split('\n')[0]
-                                        preview = first_line[:60]
-                                        if len(first_line) > 60:
-                                            preview += '…'
-                                        break
-                            except Exception:
-                                pass
+                            preview = _conversation_preview(common.STATE_DIR, aid)
                         items.append({
                             'id': aid,
                             'desc': f"{preview or '(no messages)'}",
                             'age': f"{msg_count}msg  {age}",
                         })
+                    # Then other checkouts of this install, labelled, after this one's.
+                    local_ids = {item['id'] for item in items}
+                    others = _other_state_dirs()
+                    for label, other_dir in others:
+                        for c in sorted(list_conversations(other_dir), key=lambda x: x.get('last_timestamp', 0), reverse=True):
+                            if c['agent_id'] in local_ids:
+                                continue
+                            preview = _conversation_preview(other_dir, c['agent_id'])
+                            items.append({
+                                'id': c['agent_id'],
+                                'desc': f"[{label}] {preview or '(no messages)'}",
+                                'age': f"{c.get('message_count', 0)}msg  {_age(c.get('last_timestamp', 0))}",
+                            })
                     if items:
                         common.emit({
                             'type': 'model_picker',
@@ -225,9 +277,14 @@ class CoreCommandsMixin:
                             'request_id': request_id,
                         })
                     else:
-                        common.emit({'type': 'status', 'message': 'No other saved conversations found.', 'request_id': request_id})
-                else:
-                    common.emit({'type': 'status', 'message': 'No saved conversations found.', 'request_id': request_id})
+                        searched = [str(Path(common.STATE_DIR) / 'conversations')]
+                        searched += [str(d / 'conversations') for _, d in others]
+                        common.emit({
+                            'type': 'status',
+                            'message': 'No saved conversations in ' + ', '.join(searched)
+                            + (' (set CHARON_ROOT or CHARON_STATE_DIR if your history lives elsewhere).'),
+                            'request_id': request_id,
+                        })
             except Exception as e:
                 common.emit({'type': 'error', 'error': f'Resume failed: {e}', 'request_id': request_id})
             return

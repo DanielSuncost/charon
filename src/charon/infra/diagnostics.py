@@ -23,10 +23,7 @@ _FILENAME = 'diagnostics.jsonl'
 def _resolve_state_dir(state_dir=None) -> Path | None:
     if state_dir:
         return Path(state_dir).expanduser()
-    env_dir = config.state_dir()
-    if env_dir:
-        return env_dir.expanduser()
-    default = Path.home() / '.charon_state'
+    default = config.default_state_dir()
     return default if default.exists() else None
 
 

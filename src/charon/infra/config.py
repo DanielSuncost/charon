@@ -88,12 +88,26 @@ def codex_websocket_first_event_timeout() -> float:
 def state_dir() -> Path | None:
     """CHARON_STATE_DIR (no default): state directory override.
 
-    Returns the raw Path or None when unset. Call sites apply their own
-    fallbacks (charon_loop: './.charon_state'; diagnostics and
-    provider_bridge: '~/.charon_state') — see README for the discrepancy.
+    Returns the raw Path or None when unset. Callers that need a directory
+    either way use default_state_dir().
     """
     raw = os.environ.get('CHARON_STATE_DIR')
     return Path(raw) if raw else None
+
+
+def default_state_dir() -> Path:
+    """CHARON_STATE_DIR, else ``<install root>/.charon_state``.
+
+    The one fallback for every caller. It used to differ by caller — the loop
+    used './.charon_state' (relative to the launch directory) while
+    diagnostics and token refresh used '~/.charon_state' — so one install read
+    and wrote state in up to three places. The install root is where the TUI
+    backend has always kept its state.
+    """
+    env_dir = state_dir()
+    if env_dir:
+        return env_dir.expanduser()
+    return Path(__file__).resolve().parents[3] / '.charon_state'
 
 
 def stop_file() -> str:

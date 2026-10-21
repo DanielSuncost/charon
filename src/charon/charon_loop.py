@@ -1310,8 +1310,7 @@ def run_loop(state_dir: Path, stop_file: Path, max_consecutive_failures: int, sl
 
 def parse_args():
     p = argparse.ArgumentParser(description='Charon F00 persistent loop runner')
-    env_state_dir = config.state_dir()
-    p.add_argument('--state-dir', default=str(env_state_dir) if env_state_dir else './.charon_state')
+    p.add_argument('--state-dir', default=str(config.default_state_dir()))
     p.add_argument('--stop-file', default=config.stop_file())
     p.add_argument('--max-consecutive-failures', type=int, default=config.max_consec_fail())
     p.add_argument('--sleep-sec', type=float, default=config.loop_sleep())

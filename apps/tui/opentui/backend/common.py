@@ -25,8 +25,6 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / 'src'))
 
-STATE_DIR = ROOT / '.charon_state'
-
 try:
     from charon.infra import config
     from charon.infra.diagnostics import record as _diag
@@ -34,6 +32,9 @@ except Exception:  # diagnostics is best-effort and must never block import
     config = None
     def _diag(*args, **kwargs):
         return None
+
+# Same resolution as every other caller (CHARON_STATE_DIR, else the install root).
+STATE_DIR = config.default_state_dir() if config is not None else ROOT / '.charon_state'
 
 
 _emit_lock = threading.Lock()

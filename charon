@@ -19,6 +19,10 @@ while [ -L "$SOURCE" ]; do
   [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 CHARON_ROOT="$(cd "$(dirname "$SOURCE")" && pwd)"
+# The TUI binary runs this checkout's backend and .charon_state. Without the
+# export it guessed the root itself, and a binary built in another checkout
+# used that checkout's state (empty /resume, fresh onboarding).
+export CHARON_ROOT
 RUST_TUI_DIR="${CHARON_ROOT}/crates/charon-tui"
 RUST_TUI_MANIFEST="${CHARON_ROOT}/crates/charon-tui/Cargo.toml"
 RUST_TUI_BIN="${CHARON_ROOT}/crates/charon-tui/target/release/charon"

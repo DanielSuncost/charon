@@ -756,7 +756,7 @@ def _refresh_token(provider_raw: str, refresh_token: str) -> str | None:
             if new_token:
                 # Update auth store
                 import time
-                state_dir = config.state_dir() or (Path.home() / '.charon_state')
+                state_dir = config.default_state_dir()
                 auth_file = state_dir / 'auth' / 'auth.json'
                 if auth_file.exists():
                     try:
