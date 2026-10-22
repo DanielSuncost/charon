@@ -30,10 +30,6 @@ pub(crate) fn transcript_area_with_rowing(w: u16, h: u16, rowing: bool) -> Rect 
     Rect { x, y, width, height }
 }
 
-pub(crate) fn transcript_area(w: u16, h: u16) -> Rect {
-    transcript_area_with_rowing(w, h, false)
-}
-
 pub(crate) fn input_area(w: u16, h: u16) -> Rect {
     let width = w.saturating_sub(4).max(8);
     let y = h.saturating_sub(5);
@@ -100,7 +96,9 @@ fn draw_line(buf: &mut ScreenBuf, x: u16, y: u16, width: usize, line: &ChatRende
     let mut col = 0usize;
     for span in &line.spans {
         for ch in span.text.chars() {
-            if col >= width { break; }
+            let columns = crate::screen::char_columns(ch);
+            if columns == 0 { continue; }
+            if col + columns > width { break; }
             let selected = selection_cols.map(|(a, b)| col >= a && col < b).unwrap_or(false);
             buf.set(x + col as u16, y, Cell {
                 ch,
@@ -108,7 +106,7 @@ fn draw_line(buf: &mut ScreenBuf, x: u16, y: u16, width: usize, line: &ChatRende
                 bg: if selected { SEL_BG } else { bg_default },
                 bold: false,
             });
-            col += 1;
+            col += columns;
         }
         if col >= width { break; }
     }
@@ -540,8 +538,9 @@ fn draw_info_pane(buf: &mut ScreenBuf, app: &App, w: u16, h: u16) {
 
 /// Render the full F1 chat view into the screen buffer.
 pub fn draw(buf: &mut ScreenBuf, app: &App, w: u16, h: u16, cache: &F1MonoCache) {
-    let rowing = chat_view::chat_rowing_active(app);
-    let transcript = transcript_area_with_rowing(w, h, rowing);
+    let workers = chat_view::chat_subagent_rows(app, if h >= 24 { 3 } else { 1 });
+    let rowing = workers.is_empty() && chat_view::chat_rowing_active(app);
+    let transcript = content_area(app, w, h);
     let input = input_area(w, h);
 
     draw_transcript(buf, app, transcript, &cache.visual.lines);
@@ -558,6 +557,12 @@ pub fn draw(buf: &mut ScreenBuf, app: &App, w: u16, h: u16, cache: &F1MonoCache)
         }
     }
 
+    let worker_y = input.y.saturating_sub(workers.len() as u16 + 1);
+    for (index, row) in workers.iter().enumerate() {
+        let text: String = row.chars().take(input.width as usize).collect();
+        buf.put_str(input.x, worker_y + index as u16, &text,
+                    Color::Rgb { r: 148, g: 163, b: 184 }, Color::Reset, false);
+    }
     draw_input(buf, app, input);
     draw_footer(buf, app, w, h);
     draw_menu(buf, app, input);
@@ -580,6 +585,9 @@ pub fn copy_selection(app: &mut App, cache: &F1MonoCache) -> bool {
     chat_view::copy_chat_selection(app, &cache.visual.lines)
 }
 
-pub fn content_area(w: u16, h: u16) -> Rect {
-    transcript_area(w, h)
+pub fn content_area(app: &App, w: u16, h: u16) -> Rect {
+    let count = chat_view::chat_subagent_rows(app, if h >= 24 { 3 } else { 1 }).len();
+    let mut area = transcript_area_with_rowing(w, h, count == 0 && chat_view::chat_rowing_active(app));
+    area.height = area.height.saturating_sub(count as u16);
+    area
 }

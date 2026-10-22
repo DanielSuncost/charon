@@ -495,7 +495,15 @@ impl EventLoop {
                     }
                 }
                 draw_footer_buf(&mut self.back_buf, &self.app, self.outer_w, self.outer_h);
-                screen::flush(&self.back_buf, &self.front_buf, &mut self.stdout)?;
+                if force_all {
+                    // Resize/view switches invalidate the physical terminal,
+                    // not merely the logical buffers. Repaint blank gutters too.
+                    self.stdout.queue(crossterm::style::SetAttribute(crossterm::style::Attribute::Reset))?;
+                    self.stdout.queue(ct::Clear(ct::ClearType::All))?;
+                    screen::flush(&self.back_buf, &screen::ScreenBuf::new(0, 0), &mut self.stdout)?;
+                } else {
+                    screen::flush(&self.back_buf, &self.front_buf, &mut self.stdout)?;
+                }
                 std::mem::swap(&mut self.front_buf, &mut self.back_buf);
             } else {
                 // Legacy direct rendering for other views
@@ -1430,7 +1438,7 @@ impl EventLoop {
     /// Handle scroll/click/drag events for the views that capture the mouse.
     fn handle_mouse(&mut self, mouse: event::MouseEvent) -> io::Result<()> {
         if self.app.active_view == View::Chat && self.app.chat.app_mouse_mode {
-            let area = f1_mono::content_area(self.outer_w, self.outer_h);
+            let area = f1_mono::content_area(&self.app, self.outer_w, self.outer_h);
             let lines = &self.cached_chat.visual.lines;
             match mouse.kind {
                 MouseEventKind::ScrollUp => {

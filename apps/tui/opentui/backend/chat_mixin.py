@@ -789,6 +789,21 @@ class ChatMixin:
         Runs consolidation, goal inference, and emits heartbeat events
         even while the chat engine is busy processing a message.
         """
+        # A separate cheap publisher must not wait behind consolidation/model
+        # calls, or behind the parent's streaming turn. It replaces the list,
+        # including with an empty snapshot when the final child finishes.
+        def _subagent_activity_loop():
+            import time as _time
+            while True:
+                try:
+                    common.emit({'type': 'subagent_activity',
+                                 'snapshot': self._get_subagent_activity()})
+                except Exception as exc:
+                    _diag('chat_mixin', 'subagent activity publish failed', error=exc)
+                _time.sleep(2)
+
+        threading.Thread(target=_subagent_activity_loop, name='chat-subagent-activity', daemon=True).start()
+
         def _bg_loop():
             import time as _time
             cycle = 0

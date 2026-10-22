@@ -131,6 +131,25 @@ def classify_tool_risk(tool_name: str, params: dict) -> tuple[str, str]:
     if tool_name == 'SpawnShade':
         return 'write', 'spawn shade worker'
 
+    if tool_name == 'Lsp':
+        action = str(params.get('action') or '').strip().lower()
+        if action in {'status', 'shutdown'}:
+            return 'safe', ''
+        # Language servers may load plugins or run project build scripts. A
+        # read-only protocol surface is not a sandbox for the server process.
+        return 'dangerous', 'language server execution (trusted local server and project)'
+
+    if tool_name == 'Ast':
+        if str(params.get('action') or '').strip().lower() == 'apply':
+            return 'write', 'apply previewed structural edit'
+        return 'safe', ''
+
+    if tool_name == 'Debug':
+        action = str(params.get('action') or '').strip().lower()
+        if action in {'status', 'threads', 'stack', 'scopes', 'variables', 'terminate'}:
+            return 'safe', ''
+        return 'dangerous', 'debugger execution and process control (trusted adapter and debuggee)'
+
     if tool_name == 'PyKernel':
         action = str(params.get('action', 'run')).strip().lower()
         if action == 'run':

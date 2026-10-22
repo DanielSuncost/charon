@@ -464,13 +464,60 @@ pub fn chat_rowing_active(app: &App) -> bool {
     )
 }
 
+/// Compact, non-transcript work list. Explicit empty snapshots clear it.
+/// Keep formatting pure so it can be checked without spawning a backend.
+pub(crate) fn subagent_rows(payload: Option<&Value>, owner: &str, max_rows: usize) -> Vec<String> {
+    let Some(snapshot) = payload.and_then(|p| p.get("subagent_activity")) else { return vec![]; };
+    if max_rows == 0 || snapshot.get("owner_id").and_then(Value::as_str) != Some(owner) || owner.is_empty() {
+        return vec![];
+    }
+    if snapshot.get("error").and_then(Value::as_str).is_some() {
+        return vec!["subagents · status unavailable".into()];
+    }
+    let Some(items) = snapshot.get("items").and_then(Value::as_array) else { return vec![]; };
+    let active: Vec<_> = items.iter().filter(|item| matches!(item.get("status").and_then(Value::as_str),
+        Some("running" | "pending" | "queued" | "blocked" | "paused" | "waiting" | "stalled"))).collect();
+    if active.is_empty() { return vec![]; }
+    let total = snapshot.get("total").and_then(Value::as_u64).unwrap_or(active.len() as u64) as usize;
+    let total = total.max(active.len());
+    let clean = |item: &Value, key: &str| -> String {
+        item.get(key).and_then(Value::as_str).unwrap_or("").chars()
+            .map(|c| if c.is_control() { ' ' } else { c }).collect::<String>()
+            .split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64();
+    let delayed = snapshot.get("collected_at").and_then(Value::as_f64).map(|t| now - t > 15.0).unwrap_or(false);
+    let shown = active.len().min(max_rows);
+    let mut rows = Vec::new();
+    for (index, item) in active.iter().take(shown).enumerate() {
+        let status = clean(item, "status");
+        let phase = clean(item, "phase");
+        let activity = if delayed { "status delayed" } else if status == "running" && !phase.is_empty() { &phase } else { &status };
+        let prefix = if index == 0 { format!("subagents ({total})") } else { "  ↳".into() };
+        let extra = if index + 1 == shown && total > shown { format!("  +{} more", total - shown) } else { String::new() };
+        rows.push(format!("{prefix} · {activity} · {}{extra}", clean(item, "title")));
+    }
+    rows
+}
+
+pub(crate) fn chat_subagent_rows(app: &App, max_rows: usize) -> Vec<String> {
+    let payload = app.chat.refresh_payload.as_ref();
+    let owner = payload.and_then(|p| p.get("session_info")).and_then(|s| s.get("binding"))
+        .and_then(|b| b.get("agent_id")).and_then(Value::as_str).filter(|s| !s.is_empty())
+        .unwrap_or(&app.chat.session_id);
+    subagent_rows(payload, owner, max_rows)
+}
+
 pub fn chat_reserved_bottom(app: &App, variant: ChatLayoutVariant) -> u16 {
     let mut reserved = match variant {
         ChatLayoutVariant::Full => 6,
         ChatLayoutVariant::Mid => 5,
         ChatLayoutVariant::Tiny => 4,
     };
-    if chat_rowing_active(app) && variant != ChatLayoutVariant::Tiny {
+    let workers = chat_subagent_rows(app, if variant == ChatLayoutVariant::Tiny { 1 } else { 3 });
+    if !workers.is_empty() {
+        reserved += workers.len() as u16;
+    } else if chat_rowing_active(app) && variant != ChatLayoutVariant::Tiny {
         reserved += 3;
     }
     reserved
@@ -608,17 +655,18 @@ fn wrap_plain_text(s: &str, width: usize) -> Vec<String> {
     }
     let mut out = Vec::new();
     for raw in s.lines() {
-        let chars: Vec<char> = raw.chars().collect();
-        if chars.is_empty() {
-            out.push(String::new());
-            continue;
+        let mut line = String::new();
+        let mut columns = 0;
+        for ch in raw.chars() {
+            let occupied = crate::screen::char_columns(ch);
+            if columns + occupied > width && !line.is_empty() {
+                out.push(std::mem::take(&mut line));
+                columns = 0;
+            }
+            if occupied > width { line.push('�'); columns += 1; }
+            else { line.push(ch); columns += occupied; }
         }
-        let mut start = 0usize;
-        while start < chars.len() {
-            let end = (start + width).min(chars.len());
-            out.push(chars[start..end].iter().collect());
-            start = end;
-        }
+        out.push(line);
     }
     if out.is_empty() { out.push(String::new()); }
     out
@@ -1284,7 +1332,14 @@ fn draw_chat_chrome<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::
         ChatViewMode::Workspace => if app.chat.streaming { "Enter: steer  /queue: later".to_string() } else { format!("F5:{}  Wheel:scroll  Persistent pane  ←/→/Ctrl+I tabs  F6:{}", mode_label, mouse_mode) },
     };
     if let Some((notice, _ok)) = app.chat.clipboard_notice_text() { right2 = notice.to_string(); }
-    if chat_rowing_active(app) && variant != ChatLayoutVariant::Tiny {
+    let worker_rows = chat_subagent_rows(app, if variant == ChatLayoutVariant::Tiny { 1 } else { 3 });
+    if !worker_rows.is_empty() {
+        let input_y = h.saturating_sub(if variant == ChatLayoutVariant::Tiny { 3 } else { 5 });
+        let start = input_y.saturating_sub(worker_rows.len() as u16 + 1);
+        for (index, row) in worker_rows.iter().enumerate() {
+            draw_chat_status_line(stdout, start + index as u16, left_w, &format!("  {row}"), "", style::Color::DarkGrey)?;
+        }
+    } else if chat_rowing_active(app) && variant != ChatLayoutVariant::Tiny {
         let frame = ((animation_clock_start().elapsed().as_millis() / 300) % 4) as usize;
         let activity_lines = rowing_indicator_lines(frame);
         let activity_y = h.saturating_sub(9);
@@ -1368,6 +1423,36 @@ mod tests {
             ],
             selected,
         }
+    }
+
+    #[test]
+    fn subagent_strip_is_compact_scoped_and_clears() {
+        let payload = serde_json::json!({"subagent_activity": {
+            "owner_id": "owner", "total": 5,
+            "items": (0..5).map(|i| serde_json::json!({
+                "title": format!("task {i}"), "phase": "verification", "status": "running"
+            })).collect::<Vec<_>>()
+        }});
+        let rows = super::subagent_rows(Some(&payload), "owner", 3);
+        assert_eq!(rows.len(), 3);
+        assert!(rows[0].contains("subagents (5) · verification · task 0"));
+        assert!(rows[2].ends_with("+2 more"));
+        assert!(super::subagent_rows(Some(&payload), "other", 3).is_empty());
+        assert_eq!(super::subagent_rows(Some(&payload), "owner", 1).len(), 1);
+        let empty = serde_json::json!({"subagent_activity":{"owner_id":"owner", "items":[], "total":0}});
+        assert!(super::subagent_rows(Some(&empty), "owner", 3).is_empty());
+    }
+
+    #[test]
+    fn subagent_strip_filters_terminal_and_sanitizes_labels() {
+        let payload = serde_json::json!({"subagent_activity": {"owner_id":"owner", "items":[
+            {"title":"done", "status":"completed"},
+            {"title":"bad\n\u{1b}[31m label", "status":"stalled", "phase":"implementation"}
+        ]}});
+        let rows = super::subagent_rows(Some(&payload), "owner", 3);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].contains("stalled"));
+        assert!(!rows[0].chars().any(char::is_control));
     }
 
     #[test]

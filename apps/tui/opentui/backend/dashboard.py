@@ -862,6 +862,7 @@ class DashboardMixin:
             'agent_mode': self.agent_mode,
             'session_info': self._get_session_info(),
             'batch_progress': self._get_batch_progress(),
+            'subagent_activity': self._get_subagent_activity(),
             'orchestration_parse': dict(self._last_orchestration_parse or {}),
         }
 
@@ -874,6 +875,15 @@ class DashboardMixin:
             payload['consolidation_traces'] = []
 
         return payload
+
+    def _get_subagent_activity(self) -> dict:
+        from backend.subagent_activity import collect_subagent_activity
+        owner = str(getattr(self, '_bound_agent_id', None) or self._active_agent_id or '')
+        try:
+            return collect_subagent_activity(common.STATE_DIR, owner)
+        except Exception as exc:
+            _diag('dashboard', 'subagent activity unavailable', error=exc)
+            return {'owner_id': owner, 'items': [], 'total': 0, 'error': 'Subagent status unavailable'}
 
     def handle_refresh(self, request_id: str | None):
         payload = self._get_refresh_payload()

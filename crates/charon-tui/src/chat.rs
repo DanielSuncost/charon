@@ -1232,6 +1232,11 @@ impl ChatState {
     fn merge_refresh_payload(&mut self, incoming: Value) {
         match (&mut self.refresh_payload, incoming) {
             (Some(Value::Object(existing)), Value::Object(new_map)) => {
+                // Activity is a complete snapshot, not a patch: otherwise an
+                // old error/worker can survive a later healthy empty update.
+                if let Some(activity) = new_map.get("subagent_activity") {
+                    existing.insert("subagent_activity".into(), activity.clone());
+                }
                 merge_json_objects(existing, &new_map);
             }
             (_, other) => {
@@ -1745,6 +1750,11 @@ impl ChatState {
                 self.usage.last_output_tokens = output_tokens;
                 self.usage.context_pct = v.get("context_pct").and_then(|x| x.as_f64());
                 self.usage.context_window = v.get("context_window").and_then(|x| x.as_u64());
+            }
+            "subagent_activity" => {
+                if let Some(snapshot) = v.get("snapshot").cloned() {
+                    self.merge_refresh_payload(json!({"subagent_activity": snapshot}));
+                }
             }
             "refresh" => {
                 if let Some(payload) = v.get("payload").cloned() {

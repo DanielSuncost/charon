@@ -606,6 +606,8 @@ def execute_write(params: dict, ctx: ToolContext) -> ToolResult:
     try:
         from charon.tools.file_snapshots import atomic_write_text, file_version
         atomic_write_text(target, content)
+        from charon.ide.edit_feedback import invalidate_after_write
+        invalidate_after_write(target, ctx)
         byte_count = len(content.encode('utf-8'))
         version = file_version(target)
         return ToolResult(
@@ -824,6 +826,8 @@ def execute_edit(params: dict, ctx: ToolContext) -> ToolResult:
                 is_error=True,
             )
         atomic_write_text(target, new_content)
+        from charon.ide.edit_feedback import invalidate_after_write
+        invalidate_after_write(target, ctx)
         final_version = file_version(target)
         return ToolResult(
             content=(
@@ -1378,6 +1382,9 @@ from charon.tools.execute_code_tool import EXECUTE_CODE_TOOL_DEF, execute_execut
 from charon.tools.pykernel_tool import PYKERNEL_TOOL_DEF, execute_pykernel
 from charon.tools.refine_tool import REFINE_TOOL_DEF, execute_refine
 from charon.tools.clarify_tool import CLARIFY_TOOL_DEF, execute_clarify
+from charon.tools.lsp_tool import LSP_TOOL_DEF, execute_lsp
+from charon.tools.ast_tool import AST_TOOL_DEF, execute_ast
+from charon.tools.debug_tool import DEBUG_TOOL_DEF, execute_debug
 
 # Optional tools may legitimately be missing (uninstalled extras) — that is an
 # ImportError and is only recorded to diagnostics. Any OTHER exception means
@@ -1480,7 +1487,7 @@ ALL_TOOL_DEFS = [
     SHADE_TOOL_DEF, LIST_RETAINED_SHADES_TOOL_DEF, SPAWN_BATCH_TOOL_DEF, JUDGE_LOOP_TOOL_DEF,
     SEARCH_TOOL_DEF, WEB_TOOL_DEF, PAPER_TOOL_DEF, SOURCE_DISCOVERY_TOOL_DEF, RESEARCH_TOOL_DEF, X_TOOL_DEF,
     CRON_TOOL_DEF, SKILLS_TOOL_DEF, EXECUTE_CODE_TOOL_DEF, CLARIFY_TOOL_DEF,
-    PYKERNEL_TOOL_DEF, REFINE_TOOL_DEF,
+    PYKERNEL_TOOL_DEF, REFINE_TOOL_DEF, LSP_TOOL_DEF, AST_TOOL_DEF, DEBUG_TOOL_DEF,
 ] + ([BROWSER_TOOL_DEF] if _HAS_BROWSER else []) + ([RECALL_TOOL_DEF] if _HAS_RECALL else []) + ([TIMELINE_TOOL_DEF] if _HAS_TIMELINE else []) + (_FLEET_DEFS if _HAS_FLEET else []) + (_OVERSEER_DEFS if _HAS_OVERSEER else []) + (_SYSTEM_MAP_DEFS if _HAS_SYSTEM_MAP else [])
 
 TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
@@ -1513,6 +1520,9 @@ TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
     'PyKernel': execute_pykernel,
     'Refine': execute_refine,
     'Clarify': execute_clarify,
+    'Lsp': execute_lsp,
+    'Ast': execute_ast,
+    'Debug': execute_debug,
     **(({'Browser': execute_browser} if _HAS_BROWSER else {})),
     **(({'Recall': execute_recall} if _HAS_RECALL else {})),
     **(({'Timeline': execute_timeline} if _HAS_TIMELINE else {})),
@@ -1794,6 +1804,9 @@ def _check_scope(name: str, params: dict, ctx: ToolContext) -> str | None:
                   actor=ctx.agent_id, outcome='refused_or_failed')
         return error
 
+    if name == 'Debug' and (ctx.scope or ctx.frozen):
+        return 'Scope violation: debugger execution cannot enforce shade scope/frozen restrictions.'
+
     if not ctx.scope and not ctx.frozen:
         return None  # No restrictions
 
@@ -1918,6 +1931,9 @@ def execute_tool(name: str, params: dict, ctx: ToolContext) -> ToolResult:
     executor = TOOL_EXECUTORS.get(name)
     if executor:
         try:
+            if name in {'Lsp', 'Debug'}:
+                from charon.ide.config import configured_context
+                ctx = configured_context(ctx)
             return executor(params, ctx)
         except Exception as e:
             return ToolResult(content=f'Tool execution error: {e}', is_error=True)

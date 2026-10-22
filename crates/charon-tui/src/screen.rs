@@ -5,6 +5,12 @@
 //! and last-emitted style so redundant ANSI sequences are suppressed.
 
 use std::io::Write;
+use unicode_width::UnicodeWidthChar;
+
+/// Terminal columns, never byte/scalar count. Controls are rendered as spaces.
+pub fn char_columns(ch: char) -> usize {
+    if ch.is_control() { 1 } else { ch.width().unwrap_or(0) }
+}
 
 use crossterm::style::Color;
 use crossterm::{cursor, style, QueueableCommand};
@@ -57,6 +63,21 @@ impl ScreenBuf {
     pub fn set(&mut self, x: u16, y: u16, cell: Cell) {
         if x < self.width && y < self.height {
             let i = self.idx(x, y);
+            // NUL is reserved internally for the trailing half of a wide cell.
+            let mut cell = cell;
+            if cell.ch.is_control() { cell.ch = ' '; }
+            let width = char_columns(cell.ch);
+            if width == 0 { return; } // standalone combining/format controls cannot occupy a cell
+            if x > 0 && self.cells[i].ch == '\0' {
+                self.cells[i - 1] = Cell::default();
+            }
+            if char_columns(self.cells[i].ch) == 2 && x + 1 < self.width {
+                self.cells[i + 1] = Cell::default();
+            }
+            if width == 2 {
+                if x + 1 >= self.width { cell.ch = ' '; }
+                else { self.cells[i + 1] = Cell { ch: '\0', ..cell }; }
+            }
             self.cells[i] = cell;
         }
     }
@@ -68,8 +89,11 @@ impl ScreenBuf {
             if col >= self.width {
                 break;
             }
+            let width = char_columns(ch) as u16;
+            if width == 0 { continue; }
+            if col.saturating_add(width) > self.width { break; }
             self.set(col, y, Cell { ch, fg, bg, bold });
-            col += 1;
+            col += width;
         }
     }
 
@@ -84,7 +108,7 @@ impl ScreenBuf {
 
 // ── Flush (diff emitter) ────────────────────────────────────────────────────
 
-/// Compare `current` against `prev` and emit only the cells that changed.
+/// Compare frames and repaint changed rows, including their blank margins.
 /// Tracks cursor position and style state to minimise ANSI output.
 pub fn flush(
     current: &ScreenBuf,
@@ -117,9 +141,9 @@ pub fn flush(
 
         for x in 0..current.width {
             let cur = current.cells[row_off + x as usize];
-            if same_size && cur == prev.cells[row_off + x as usize] {
-                continue;
-            }
+            // Repaint the whole changed row. A prior wide glyph may have
+            // occupied a neighbour whose logical cell is otherwise unchanged.
+            if cur.ch == '\0' { continue; }
 
             // Position cursor
             if cy != y || cx != x {
@@ -152,7 +176,7 @@ pub fn flush(
             let mut buf = [0u8; 4];
             let s = cur.ch.encode_utf8(&mut buf);
             out.write_all(s.as_bytes())?;
-            cx = x + 1;
+            cx = x.saturating_add(char_columns(cur.ch) as u16);
             cy = y;
         }
     }
@@ -162,4 +186,61 @@ pub fn flush(
     out.queue(style::SetForegroundColor(Color::Reset))?;
     out.queue(style::SetBackgroundColor(Color::Reset))?;
     out.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wide_text_reserves_columns_and_never_crosses_right_edge() {
+        let mut buf = ScreenBuf::new(8, 2);
+        buf.put_str(1, 0, "A界🧠B", Color::Reset, Color::Reset, false);
+        assert_eq!(buf.cells.iter().take(8).map(|c| c.ch).collect::<Vec<_>>(),
+                   vec![' ', 'A', '界', '\0', '🧠', '\0', 'B', ' ']);
+        buf.put_str(7, 1, "界", Color::Reset, Color::Reset, false);
+        assert_eq!(buf.cells[15].ch, ' ');
+        let mut ansi = Vec::new();
+        flush(&buf, &ScreenBuf::new(0, 0), &mut ansi).unwrap();
+        assert!(!ansi.contains(&0));
+    }
+
+    #[test]
+    fn shrinking_content_repaints_blank_side_margins() {
+        let mut old = ScreenBuf::new(12, 1);
+        old.put_str(2, 0, "old content", Color::Reset, Color::Reset, false);
+        let mut new = ScreenBuf::new(12, 1);
+        new.put_str(2, 0, "new", Color::Reset, Color::Reset, false);
+        let mut ansi = Vec::new();
+        flush(&new, &old, &mut ansi).unwrap();
+        let text = String::from_utf8(ansi).unwrap();
+        assert!(text.contains("  new       "), "row and gutters must be repainted: {text:?}");
+        let mut idle = Vec::new();
+        flush(&new, &new, &mut idle).unwrap();
+        assert!(!String::from_utf8(idle).unwrap().contains("new"));
+    }
+
+    #[test]
+    fn overwriting_either_half_clears_wide_glyph() {
+        let mut buf = ScreenBuf::new(5, 1);
+        buf.put_str(1, 0, "界", Color::Reset, Color::Reset, false);
+        buf.set(2, 0, Cell { ch: 'x', ..Cell::default() });
+        assert_eq!(buf.cells[1].ch, ' ');
+        assert_eq!(buf.cells[2].ch, 'x');
+        buf.put_str(1, 0, "界", Color::Reset, Color::Reset, false);
+        buf.set(1, 0, Cell { ch: 'a', ..Cell::default() });
+        assert_eq!(buf.cells[2].ch, ' ');
+    }
+
+    #[test]
+    fn control_characters_cannot_move_the_physical_cursor() {
+        let mut buf = ScreenBuf::new(20, 1);
+        buf.put_str(0, 0, "a\nb\rc\td\u{1b}[2J", Color::Reset, Color::Reset, false);
+        assert!(buf.cells.iter().all(|c| !c.ch.is_control()));
+        let mut ansi = Vec::new();
+        flush(&buf, &ScreenBuf::new(0, 0), &mut ansi).unwrap();
+        let text = String::from_utf8(ansi).unwrap();
+        assert!(!text.contains("\u{1b}[2J"));
+        assert!(!text.contains('\n'));
+    }
 }
