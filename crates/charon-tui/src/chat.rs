@@ -214,7 +214,7 @@ fn provider_model_label(payload: Option<&Value>) -> String {
     if provider.is_empty() && model.is_empty() {
         "unconfigured".to_string()
     } else if model.is_empty() {
-        provider.to_string()
+        format!("{} · no model (/model)", provider)
     } else {
         format!("{}/{}", provider, model)
     }

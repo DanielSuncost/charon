@@ -114,12 +114,8 @@ PROVIDER_MAP = {
     'opencode': 'openai',   # opencode uses OpenAI-compat
 }
 
-# Default models per provider
-DEFAULT_MODELS = {
-    'anthropic': 'claude-sonnet-4-20250514',
-    'openai': 'gpt-4o',
-    'local': 'qwen3-30b-a3b',
-}
+# A signed-in provider with no model picked has no default: inventing one made
+# sessions claim models the user never chose. See suggested_model().
 
 ROUTE_PROVIDER_ALIASES = {
     'anthropic': ('anthropic', 'anthropic'),
@@ -178,7 +174,7 @@ def resolve_provider_config(
     Returns:
         {
             'provider_name': str,   # 'anthropic', 'openai', 'local'
-            'model_id': str,        # 'claude-sonnet-4-20250514', etc.
+            'model_id': str,        # '' with model_missing=True when none was chosen
             'api_key': str,         # resolved API key
             'base_url': str | None, # for OpenAI-compatible endpoints
             'context_window': int,
@@ -206,6 +202,23 @@ def resolve_provider_config(
     provider_raw = str(effective.get('provider') or '').strip().lower()
     complete = bool(effective.get('complete'))
 
+    # A chosen provider with no chosen model is its own state, complete or not.
+    if provider_raw and provider_mode != 'no-provider' and not _detect_model(effective):
+        return {
+            'provider_name': PROVIDER_MAP.get(provider_raw, 'local'),
+            'provider_raw': provider_raw,
+            'model_id': '',
+            'model_missing': True,
+            'suggested_model': suggested_model(state_dir, provider_raw),
+            'api_key': '',
+            'base_url': None,
+            'context_window': DEFAULT_CONTEXT_WINDOW,
+            'supports_thinking': False,
+            'ready': False,
+            'session_id': session_id or '',
+            'session_override': bool(session_override),
+        }
+
     # Not configured yet
     if not complete or provider_mode == 'no-provider' or not provider_raw:
         return {
@@ -219,7 +232,7 @@ def resolve_provider_config(
         }
 
     provider_name = PROVIDER_MAP.get(provider_raw, 'local')
-    model_id = _detect_model(effective, provider_name)
+    model_id = _detect_model(effective)
     api_key = _resolve_api_key(provider_name, provider_raw, effective, auth_store)
     base_url = _detect_base_url(effective) if provider_name == 'local' else None
     context_window = CONTEXT_WINDOWS.get(model_id, DEFAULT_CONTEXT_WINDOW)
@@ -243,8 +256,8 @@ def resolve_provider_config(
     }
 
 
-def _detect_model(onboarding: dict, provider_name: str) -> str:
-    """Resolve model from onboarding config."""
+def _detect_model(onboarding: dict) -> str:
+    """Resolve model from onboarding config; '' when none was chosen."""
     for key in ('provider_model', 'model', 'opencode_model'):
         val = str(onboarding.get(key) or '').strip()
         if val:
@@ -252,7 +265,24 @@ def _detect_model(onboarding: dict, provider_name: str) -> str:
             if '/' in val:
                 val = val.split('/', 1)[1]
             return val
-    return DEFAULT_MODELS.get(provider_name, 'gpt-4o')
+    return ''
+
+
+def suggested_model(state_dir: Path, provider_raw: str) -> str:
+    """The provider's first listed model (discovered, else built-in), for prompts only."""
+    try:
+        from charon.providers.model_catalog import cached_models
+        models = cached_models(Path(state_dir), provider_raw).models
+        return str(models[0]['id']) if models else ''
+    except Exception as e:
+        _diag('provider_bridge', 'model catalog lookup failed; no suggestion', error=e, provider=provider_raw)
+        return ''
+
+
+def missing_model_message(config: dict) -> str:
+    provider = config.get('provider_raw') or config.get('provider_name') or 'this provider'
+    hint = f" (e.g. /model {config['suggested_model']})" if config.get('suggested_model') else ''
+    return f'No model configured for {provider}. Pick one with /model{hint}.'
 
 
 def _detect_model_fallback(onboarding: dict) -> str:

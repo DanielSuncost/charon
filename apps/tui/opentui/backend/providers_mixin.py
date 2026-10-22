@@ -8,7 +8,7 @@ from backend import common
 from backend.settings_io import _full_messages_from_store
 from backend.textutils import _sanitize_saved_messages
 from charon.conversation.conversation_engine import ConversationEngine
-from charon.providers.provider_bridge import create_provider_and_model, resolve_provider_config
+from charon.providers.provider_bridge import create_provider_and_model, missing_model_message, resolve_provider_config
 from charon.infra import config
 
 try:
@@ -66,6 +66,9 @@ class ProvidersMixin:
             return None, f'Provider setup failed: {e}'
 
         if not ready:
+            state = self._session_provider_state()
+            if state.get('model_missing'):
+                return None, missing_model_message(state)
             return None, 'No provider configured. Use /setup provider <name> to configure.'
 
         project = str(common.ROOT)
