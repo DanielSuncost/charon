@@ -55,7 +55,7 @@ def _fake_engine_class(monkeypatch, tokens=10):
         def _repair_orphaned_tool_calls(messages):
             return messages
 
-        async def submit_and_collect(self, instruction):
+        async def submit_and_collect(self, instruction, on_event=None):
             return 'ok', [_FakeEvent('message_end', {'usage': {'total_tokens': tokens}})]
 
     monkeypatch.setattr('charon.conversation.conversation_engine.ConversationEngine', _FakeEngine)

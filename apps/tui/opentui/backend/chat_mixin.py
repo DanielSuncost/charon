@@ -1035,6 +1035,31 @@ class ChatMixin:
 
         t = threading.Thread(target=_bg_loop, daemon=True)
         t.start()
+        threading.Thread(target=self._team_status_loop, name='chat-team-status', daemon=True).start()
+
+    def _team_status_loop(self):
+        """Publish the live team band every 2s and its transcript updates.
+
+        Separate from _bg_loop so consolidation or model calls can't delay it:
+        a band that stops refreshing would look like a frozen team.
+        """
+        import time as _time
+        from backend.team_status import TeamTracker
+        tracker, owner, shown = TeamTracker(), None, False
+        while True:
+            try:
+                current = str(getattr(self, '_bound_agent_id', None) or self._active_agent_id or '')
+                if current != owner:
+                    tracker, owner = TeamTracker(), current
+                status, lines = tracker.tick(common.STATE_DIR, owner)
+                if lines:
+                    common.emit({'type': 'team_update', 'lines': lines})
+                if status['state'] != 'idle' or shown:
+                    common.emit({'type': 'team_status', **status})
+                shown = status['state'] != 'idle'
+            except Exception as exc:
+                _diag('chat_mixin', 'team status publish failed; band not refreshed this cycle', error=exc)
+            _time.sleep(2)
 
     def _save_conversation_now(self):
         """Save current conversation state immediately (called on exit)."""

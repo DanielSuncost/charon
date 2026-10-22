@@ -1714,12 +1714,17 @@ class ConversationEngine:
         yield _evt('done', total_turns=turn, message_count=len(self.messages),
                     pending_follow_ups=len(self._follow_up_queue))
 
-    async def submit_and_collect(self, user_message: str) -> tuple[str, list[EngineEvent]]:
-        """Convenience: submit and collect all events. Returns (final_text, events)."""
+    async def submit_and_collect(self, user_message: str, on_event=None) -> tuple[str, list[EngineEvent]]:
+        """Convenience: submit and collect all events. Returns (final_text, events).
+
+        ``on_event(type, data)`` sees each event as it arrives (shade heartbeats).
+        """
         events = []
         final_text_parts = []
         async for event in self.submit(user_message):
             events.append(event)
+            if on_event is not None:
+                on_event(event.type, event.data)
             if event.type == 'text_delta':
                 final_text_parts.append(event.data.get('text', ''))
         return ''.join(final_text_parts), events

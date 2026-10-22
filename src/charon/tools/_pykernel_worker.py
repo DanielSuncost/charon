@@ -358,7 +358,7 @@ def _bridge_module(
                 raise RuntimeError(f'contract {cid} not found')
             if contract.get('status') in terminal:
                 break
-            if is_contract_stale(contract):
+            if is_contract_stale(contract, state_dir=ctx.state_dir):
                 # Gone quiet for over config.shade_contract_stall_seconds()
                 # with no phase update — the worker process behind this
                 # contract is almost certainly dead (hard-killed, orphaned).

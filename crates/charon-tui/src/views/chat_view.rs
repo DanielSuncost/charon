@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::app::App;
 use crate::chat::{
-    ChatMessage, ChatTextPoint, ChatViewMode, LibrisCompletion, LibrisIntake,
+    ChatMessage, ChatTextPoint, ChatViewMode, LibrisCompletion, LibrisIntake, TeamTone,
 };
 use crate::copy_to_clipboard;
 use crate::render::{self, Rect};
@@ -473,7 +473,50 @@ pub fn chat_reserved_bottom(app: &App, variant: ChatLayoutVariant) -> u16 {
     if chat_rowing_active(app) && variant != ChatLayoutVariant::Tiny {
         reserved += 3;
     }
+    let team_rows = app.chat.team_band(usize::MAX, team_band_max_agents(variant)).len() as u16;
+    if team_rows > 0 {
+        reserved = reserved.max(team_band_bottom_offset(app, variant) + team_rows);
+    }
     reserved
+}
+
+fn team_band_max_agents(variant: ChatLayoutVariant) -> usize {
+    match variant {
+        ChatLayoutVariant::Full => 5,
+        ChatLayoutVariant::Mid => 3,
+        ChatLayoutVariant::Tiny => 0,
+    }
+}
+
+/// Rows from the bottom of the screen to the band's last row: it sits just
+/// above the input box, or above the activity indicator when that is shown.
+fn team_band_bottom_offset(app: &App, variant: ChatLayoutVariant) -> u16 {
+    match variant {
+        ChatLayoutVariant::Tiny => 4,
+        _ if chat_rowing_active(app) => 9,
+        _ => 6,
+    }
+}
+
+fn draw_team_band<W: Write>(stdout: &mut W, app: &App, variant: ChatLayoutVariant, h: u16, left_w: u16) -> io::Result<()> {
+    let width = left_w.saturating_sub(4) as usize;
+    let lines = app.chat.team_band(width, team_band_max_agents(variant));
+    let top = h.saturating_sub(team_band_bottom_offset(app, variant) + lines.len() as u16);
+    for (i, (tone, text)) in lines.iter().enumerate() {
+        let color = match tone {
+            TeamTone::Head => style::Color::Rgb { r: 125, g: 211, b: 252 },
+            TeamTone::Warn => style::Color::Rgb { r: 251, g: 191, b: 36 },
+            TeamTone::Ok => style::Color::Rgb { r: 148, g: 163, b: 184 },
+            TeamTone::Quiet => style::Color::Rgb { r: 217, g: 160, b: 70 },
+            TeamTone::Lost => style::Color::Rgb { r: 248, g: 113, b: 113 },
+        };
+        stdout.queue(cursor::MoveTo(2, top + i as u16))?;
+        stdout.queue(style::SetForegroundColor(color))?;
+        let pad = width.saturating_sub(text.chars().count());
+        write!(stdout, "{}{}", text, " ".repeat(pad))?;
+    }
+    stdout.queue(style::SetForegroundColor(style::Color::Reset))?;
+    Ok(())
 }
 
 pub fn chat_info_pane_width(app: &App, w: u16, h: u16) -> u16 {
@@ -1293,6 +1336,7 @@ fn draw_chat_chrome<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::
             draw_chat_line(stdout, 2, activity_y + i as u16, left_w.saturating_sub(4) as usize, line, None)?;
         }
     }
+    draw_team_band(stdout, app, variant, h, left_w)?;
     let input_area = if variant == ChatLayoutVariant::Tiny {
         let input_area = Rect { x: 1, y: h.saturating_sub(3), width: left_w.saturating_sub(2), height: 1 };
         if input_area.width > 0 { draw_chat_border(stdout, input_area, "")?; stdout.queue(cursor::MoveTo(input_area.x, input_area.y))?; stdout.queue(style::SetForegroundColor(style::Color::Rgb { r: 248, g: 250, b: 252 }))?; let prompt = format!("> {}", app.chat.input); let visible = tail_visible_text(&prompt, input_area.width as usize); let pad = (input_area.width as usize).saturating_sub(visible.chars().count()); write!(stdout, "{}{}", visible, " ".repeat(pad))?; stdout.queue(style::SetForegroundColor(style::Color::Reset))?; Some(input_area) } else { None }

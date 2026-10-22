@@ -40,6 +40,10 @@ SHADE_TOOL_DEF = {
                 'type': 'string',
                 'description': 'Clear description of what the shade should accomplish',
             },
+            'role': {
+                'type': 'string',
+                'description': "Short role label shown in the user's live team status, e.g. 'engine', 'ui', 'qa' (optional)",
+            },
             'scope': {
                 'type': 'array',
                 'items': {'type': 'string'},
@@ -130,6 +134,9 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
     phase_specs = params.get('phase_specs', [])
     contract_type = str(params.get('contract_type', '')).strip()
     metadata = params.get('metadata') or {}
+    role = ' '.join(str(params.get('role') or '').split())[:24]
+    if role:
+        metadata = {**metadata, 'role': role}
     retain = bool(params.get('retain', False))
     task_complexity = str(params.get('task_complexity') or 'normal').strip().lower()
     token_budget_override = params.get('token_budget')
@@ -224,6 +231,8 @@ def execute_spawn_shade(params: dict, ctx: ToolContext) -> ToolResult:
         daemon=True,
     )
     thread.start()
+    from charon.shade.shade_activity import register_thread
+    register_thread(contract_id, thread)
 
     return ToolResult(
         content=(
@@ -432,6 +441,8 @@ def _run_shade(
                 _diag('shade_tool', 'libris comm event emit failed; operation timeline missing shade message', error=e, contract_id=contract_id)
 
         _emit_libris_phase('starting', 'running', 'Shade contract started.')
+        from charon.shade.shade_activity import ActivityRecorder
+        recorder = ActivityRecorder(state_dir, contract_id)
 
         while True:
             phase = next_pending_phase(contract)
@@ -442,10 +453,11 @@ def _run_shade(
             phase_id = phase['phase_id']
             phase_name = str(phase.get('name') or phase_id)
             _emit_libris_phase(phase_name, 'running', str(phase.get('objective') or '')[:200])
+            recorder.note('phase', {'doing': f'starting {phase_name}'})
 
             try:
                 response, events = asyncio.run(
-                    engine.submit_and_collect(instruction)
+                    engine.submit_and_collect(instruction, on_event=recorder.note)
                 )
                 if budget:
                     turn_tokens = 0
@@ -617,6 +629,8 @@ def execute_reactivate_shade(
         daemon=True,
     )
     thread.start()
+    from charon.shade.shade_activity import register_thread
+    register_thread(contract_id, thread)
 
     return {'shade_id': shade_id, 'contract_id': contract_id, 'status': 'running'}
 

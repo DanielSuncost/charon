@@ -220,6 +220,109 @@ fn provider_model_label(payload: Option<&Value>) -> String {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TeamTone {
+    Head,
+    Warn,
+    Ok,
+    Quiet,
+    Lost,
+}
+
+/// Without a `team_status` for this long the band stops trusting its
+/// countdown: the backend publishes every 2s while a team is live.
+const TEAM_STATUS_SILENT_SECS: u64 = 12;
+
+fn fmt_dur(secs: f64) -> String {
+    let s = secs.max(0.0) as u64;
+    if s < 60 {
+        format!("{}s", s)
+    } else if s < 3600 {
+        format!("{}m", s / 60)
+    } else {
+        format!("{}h{:02}m", s / 3600, (s % 3600) / 60)
+    }
+}
+
+fn fit(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        text.to_string()
+    } else if width == 0 {
+        String::new()
+    } else {
+        let mut out: String = text.chars().take(width - 1).collect();
+        out.push('…');
+        out
+    }
+}
+
+/// The live team band: a headline, then one line per agent. Empty when no
+/// team is working. Every clock is computed against `now`, and the countdown
+/// is only shown while the backend is alive and still reporting.
+pub fn team_band_lines(status: &Value, backend_alive: bool, silent_for: u64, now: f64, width: usize, max_agents: usize) -> Vec<(TeamTone, String)> {
+    let state = status.get("state").and_then(Value::as_str).unwrap_or("idle");
+    if state == "stopped" {
+        let msg = status.get("message").and_then(Value::as_str).unwrap_or("Team stopped");
+        return vec![(TeamTone::Lost, fit(&format!("✗ {} — nothing is running for this task", msg), width))];
+    }
+    if state != "working" {
+        return Vec::new();
+    }
+    let agents: Vec<&Value> = status.get("agents").and_then(Value::as_array).map(|a| a.iter().collect()).unwrap_or_default();
+    let n = agents.len();
+    let health = |a: &Value| a.get("health").and_then(Value::as_str).unwrap_or("ok").to_string();
+    let quiet = agents.iter().filter(|a| health(a) == "quiet").count();
+    let mut head = format!("{} agent{} working on your task", n, if n == 1 { "" } else { "s" });
+    if quiet > 0 {
+        head.push_str(&format!(" · {} quiet", quiet));
+    }
+    let mut lines = Vec::new();
+    if !backend_alive {
+        lines.push((TeamTone::Lost, fit(&format!("✗ Backend exited — the {} agent{} it was running stopped", n, if n == 1 { "" } else { "s" }), width)));
+        return lines;
+    }
+    if silent_for >= TEAM_STATUS_SILENT_SECS {
+        lines.push((TeamTone::Warn, fit(&format!("⚠ {} · no status from the backend for {}", head, fmt_dur(silent_for as f64)), width)));
+    } else {
+        if let Some(next) = status.get("next_update_at").and_then(Value::as_f64) {
+            let left = next - now;
+            if left > 0.0 {
+                let when = if left >= 60.0 { format!("{} min", (left / 60.0).ceil() as u64) } else { format!("{}s", left.ceil() as u64) };
+                head.push_str(&format!(" · next update in {}", when));
+            }
+        }
+        lines.push((if quiet > 0 { TeamTone::Warn } else { TeamTone::Head }, fit(&format!("● {}", head), width)));
+    }
+    let label_w = agents.iter().map(|a| a.get("label").and_then(Value::as_str).unwrap_or("").chars().count()).max().unwrap_or(0).min(12);
+    let shown = if n > max_agents { max_agents.saturating_sub(1) } else { n };
+    for a in agents.iter().take(shown) {
+        let s = |k: &str| a.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        let f = |k: &str| a.get(k).and_then(Value::as_f64).unwrap_or(now);
+        let (glyph, tone, doing) = match health(a).as_str() {
+            "lost" => ("✗", TeamTone::Lost, "worker gone — not running".to_string()),
+            "quiet" => ("◌", TeamTone::Quiet, format!("quiet {} — last: {}", fmt_dur(now - f("last_event_at")), s("doing"))),
+            _ => ("·", TeamTone::Ok, s("doing")),
+        };
+        let phase_count = a.get("phase_count").and_then(Value::as_u64).unwrap_or(0);
+        let phase = if phase_count > 0 {
+            format!("{} {}/{} · ", s("phase"), a.get("phase_index").and_then(Value::as_u64).unwrap_or(0), phase_count)
+        } else {
+            String::new()
+        };
+        let label = fit(&s("label"), label_w);
+        let elapsed = fmt_dur(now - f("started_at"));
+        let left = format!("  {} {:<lw$}  ", glyph, label, lw = label_w);
+        let room = width.saturating_sub(left.chars().count() + elapsed.chars().count() + 1);
+        let middle = fit(&format!("{}{}", phase, doing), room);
+        let pad = room.saturating_sub(middle.chars().count());
+        lines.push((tone, fit(&format!("{}{}{} {}", left, middle, " ".repeat(pad), elapsed), width)));
+    }
+    if shown < n {
+        lines.push((TeamTone::Ok, fit(&format!("  + {} more", n - shown), width)));
+    }
+    lines
+}
+
 #[derive(Clone, Debug)]
 pub struct MenuItem {
     pub cmd: String,
@@ -572,6 +675,9 @@ pub struct ChatState {
     backend_deferred_depth: usize,
     pub input_notice: Option<String>,
     input_trace_path: std::path::PathBuf,
+    /// Latest `team_status` from the backend and when it arrived.
+    pub team_status: Option<(Value, Instant)>,
+    team_redrawn_at: Instant,
 }
 
 #[derive(Clone, Debug)]
@@ -639,6 +745,8 @@ impl ChatState {
             backend_pending_steering: Vec::new(),
             backend_deferred_depth: 0,
             input_notice: None,
+            team_status: None,
+            team_redrawn_at: Instant::now(),
             input_trace_path: project_root().join(".charon_state/input_lifecycle.jsonl"),
         }
     }
@@ -653,11 +761,27 @@ impl ChatState {
             self.backend.maybe_refresh();
         }
         let events = self.backend.poll();
-        let changed = !events.is_empty();
+        let mut changed = !events.is_empty();
         for ev in events {
             self.handle_event(ev);
         }
+        // The band's clocks (elapsed, countdown, backend silence) move without
+        // events, so repaint it once a second while it is shown.
+        if self.team_status.is_some() && self.team_redrawn_at.elapsed() >= Duration::from_secs(1) {
+            self.team_redrawn_at = Instant::now();
+            changed = true;
+        }
         changed
+    }
+
+    pub fn team_band(&self, width: usize, max_agents: usize) -> Vec<(TeamTone, String)> {
+        match &self.team_status {
+            Some((status, at)) => {
+                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+                team_band_lines(status, self.backend_alive, at.elapsed().as_secs(), now, width, max_agents)
+            }
+            None => Vec::new(),
+        }
     }
 
     pub fn request_refresh(&mut self) {
@@ -1520,6 +1644,15 @@ impl ChatState {
                     }
                 }
             }
+            "team_status" => {
+                let state = v.get("state").and_then(Value::as_str).unwrap_or("idle");
+                self.team_status = if state == "idle" { None } else { Some((v.clone(), Instant::now())) };
+            }
+            "team_update" => {
+                for line in v.get("lines").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
+                    self.push_status(line);
+                }
+            }
             "input_stalled" => {
                 let message = v.get("message").and_then(Value::as_str).unwrap_or("Stalled input after worker exit");
                 self.push_error(message);
@@ -2343,6 +2476,45 @@ mod tests {
             active.as_ref().map(|item| item.approval_id.as_str()),
             Some("approval-three")
         );
+    }
+
+    fn team(now: f64) -> Value {
+        json!({"state": "working", "next_update_at": now + 241.0, "agents": [
+            {"label": "engine", "doing": "Edit RecitationEngine.swift", "phase": "implement", "phase_index": 2, "phase_count": 4,
+             "started_at": now - 760.0, "last_event_at": now - 3.0, "health": "ok"},
+            {"label": "ui", "doing": "Bash xcodebuild -scheme Pomemo test", "phase": "verify", "phase_index": 3, "phase_count": 4,
+             "started_at": now - 1290.0, "last_event_at": now - 545.0, "health": "quiet"},
+            {"label": "qa", "doing": "Read PomemoTests.swift", "phase": "inspect", "phase_index": 1, "phase_count": 4,
+             "started_at": now - 95.0, "last_event_at": now - 1.0, "health": "ok"}]})
+    }
+
+    #[test]
+    fn team_band_shows_count_countdown_and_flags_the_quiet_agent() {
+        let now = 1_800_000_000.0;
+        let lines = team_band_lines(&team(now), true, 1, now, 72, 5);
+        let text: Vec<&str> = lines.iter().map(|(_, l)| l.as_str()).collect();
+        assert_eq!(text[0], "● 3 agents working on your task · 1 quiet · next update in 5 min");
+        assert_eq!(text[1], "  · engine  implement 2/4 · Edit RecitationEngine.swift              12m");
+        assert!(text[2].starts_with("  ◌ ui      verify 3/4 · quiet 9m — last: Bash xcodebuild"));
+        assert!(text[2].ends_with("21m") && text[2].chars().count() == 72);
+        assert_eq!(lines[2].0, TeamTone::Quiet);
+        // Narrow terminals truncate instead of wrapping.
+        assert!(team_band_lines(&team(now), true, 1, now, 30, 5).iter().all(|(_, l)| l.chars().count() <= 30));
+    }
+
+    #[test]
+    fn team_band_drops_the_countdown_when_the_backend_goes_silent_or_dies() {
+        let now = 1_800_000_000.0;
+        let silent = team_band_lines(&team(now), true, 20, now, 90, 5);
+        assert!(silent[0].1.starts_with("⚠ 3 agents working") && silent[0].1.contains("no status from the backend for 20s"));
+        assert!(!silent[0].1.contains("next update"));
+        let dead = team_band_lines(&team(now), false, 0, now, 90, 5);
+        assert_eq!(dead.len(), 1);
+        assert_eq!(dead[0].1, "✗ Backend exited — the 3 agents it was running stopped");
+        let stopped = json!({"state": "stopped", "message": "Team stopped — the worker running 2 agents exited"});
+        assert_eq!(team_band_lines(&stopped, true, 0, now, 200, 5)[0].1,
+                   "✗ Team stopped — the worker running 2 agents exited — nothing is running for this task");
+        assert!(team_band_lines(&json!({"state": "idle"}), true, 0, now, 90, 5).is_empty());
     }
 
     #[test]

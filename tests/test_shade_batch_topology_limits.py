@@ -148,7 +148,7 @@ def test_run_shade_records_token_usage_against_topology_budget(tmp_path, monkeyp
         def __init__(self, **kwargs):
             pass
 
-        async def submit_and_collect(self, instruction):
+        async def submit_and_collect(self, instruction, on_event=None):
             return 'ok', [_FakeEvent('message_end', {'usage': {'total_tokens': 77}})]
 
     monkeypatch.setattr('charon.conversation.conversation_engine.ConversationEngine', _FakeEngine)
@@ -192,7 +192,7 @@ def test_run_shade_records_real_cost_against_topology_budget(tmp_path, monkeypat
         def __init__(self, **kwargs):
             pass
 
-        async def submit_and_collect(self, instruction):
+        async def submit_and_collect(self, instruction, on_event=None):
             usage = {'input_tokens': 1000, 'output_tokens': 500, 'total_tokens': 1500}
             return 'ok', [_FakeEvent('message_end', {'usage': usage})]
 

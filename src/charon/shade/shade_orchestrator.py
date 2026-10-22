@@ -306,6 +306,10 @@ def mark_phase_completed(state_dir: Path, contract_id: str, phase_id: str, *, ta
     contract = get_contract(state_dir, contract_id)
     if not contract:
         return None
+    # ConversationEngine emits this sentinel when its execution guard aborts.
+    # A returned string is not proof that the requested work completed.
+    if 'Stopped:' in summary and 'Task is incomplete; do not treat prior claims as final verification.' in summary:
+        return mark_phase_failed(state_dir, contract_id, phase_id, task_id=task_id, error=summary)
     quality = _summary_quality(summary)
     for phase in (contract.get('phases') or []):
         if phase.get('phase_id') != phase_id:
@@ -367,7 +371,7 @@ def mark_phase_failed(state_dir: Path, contract_id: str, phase_id: str, *, task_
     return _update_contract(state_dir, contract)
 
 
-def is_contract_stale(contract: dict, *, stale_after_seconds: int | None = None) -> bool:
+def is_contract_stale(contract: dict, *, stale_after_seconds: int | None = None, state_dir: Path | None = None) -> bool:
     """True if a 'running' contract has gone quiet (no phase update) for
     longer than stale_after_seconds — the same signal
     reconcile_stale_shade_contracts uses to repair orphaned contracts at
@@ -383,6 +387,11 @@ def is_contract_stale(contract: dict, *, stale_after_seconds: int | None = None)
         updated_ts = datetime.fromisoformat(updated_at.replace('Z', '+00:00')).timestamp()
     except Exception:
         return False
+    # A long phase leaves updated_at alone; the shade's heartbeat is the
+    # finer signal that it is still producing events.
+    if state_dir is not None:
+        from charon.shade.shade_activity import last_activity_at
+        updated_ts = max(updated_ts, last_activity_at(state_dir, str(contract.get('id') or '')))
     now = datetime.now(timezone.utc).timestamp()
     return updated_ts > 0 and (now - updated_ts) >= stale_after_seconds
 
@@ -405,7 +414,7 @@ def reconcile_stale_shade_contracts(state_dir: Path, *, stale_after_seconds: int
         stale_after_seconds = config.shade_contract_stall_seconds()
     recovered: list[str] = []
     for contract in load_contracts(state_dir):
-        if not is_contract_stale(contract, stale_after_seconds=stale_after_seconds):
+        if not is_contract_stale(contract, stale_after_seconds=stale_after_seconds, state_dir=state_dir):
             continue
         contract_id = str(contract.get('id') or '')
         contract['status'] = 'failed'
@@ -418,6 +427,18 @@ def reconcile_stale_shade_contracts(state_dir: Path, *, stale_after_seconds: int
         )
         recovered.append(contract_id)
     return recovered
+
+
+def mark_contract_lost(state_dir: Path, contract_id: str, reason: str) -> dict | None:
+    """Fail a 'running' contract whose worker is known to be gone."""
+    contract = get_contract(state_dir, contract_id)
+    if not contract or contract.get('status') != 'running':
+        return None
+    contract['status'] = 'failed'
+    contract['last_error'] = reason
+    contract['completed_at'] = _now_iso()
+    append_phase_event(state_dir, contract_id=contract_id, phase_id='-', event_type='contract_lost', payload={'reason': reason[:240]})
+    return _update_contract(state_dir, contract)
 
 
 def build_phase_instruction(contract: dict, phase: dict) -> str:

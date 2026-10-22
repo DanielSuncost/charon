@@ -29,7 +29,7 @@ def _setup(tmp_path, monkeypatch, *, token_budget, tokens_used, configure_tiers=
         def __init__(self, **kwargs):
             self.messages = []
 
-        async def submit_and_collect(self, instruction):
+        async def submit_and_collect(self, instruction, on_event=None):
             return 'ok', [_FakeEvent('message_end', {'usage': {'total_tokens': 1}})]
 
     monkeypatch.setattr('charon.providers.model_registry.get_shade_provider_and_model', _fake_get_shade_provider_and_model)

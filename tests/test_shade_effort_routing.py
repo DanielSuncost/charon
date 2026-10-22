@@ -96,7 +96,7 @@ def _run(tmp_path, monkeypatch, *, task_complexity: str, token_budget: int, toke
             captured['engine_kwargs'] = kwargs
             self.messages = []
 
-        async def submit_and_collect(self, instruction):
+        async def submit_and_collect(self, instruction, on_event=None):
             return 'ok', [_FakeEvent('message_end', {'usage': {'total_tokens': 1}})]
 
     monkeypatch.setattr('charon.providers.model_registry.get_shade_provider_and_model',
