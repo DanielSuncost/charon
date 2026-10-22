@@ -193,6 +193,14 @@ def _evt(etype: str, **data) -> EngineEvent:
     return EngineEvent(type=etype, data=data)
 
 
+# Events that show a submission is still moving, for the no-progress guard.
+_PROGRESS_EVENTS = frozenset({
+    'turn_start', 'text_delta', 'thinking_delta', 'tool_call', 'message_end',
+    'tool_execution_start', 'tool_execution_output', 'tool_execution_end',
+    'compaction_end',
+})
+
+
 # ============================================================================
 # System prompt builder
 # ============================================================================
@@ -867,7 +875,9 @@ class ConversationEngine:
         base = self.system_prompt + '\n\n' + TASK_GUIDANCE
         if not self.interactive:
             base += '\n' + NON_INTERACTIVE_GUIDANCE
-        base += f'\nTask time budget: {config.task_time_budget_seconds()} seconds per submission. Preserve partial work before it expires.'
+        budget = config.task_time_budget_seconds(self.interactive)
+        if budget:
+            base += f'\nTask time budget: {budget} seconds per submission. Preserve partial work before it expires.'
         guidance = getattr(self, '_recall_guidance', None)
         if guidance:
             return f"{base}\n\n{guidance}"
@@ -1244,9 +1254,25 @@ class ConversationEngine:
         self._loop_guard = LoopGuard(config.consecutive_tool_errors(), config.stagnant_tool_calls())
         # Old tool threads retain their cancelled token if a new submission starts.
         self._turn_cancel_event = threading.Event()
+        # Stop only a wedged submission: no progress for the idle window, or
+        # (unattended runs) the wall-clock cap. Loops that do make "progress"
+        # are LoopGuard's job.
+        wall = config.task_time_budget_seconds(self.interactive)
+        idle = config.task_idle_timeout_seconds()
+        progress = {'at': time.monotonic(), 'tools': 0}
+
         async def deadline():
-            await asyncio.sleep(config.task_time_budget_seconds())
-            self._guard_reason = 'task time budget exhausted'
+            started = time.monotonic()
+            poll = min([0.5] + [limit / 4 for limit in (wall, idle) if limit])
+            while True:
+                now = time.monotonic()
+                if wall and now - started >= wall:
+                    self._guard_reason = f'task time budget exhausted ({wall:g}s wall clock)'
+                    break
+                if idle and not progress['tools'] and now - progress['at'] >= idle:
+                    self._guard_reason = f'no progress for {idle:g}s'
+                    break
+                await asyncio.sleep(poll)
             self.abort()
         watchdog = asyncio.create_task(deadline())
         self._activate_tools_for_text(user_message)
@@ -1261,6 +1287,12 @@ class ConversationEngine:
 
         try:
             async for event in self._submit_impl(user_message):
+                if event.type in _PROGRESS_EVENTS:
+                    progress['at'] = time.monotonic()
+                    if event.type == 'tool_execution_start':
+                        progress['tools'] += 1
+                    elif event.type == 'tool_execution_end':
+                        progress['tools'] = max(0, progress['tools'] - 1)
                 if event.type == 'turn_start':
                     counts['turns'] += 1
                     mark_once('provider_start')

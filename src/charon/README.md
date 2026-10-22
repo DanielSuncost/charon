@@ -169,9 +169,10 @@ Per-submission limits:
 | --- | --- | --- |
 | `CHARON_CONSECUTIVE_TOOL_ERRORS` | 3 | Consecutive failed tool results |
 | `CHARON_STAGNANT_TOOL_CALLS` | 8 | Repeated observations without new evidence |
-| `CHARON_TASK_TIME_BUDGET_SECONDS` | 300 | Elapsed time across provider/tool work |
+| `CHARON_TASK_IDLE_SECONDS` | 600 | Time with no model output or tool activity (0 = off) |
+| `CHARON_TASK_TIME_BUDGET_SECONDS` | 1800 unattended, none interactive | Wall-clock cap per submission (0 = none) |
 
-Limits are positive integers, clamped to a minimum of 1. The first error/stagnation
+The error and stagnation limits are positive integers (minimum 1); the time limits take 0 to disable. The first error/stagnation
 threshold asks the model to change strategy; the next threshold stops that submission.
 The guard hashes tool name and output (not arguments), and accepts tool result
 `details.state_changed=True` as explicit progress. Novel output is evidence of

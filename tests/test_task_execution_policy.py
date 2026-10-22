@@ -112,7 +112,7 @@ def test_stagnation_tracks_repeated_observations_not_argument_variations():
 
 def test_deadline_cancels_waiting_provider_and_records_incomplete(tmp_path, monkeypatch):
     from charon.infra import config
-    monkeypatch.setattr(config, 'task_time_budget_seconds', lambda: 0.02)
+    monkeypatch.setattr(config, 'task_time_budget_seconds', lambda interactive=False: 0.02)
 
     class Waiting(Provider):
         closed = False
@@ -130,12 +130,13 @@ def test_deadline_cancels_waiting_provider_and_records_incomplete(tmp_path, monk
     assert provider.closed
     assert any(event.type == 'budget_stop' for event in events)
     assert 'task time budget exhausted' in e.messages[-1].content
+    assert 'Existing artifacts are retained' in e.messages[-1].content
 
 
 def test_deadline_signals_running_tool_and_keeps_protocol_valid(tmp_path, monkeypatch):
     from charon.conversation import conversation_engine as module
     from charon.infra import config
-    monkeypatch.setattr(config, 'task_time_budget_seconds', lambda: 0.02)
+    monkeypatch.setattr(config, 'task_time_budget_seconds', lambda interactive=False: 0.02)
 
     def slow(name, args, ctx):
         assert ctx.cancel_event.wait(timeout=2)
@@ -147,6 +148,85 @@ def test_deadline_signals_running_tool_and_keeps_protocol_valid(tmp_path, monkey
     assert any(event.type == 'budget_stop' for event in events)
     assert len([m for m in e.messages if m.role == 'tool_result']) == 1
     assert e._turn_cancel_event.is_set()
+
+
+class Slow(Provider):
+    """Streams for `seconds` in small steps: slow, but always progressing."""
+
+    def __init__(self, seconds, step=0.05):
+        super().__init__()
+        self.seconds, self.step = seconds, step
+
+    async def stream(self, **kwargs):
+        self.calls += 1
+        for _ in range(int(self.seconds / self.step)):
+            await asyncio.sleep(self.step)
+            yield StreamDelta(type='text', text='.')
+        yield StreamDelta(type='done')
+
+
+def test_long_task_that_keeps_progressing_is_not_stopped(tmp_path, monkeypatch):
+    from charon.infra import config
+    monkeypatch.delenv('CHARON_TASK_TIME_BUDGET_SECONDS', raising=False)
+    monkeypatch.setattr(config, 'task_idle_timeout_seconds', lambda: 0.2)
+    e = engine(tmp_path, Slow(1.0), interactive=True)        # 5x the idle window
+    events = collect(e)
+    assert not any(event.type == 'budget_stop' for event in events)
+    assert 'Stopped:' not in e.messages[-1].content
+
+
+def test_silent_running_tool_is_not_idle(tmp_path, monkeypatch):
+    import time as _time
+    from charon.conversation import conversation_engine as module
+    from charon.infra import config
+    monkeypatch.delenv('CHARON_TASK_TIME_BUDGET_SECONDS', raising=False)
+    monkeypatch.setattr(config, 'task_idle_timeout_seconds', lambda: 0.1)
+    monkeypatch.setattr(module, 'execute_tool', lambda name, args, ctx: (_time.sleep(0.5), ToolResult(content='built'))[1])
+
+    class OneTool(Provider):
+        async def stream(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                yield StreamDelta(type='tool_call', tool_call=ToolCall(id='c1', name='Bash', arguments={}))
+            else:
+                yield StreamDelta(type='text', text='Build finished.')
+            yield StreamDelta(type='done')
+
+    e = engine(tmp_path, OneTool(), interactive=True)
+    events = collect(e)
+    assert not any(event.type == 'budget_stop' for event in events)
+    assert e.messages[-1].content == 'Build finished.'
+
+
+def test_wedged_submission_is_still_stopped_by_the_idle_guard(tmp_path, monkeypatch):
+    from charon.infra import config
+    monkeypatch.delenv('CHARON_TASK_TIME_BUDGET_SECONDS', raising=False)
+    monkeypatch.setattr(config, 'task_idle_timeout_seconds', lambda: 0.1)
+
+    class Hung(Provider):
+        async def stream(self, **kwargs):
+            await asyncio.sleep(60)
+            yield StreamDelta(type='done')
+
+    e = engine(tmp_path, Hung(), interactive=True)
+    events = collect(e)
+    assert any(event.type == 'budget_stop' for event in events)
+    assert 'Stopped: no progress for 0.1s' in e.messages[-1].content
+    assert 'Task is incomplete' in e.messages[-1].content
+
+
+def test_wall_clock_cap_is_for_unattended_runs_unless_set(tmp_path, monkeypatch):
+    from charon.infra import config
+    monkeypatch.delenv('CHARON_TASK_TIME_BUDGET_SECONDS', raising=False)
+    assert config.task_time_budget_seconds(interactive=True) == 0
+    assert config.task_time_budget_seconds(interactive=False) == 1800
+    assert 'Task time budget' not in engine(tmp_path, Provider(), interactive=True)._get_system_prompt()
+    assert 'Task time budget: 1800 seconds' in engine(tmp_path, Provider(), interactive=False)._get_system_prompt()
+    monkeypatch.setenv('CHARON_TASK_TIME_BUDGET_SECONDS', '7200')
+    assert config.task_time_budget_seconds(interactive=True) == 7200
+    assert config.task_time_budget_seconds(interactive=False) == 7200
+    monkeypatch.setenv('CHARON_TASK_TIME_BUDGET_SECONDS', '0')
+    assert config.task_time_budget_seconds(interactive=False) == 0
 
 
 def test_direct_noninteractive_clarify_does_not_create_state(tmp_path):
