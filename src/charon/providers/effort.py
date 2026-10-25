@@ -66,6 +66,9 @@ CODEX_EFFORTS: dict[str, tuple[str, ...]] = {
 # Models the table does not know keep exactly what every Codex model was sent
 # before this existed: low..high, with 'minimal' folded to 'low'.
 CODEX_DEFAULT_EFFORTS: tuple[str, ...] = ('low', 'medium', 'high')
+# DeepSeek's reasoning_effort ladder (charon.providers.deepseek has the source);
+# its listing's effort.supported_levels, when fetched, is learned over this.
+DEEPSEEK_EFFORTS: tuple[str, ...] = ('low', 'high', 'max')
 
 
 # Ladders learned at runtime (provider listing or a rejection), by exact slug.
@@ -116,10 +119,12 @@ def is_valid_thinking_level(value) -> bool:
 
 
 def supported_efforts(model_id: str) -> tuple[str, ...]:
-    """The effort ladder a Codex model accepts (learned, exact slug, then longest known prefix)."""
+    """The effort ladder a model accepts (learned, exact slug, then longest known prefix)."""
     mid = str(model_id or '').strip().lower()
     if mid in _LEARNED_EFFORTS:
         return _LEARNED_EFFORTS[mid]
+    if mid.startswith('deepseek-'):
+        return DEEPSEEK_EFFORTS
     if mid in CODEX_EFFORTS:
         return CODEX_EFFORTS[mid]
     for known in sorted(CODEX_EFFORTS, key=len, reverse=True):

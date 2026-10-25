@@ -47,7 +47,7 @@ class SetupMixin:
             arg_parts = arg.split()
             force_oauth = '--force' in arg_parts
             arg = arg_parts[0] if arg_parts else ''
-            allowed = {'codex', 'claude-code', 'opencode', 'api', 'lmstudio'}
+            allowed = {'codex', 'claude-code', 'opencode', 'api', 'lmstudio', 'deepseek'}
             if arg not in allowed:
                 common.emit({'type': 'error', 'error': f'Unknown provider: {arg}. Options: {", ".join(sorted(allowed))}', 'request_id': request_id})
                 return
@@ -206,6 +206,28 @@ class SetupMixin:
                     _revert_target_state()
                     common.emit({'type': 'error', 'error': f'Auth setup failed: {e}', 'request_id': request_id})
                     common.emit({'type': 'status', 'message': 'Provider switch interrupted. Restored previous provider for this session.', 'request_id': request_id})
+            elif arg == 'deepseek':
+                # API-key provider: the key lives in Charon's auth store (or
+                # DEEPSEEK_API_KEY[_FILE]); with one in hand, go straight to models.
+                from charon.providers import deepseek
+                if force_oauth or not deepseek.read_api_key(common.STATE_DIR):
+                    target_state['step'] = 'provider-key'
+                    _persist_target_state()
+                    common.emit({
+                        'type': 'status',
+                        'message': (
+                            'Sign in to DeepSeek: paste your API key with /setup api-key <key> '
+                            '(from platform.deepseek.com/api_keys). Charon stores it in its auth store, '
+                            'mode 0600. DEEPSEEK_API_KEY or DEEPSEEK_API_KEY_FILE also work.'
+                        ),
+                        'request_id': request_id,
+                    })
+                    return
+                target_state['provider_auth'] = 'api_key'
+                target_state['step'] = 'model'
+                _persist_target_state()
+                common.emit({'type': 'status', 'message': '✓ Using your saved DeepSeek API key.', 'request_id': request_id})
+                _continue_provider_setup_after_auth()
             else:
                 if arg == 'lmstudio':
                     detected = self._detect_lmstudio_models()
@@ -264,6 +286,12 @@ class SetupMixin:
                     common.emit({'type': 'error', 'error': 'Usage: /setup model <model_name>', 'request_id': request_id})
                 return
 
+            if provider == 'deepseek':
+                from charon.providers import deepseek
+                if not deepseek.agent_usable(arg):
+                    common.emit({'type': 'error', 'error': f'{arg} is retired by DeepSeek and cannot run agent turns. Pick deepseek-flash or deepseek-v4-pro.', 'request_id': request_id})
+                    return
+
             # Validate model name — warn but don't reject custom names
             model_ids = [m['id'] for m in models]
             if models and arg not in model_ids:
@@ -302,7 +330,7 @@ class SetupMixin:
             provider = str(target_state.get('provider') or onboarding.get('provider') or '').strip()
             model = str(target_state.get('model') or target_state.get('provider_model') or '').strip()
             current = normalize_thinking_level(target_state.get('reasoning_effort') or target_state.get('thinking_level'))
-            ladder = supported_efforts(model) if (provider == 'codex' and model) else THINKING_LEVELS[1:]
+            ladder = supported_efforts(model) if (provider in ('codex', 'deepseek') and model) else THINKING_LEVELS[1:]
             if not arg:
                 common.emit({
                     'type': 'status',
@@ -326,7 +354,7 @@ class SetupMixin:
                 save_session_provider_config(common.STATE_DIR, self._active_agent_id, target_state)
             self._dispose_engine()  # the new level applies from the next turn
             note = ''
-            if provider == 'codex' and model and level != 'off':
+            if provider in ('codex', 'deepseek') and model and level != 'off':
                 sent = clamp_effort(level, model)
                 if sent != level:
                     note = f' ({model} tops out at {sent}; requests will be sent at {sent})'
@@ -340,6 +368,7 @@ class SetupMixin:
                         {'id': 'same', 'desc': 'Same as main provider (default)'},
                         {'id': 'lmstudio', 'desc': 'LM Studio (local)'},
                         {'id': 'api', 'desc': 'OpenAI-compatible API'},
+                        {'id': 'deepseek', 'desc': 'DeepSeek (uses your DeepSeek sign-in)'},
                     ],
                     'request_id': request_id,
                 })
@@ -388,6 +417,12 @@ class SetupMixin:
                                 return
                     except Exception:
                         pass
+                elif shade_provider == 'deepseek':
+                    from charon.providers.model_catalog import get_models
+                    models = get_models(common.STATE_DIR, 'deepseek').models
+                    if models:
+                        common.emit({'type': 'model_picker', 'models': models, 'provider': shade_provider, 'context': 'shade', 'request_id': request_id})
+                        return
                 common.emit({'type': 'error', 'error': 'Usage: /setup shade-model <model_name>', 'request_id': request_id})
                 return
             # Save model to registry
@@ -402,6 +437,13 @@ class SetupMixin:
             else:
                 reg['shade_model'] = arg
                 reg['shade_provider'] = shade_provider or 'openai'
+            if reg.get('shade_provider') == 'deepseek':
+                from charon.providers import deepseek
+                if not deepseek.agent_usable(reg['shade_model']):
+                    common.emit({'type': 'error', 'error': f'{reg["shade_model"]} is retired by DeepSeek and cannot run shade turns.', 'request_id': request_id})
+                    return
+                reg['shade_base_url'] = deepseek.BASE_URL
+                reg['shade_api_key'] = None  # read from the DeepSeek sign-in, not copied here
             if reg.get('shade_provider') in ('lmstudio', 'local', 'ollama'):
                 reg['shade_base_url'] = 'http://127.0.0.1:1234/v1'
                 reg['shade_api_key'] = 'not-needed'
@@ -474,6 +516,22 @@ class SetupMixin:
             self._save_onboarding(onboarding)
             self._dispose_engine()  # force re-creation with new config
             self._on_setup_complete(onboarding, request_id)
+        elif subcmd in ('api-key',) and self._setup_provider() == 'deepseek':
+            from charon.providers import deepseek
+            if not arg:
+                common.emit({'type': 'error', 'error': 'Usage: /setup api-key <your DeepSeek API key>', 'request_id': request_id})
+                return
+            from charon.providers.model_catalog import get_models
+            # The listing needs a valid key, so fetching it is the sign-in
+            # check; the key is stored only once DeepSeek has accepted it.
+            catalog = get_models(common.STATE_DIR, 'deepseek', refresh=True, credentials=(arg, ''))
+            if catalog.source != 'live':
+                common.emit({'type': 'error', 'error': f'DeepSeek did not accept the key: {catalog.error or "no model listing"}', 'request_id': request_id})
+                return
+            deepseek.save_api_key(arg)
+            self._dispose_engine()
+            common.emit({'type': 'status', 'message': '✓ DeepSeek API key saved.', 'request_id': request_id})
+            self._run_setup_command('provider deepseek', request_id, skip_prompt=True)
         elif subcmd in ('api-key',):
             onboarding['api_key'] = arg
             if not onboarding.get('provider'):
@@ -492,6 +550,12 @@ class SetupMixin:
             self._on_setup_complete(onboarding, request_id)
         else:
             common.emit({'type': 'error', 'error': f'Unknown setup command: {subcmd}', 'request_id': request_id})
+
+    def _setup_provider(self) -> str:
+        state = dict(common._load_json(common.STATE_DIR / 'onboarding.json', {}) or {})
+        if self._active_agent_id:
+            state.update(load_session_provider_config(common.STATE_DIR, self._active_agent_id) or {})
+        return str(state.get('provider') or '').strip().lower()
 
     def _repair_incomplete_onboarding_startup(self) -> dict:
         onboarding = common._load_json(common.STATE_DIR / 'onboarding.json', {})

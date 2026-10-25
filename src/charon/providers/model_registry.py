@@ -186,9 +186,14 @@ def _get_shared_shade(state_dir: Path, reg: dict):
         )
 
         base_url = reg.get('shade_base_url')
-        api_key = reg.get('shade_api_key') or read_secret_env(
-            'OPENROUTER_API_KEY', 'OPENROUTER_API_KEY_FILE',
-        )
+        if shade_provider_name == 'deepseek':
+            from charon.providers import deepseek
+            base_url = base_url or deepseek.BASE_URL
+            api_key = reg.get('shade_api_key') or deepseek.read_api_key(state_dir)
+        else:
+            api_key = reg.get('shade_api_key') or read_secret_env(
+                'OPENROUTER_API_KEY', 'OPENROUTER_API_KEY_FILE',
+            )
 
         if shade_provider_name == 'anthropic':
             from charon.providers.anthropic import AnthropicProvider

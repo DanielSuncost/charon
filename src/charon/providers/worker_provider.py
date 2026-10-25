@@ -60,6 +60,10 @@ def list_available_worker_providers(state_dir: Path) -> list[str]:
         # Readiness below reports an unreadable/missing secret as unready.
         pass
 
+    from charon.providers import deepseek
+    if deepseek.read_api_key(auth_store=auth):
+        available.append('deepseek')
+
     # Always offer LM Studio as a local worker option.
     # Reachability can be validated later; this keeps setup discoverable.
     available.append('lmstudio')
@@ -130,6 +134,20 @@ def get_worker_provider_status(state_dir: Path) -> dict[str, Any]:
                 'configured_provider': shade_provider,
                 'configured_model': shade_model,
                 'base_url': shade_base_url or 'http://127.0.0.1:1234/v1',
+            }
+        if shade_provider == 'deepseek':
+            from charon.providers import deepseek
+            ready = deepseek.agent_usable(shade_model) and bool(
+                shade_api_key or deepseek.read_api_key(state_dir)
+            )
+            return {
+                'ok': ready,
+                'reason': '' if ready else 'unready',
+                'available_providers': available,
+                'mode': mode,
+                'configured_provider': shade_provider,
+                'configured_model': shade_model,
+                'base_url': shade_base_url or deepseek.BASE_URL,
             }
         is_openrouter = (
             shade_provider in ('openrouter', 'api')

@@ -94,6 +94,10 @@ CONTEXT_WINDOWS = {
     # (65536) — a 16x undercount against its real window, which would truncate
     # context on the one model whose selling point is the 1M+ window.
     'gpt-6-astra': 1050000,
+    # DeepSeek (GET /models context_window, 2026-10)
+    'deepseek-flash': 1048576,
+    'deepseek-v4-flash': 1048576,
+    'deepseek-v4-pro': 1048576,
     # Local (conservative defaults)
     'qwen3-30b-a3b': 65536,
 }
@@ -112,6 +116,7 @@ PROVIDER_MAP = {
     'ollama': 'local',
     'api': 'openai',        # generic API → OpenAI-compatible
     'opencode': 'openai',   # opencode uses OpenAI-compat
+    'deepseek': 'openai',   # OpenAI-compatible chat completions at api.deepseek.com
 }
 
 # A signed-in provider with no model picked has no default: inventing one made
@@ -129,6 +134,7 @@ ROUTE_PROVIDER_ALIASES = {
     'api': ('openai', 'api'),
     'openai-compatible': ('openai', 'api'),
     'opencode': ('openai', 'api'),
+    'deepseek': ('openai', 'deepseek'),
 }
 _CREDENTIAL_CACHE_SALT = os.urandom(32)
 
@@ -241,6 +247,9 @@ def resolve_provider_config(
     # For API/opencode providers, we might need a custom base URL
     if provider_raw in ('api', 'opencode') and not base_url:
         base_url = str(effective.get('provider_base_url') or '').strip() or None
+    if provider_raw == 'deepseek':
+        from charon.providers import deepseek
+        base_url = deepseek.BASE_URL
 
     return {
         'provider_name': provider_name,
@@ -321,6 +330,11 @@ def _resolve_api_key(
     auth_store: dict,
 ) -> str:
     """Resolve API key from env vars, auth store, or onboarding config."""
+    if provider_raw == 'deepseek':
+        # Its own key only: falling through would send OPENAI_API_KEY or a
+        # generic onboarding api_key to api.deepseek.com.
+        from charon.providers import deepseek
+        return deepseek.read_api_key(auth_store=auth_store)
 
     # 1. Environment variables (highest priority)
     env_keys = {
@@ -563,6 +577,19 @@ def resolve_route_override(
         base_url = fixed_base
     elif provider_raw == 'openai':
         fixed_base = 'https://api.openai.com/v1'
+        if (
+            explicit_base
+            and _validate_route_base_url(explicit_base, provider_alias)
+            != fixed_base
+        ):
+            raise ProviderRouteError(
+                f"routed provider {provider_alias!r} cannot honor base_url "
+                f"{explicit_base!r}"
+            )
+        base_url = fixed_base
+    elif provider_raw == 'deepseek':
+        from charon.providers import deepseek
+        fixed_base = deepseek.BASE_URL
         if (
             explicit_base
             and _validate_route_base_url(explicit_base, provider_alias)
@@ -922,6 +949,7 @@ def create_provider_and_model(
         provider = HttpxOpenAIProvider(
             base_url=base_url,
             api_key=provider_config['api_key'],
+            provider_name='deepseek' if provider_config.get('provider_raw') == 'deepseek' else 'openai-compatible',
         )
 
     if provider_config.get('route_override'):
@@ -949,6 +977,8 @@ def describe_provider_endpoint(provider: Provider, model: ModelInfo) -> dict:
                 provider_alias = model_provider
             elif base_url == 'https://api.openai.com/v1':
                 provider_alias = 'openai'
+            elif getattr(provider, '_provider_name', '') == 'deepseek':
+                provider_alias = 'deepseek'
             else:
                 provider_alias = 'api'
         elif model_provider in ROUTE_PROVIDER_ALIASES:

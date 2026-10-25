@@ -12,6 +12,9 @@ release meant a code change. This module asks the provider instead:
   ``charon.providers.effort`` so a new model gets its real ladder.
 * ``openai`` / ``api`` / ``opencode`` / ``openrouter`` / ``lmstudio`` — the
   OpenAI-compatible ``GET {base_url}/models`` (OpenRouter's is public).
+* ``deepseek`` — ``GET https://api.deepseek.com/models`` with the API key (401
+  without one). Entries carry ``context_window`` and ``effort.supported_levels``,
+  fed to ``charon.providers.effort`` like Codex's.
 
 Results are cached in ``<state>/model_catalog.json`` with a TTL. When a fetch
 fails (offline, outage, an endpoint that refuses the token) the picker falls
@@ -28,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from charon.providers import effort
+from charon.providers import deepseek, effort
 
 try:
     from charon.infra.diagnostics import record as _diag
@@ -48,6 +51,7 @@ CODEX_MODELS_URL = 'https://chatgpt.com/backend-api/codex/models'
 # The Codex listing hides models newer than the client asks for.
 CODEX_CLIENT_VERSION = '0.163.0'
 OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
+DEEPSEEK_BASE_URL = deepseek.BASE_URL
 OPENAI_BASE_URL = 'https://api.openai.com/v1'
 LMSTUDIO_BASE_URL = 'http://127.0.0.1:1234/v1'
 
@@ -77,9 +81,11 @@ STATIC_MODELS: dict[str, list[dict[str, str]]] = {
     ],
 }
 STATIC_MODELS['anthropic'] = STATIC_MODELS['claude-code']
+STATIC_MODELS['deepseek'] = deepseek.STATIC_MODELS
 
 DISCOVERABLE = frozenset({
     'claude-code', 'anthropic', 'codex', 'openai', 'api', 'opencode', 'openrouter', 'lmstudio',
+    'deepseek',
 })
 # Providers whose listing needs no credential.
 _PUBLIC_LISTING = frozenset({'openrouter', 'lmstudio'})
@@ -187,6 +193,31 @@ def _fetch_openai_compatible(base_url: str, api_key: str, get: Callable = _http_
     return models
 
 
+def _fetch_deepseek(api_key: str, get: Callable = _http_get) -> list[dict]:
+    data = get(DEEPSEEK_BASE_URL + '/models', {'Accept': 'application/json', 'Authorization': f'Bearer {api_key}'}, None)
+    models: list[dict] = []
+    for m in data.get('data') or []:
+        mid = str(m.get('id') or '').strip()
+        if not mid or not deepseek.agent_usable(mid):
+            continue
+        levels = [str(lvl).strip().lower() for lvl in (m.get('effort') or {}).get('supported_levels') or []]
+        wire = [lvl for lvl in levels if lvl in effort.EFFORT_LADDER]
+        desc = str(m.get('name') or mid)
+        if m.get('context_window'):
+            desc += f' — {int(m["context_window"]) // 1024}K context'
+        if wire:
+            desc += f', effort {"/".join(wire)}'
+        entry: dict[str, Any] = {'id': mid, 'desc': desc}
+        if wire:
+            entry['efforts'] = wire
+        if (m.get('effort') or {}).get('default_level'):
+            entry['default_effort'] = str(m['effort']['default_level'])
+        if m.get('context_window'):
+            entry['context_window'] = int(m['context_window'])
+        models.append(entry)
+    return models
+
+
 def discover(provider_raw: str, api_key: str = '', base_url: str = '', get: Callable = _http_get) -> list[dict]:
     """Ask the provider for its model list. Raises DiscoveryError on failure."""
     p = provider_raw
@@ -199,6 +230,8 @@ def discover(provider_raw: str, api_key: str = '', base_url: str = '', get: Call
             return _fetch_anthropic(api_key, get)
         if p == 'codex':
             return _fetch_codex(api_key, get)
+        if p == 'deepseek':
+            return _fetch_deepseek(api_key, get)
         default_base = {
             'openrouter': OPENROUTER_BASE_URL, 'lmstudio': LMSTUDIO_BASE_URL, 'openai': OPENAI_BASE_URL,
         }.get(p, '')

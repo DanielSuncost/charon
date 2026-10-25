@@ -171,6 +171,15 @@ impl BackendProcess {
     }
 }
 
+/// A command as it may be shown or remembered: an API key typed into
+/// `/setup api-key` never reaches the transcript, the message list or history.
+fn redact_secret_command(text: &str) -> String {
+    match text.strip_prefix("/setup api-key ") {
+        Some(key) if !key.trim().is_empty() => "/setup api-key [hidden]".to_string(),
+        _ => text.to_string(),
+    }
+}
+
 fn merge_json_objects(dst: &mut Map<String, Value>, src: &Map<String, Value>) {
     for (k, v) in src {
         match (dst.get_mut(k), v) {
@@ -819,7 +828,7 @@ impl ChatState {
             }
             self.input.trim().to_string()
         };
-        self.input_history.push(text.clone());
+        self.input_history.push(redact_secret_command(&text));
         self.history_index = None;
         self.scroll = 0;
 
@@ -851,7 +860,7 @@ impl ChatState {
                     if !self.send_tracked_steer(msg) { return; }
                 }
             } else {
-                self.transcript.push(format!("> {}", text));
+                self.transcript.push(format!("> {}", redact_secret_command(&text)));
                 let _ = self.backend.send_command(&text);
             }
         } else if self.streaming {
@@ -1061,10 +1070,11 @@ impl ChatState {
             }
             if !user_input.is_empty() && user_input.len() > item.cmd.len() {
                 // User typed additional args beyond the menu item — send the full input
-                self.transcript.push(format!("> {}", user_input));
-                self.messages.push(ChatMessage::User { text: user_input.clone() });
+                let shown = redact_secret_command(&user_input);
+                self.transcript.push(format!("> {}", shown));
+                self.messages.push(ChatMessage::User { text: shown.clone() });
                 self.scroll = 0;
-                self.input_history.push(user_input.clone());
+                self.input_history.push(shown);
                 self.history_index = None;
                 if user_input.starts_with('/') {
                     let _ = self.backend.send_command(&user_input);
@@ -1954,7 +1964,7 @@ impl ChatState {
             item("/setup provider", "Configure provider"),
             item("/setup model", "Choose model"),
             item("/setup project", "Set current project"),
-            item("/setup api-key", "Save API key for API provider"),
+            item("/setup api-key", "Save API key (DeepSeek sign-in, or API provider)"),
             item("/setup auth-code", "Paste OAuth auth code manually"),
             item("/setup complete", "Mark setup complete"),
             item("/setup no-provider", "Run without provider setup"),
@@ -2059,6 +2069,7 @@ impl ChatState {
             items.extend([
                 item("/setup provider claude-code", "Anthropic Claude OAuth"),
                 item("/setup provider codex", "OpenAI Codex OAuth"),
+                item("/setup provider deepseek", "DeepSeek (API key)"),
                 item("/setup provider opencode", "OpenCode provider"),
                 item("/setup provider lmstudio", "Local LM Studio"),
                 item("/setup provider api", "Custom API endpoint"),
@@ -2071,6 +2082,7 @@ impl ChatState {
                 item("/setup shade-provider same", "Same as main provider"),
                 item("/setup shade-provider lmstudio", "LM Studio local shade model"),
                 item("/setup shade-provider api", "OpenAI-compatible API for shade"),
+                item("/setup shade-provider deepseek", "DeepSeek shade (uses your DeepSeek sign-in)"),
             ]);
         }
 
@@ -2085,6 +2097,7 @@ impl ChatState {
             items.extend([
                 item("/provider claude-code", "Switch to Anthropic Claude"),
                 item("/provider codex", "Switch to OpenAI Codex"),
+                item("/provider deepseek", "Switch to DeepSeek"),
                 item("/provider lmstudio", "Switch to LM Studio"),
                 item("/provider api", "Switch to API provider"),
             ]);

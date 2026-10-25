@@ -116,7 +116,12 @@ def _save_auth(store: dict) -> None:
         os.chmod(AUTH_DIR, 0o700)
     except Exception as e:
         _diag('charon_auth', 'could not chmod auth dir to 0700', error=e)
-    AUTH_FILE.write_text(json.dumps(store, indent=2))
+    # Created 0600 and swapped in, so the secrets are never on disk under the umask.
+    tmp = AUTH_FILE.with_suffix('.tmp')
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as f:
+        f.write(json.dumps(store, indent=2))
+    os.replace(tmp, AUTH_FILE)
     try:
         os.chmod(AUTH_FILE, 0o600)
     except Exception as e:

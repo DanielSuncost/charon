@@ -85,6 +85,7 @@ from charon.providers.http_client import AsyncClientPool  # noqa: E402
 from charon.providers.http_errors import exception_error, http_error  # noqa: E402
 from charon.providers.image_content import has_image_block, to_chat_completions_parts  # noqa: E402
 from charon.providers.request_observability import observe_provider_error, observe_reasoning_request  # noqa: E402
+from charon.providers import deepseek  # noqa: E402
 
 try:
     from charon.infra.diagnostics import record as _diag
@@ -241,7 +242,8 @@ class HttpxOpenAIProvider:
         api_messages: list[dict[str, Any]] = [
             {'role': 'system', 'content': system_prompt},
         ]
-        api_messages.extend(_convert_messages(messages))
+        is_deepseek = self._provider_name == 'deepseek'
+        api_messages.extend(_convert_messages(messages, reasoning_content=is_deepseek))
 
         body: dict[str, Any] = {
             'model': model.model_id,
@@ -261,7 +263,16 @@ class HttpxOpenAIProvider:
         require_effort = str(os.environ.get('CHARON_REQUIRE_REASONING_EFFORT') or '').lower() in {
             '1', 'true', 'yes', 'on',
         }
-        if self._provider_name == 'openrouter':
+        thinking_downgraded = None
+        if is_deepseek:
+            thinking_downgraded = deepseek.apply_thinking(
+                body, requested_effort, model.model_id,
+                _assistant_turns_have_reasoning(messages),
+            )
+            if thinking_downgraded:
+                _diag('httpx_openai', 'DeepSeek request sent without thinking',
+                      reason=thinking_downgraded, model=model.model_id, requested=requested_effort)
+        elif self._provider_name == 'openrouter':
             # OpenRouter accepts Charon's ladder directly except for the two
             # spelling differences at its ends: off -> none, ultra -> max.
             wire_effort = {'off': 'none', 'ultra': 'max'}.get(
@@ -284,9 +295,11 @@ class HttpxOpenAIProvider:
             provider=self._provider_name,
             model=model.model_id,
             requested=requested_effort,
-            wire_field='reasoning_effort' if 'reasoning_effort' in body else None,
-            wire_value=body.get('reasoning_effort'),
+            wire_field='reasoning_effort' if 'reasoning_effort' in body else ('thinking' if 'thinking' in body else None),
+            wire_value=body.get('reasoning_effort') or (body.get('thinking') or {}).get('type'),
         )
+        if thinking_downgraded:
+            reasoning_observation['reasoning_downgraded'] = thinking_downgraded
 
         headers = {
             'Content-Type': 'application/json',
@@ -378,7 +391,8 @@ class HttpxOpenAIProvider:
                             usage_data = {
                                 'input_tokens': int(chunk_usage.get('prompt_tokens', 0) or chunk_usage.get('input_tokens', 0) or 0),
                                 'output_tokens': int(chunk_usage.get('completion_tokens', 0) or chunk_usage.get('output_tokens', 0) or 0),
-                                'cache_read_tokens': int(prompt_details.get('cached_tokens', 0) or 0),
+                                # DeepSeek names its cache hits prompt_cache_hit_tokens.
+                                'cache_read_tokens': int(prompt_details.get('cached_tokens', 0) or chunk_usage.get('prompt_cache_hit_tokens', 0) or 0),
                                 'cache_write_tokens': int(prompt_details.get('cache_write_tokens', 0) or 0),
                                 'total_tokens': int(chunk_usage.get('total_tokens', 0) or 0),
                             }
@@ -473,8 +487,17 @@ class HttpxOpenAIProvider:
             yield exception_error(e)
 
 
-def _convert_messages(messages: list[Message]) -> list[dict[str, Any]]:
-    """Convert Charon messages to OpenAI chat format."""
+def _assistant_turns_have_reasoning(messages: list[Message]) -> bool:
+    return all(msg.thinking for msg in messages if msg.role == 'assistant')
+
+
+def _convert_messages(messages: list[Message], *, reasoning_content: bool = False) -> list[dict[str, Any]]:
+    """Convert Charon messages to OpenAI chat format.
+
+    ``reasoning_content`` sends an assistant turn's thinking back in its own
+    field (DeepSeek requires it in tool conversations); it never goes into
+    ``content``.
+    """
     result: list[dict[str, Any]] = []
     for msg in messages:
         if msg.role == 'user':
@@ -489,6 +512,8 @@ def _convert_messages(messages: list[Message]) -> list[dict[str, Any]]:
             content = msg.content if isinstance(msg.content, str) else ''
             if content:
                 entry['content'] = content
+            if reasoning_content and msg.thinking:
+                entry['reasoning_content'] = msg.thinking
             if msg.tool_calls:
                 entry['tool_calls'] = [{
                     'id': tc.id,

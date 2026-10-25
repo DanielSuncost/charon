@@ -1208,8 +1208,9 @@ fn onboarding_lines(app: &App) -> Vec<String> {
     let project = app.chat.onboarding_project();
     let mut lines = vec!["Setup required before full chat use.".to_string()];
     match step.as_str() {
-        "provider-mode" | "" => lines.push("Choose a provider: /setup provider claude-code | codex | lmstudio | api".to_string()),
+        "provider-mode" | "" => lines.push("Choose a provider: /setup provider claude-code | codex | deepseek | lmstudio | api".to_string()),
         "provider-auth" => { lines.push(format!("Provider selected: {}", if provider.is_empty() { "unknown" } else { &provider })); lines.push("Finish authentication in the popup or use /setup auth-code <CODE>".to_string()); }
+        "provider-key" => { lines.push(format!("Provider selected: {}", if provider.is_empty() { "unknown" } else { &provider })); lines.push("Paste your API key: /setup api-key <KEY>".to_string()); }
         "model" => { lines.push(format!("Provider selected: {}", if provider.is_empty() { "unknown" } else { &provider })); lines.push("Choose a model with /setup model or /model".to_string()); }
         "complete" | "done" => lines.push("Setup is almost done. Use /setup complete if needed.".to_string()),
         other => lines.push(format!("Current setup step: {}", other)),

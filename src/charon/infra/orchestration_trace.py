@@ -110,6 +110,11 @@ _PRICING: dict[str, tuple[float, float]] = {
     "claude-haiku": (0.80, 4.00), "claude-fable": (3.00, 15.00),
     "gemini": (1.25, 5.00), "llama": (0.0, 0.0), "qwen": (0.0, 0.0),
     "bge": (0.0, 0.0),
+    # DeepSeek peak rates, cache-miss input (api-docs.deepseek.com pricing,
+    # 2026-10). Cache hits bill ~2% of this and off-peak hours half; this
+    # (input, output) tuple cannot express either, so it over-estimates.
+    "deepseek-flash": (0.30, 1.20), "deepseek-v4-flash": (0.30, 1.20),
+    "deepseek-v4-pro": (1.32, 3.96),
 }
 
 
