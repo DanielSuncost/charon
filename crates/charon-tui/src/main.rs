@@ -141,6 +141,7 @@ fn main() -> io::Result<()> {
 
     clipboard::configure_tmux_clipboard();
 
+    install_terminal_restoring_panic_hook();
     ct::enable_raw_mode()?;
     let mut stdout = io::stdout();
     stdout.queue(EnterAlternateScreen)?;
@@ -200,6 +201,25 @@ fn main() -> io::Result<()> {
     ct::disable_raw_mode()?;
     println!("charon-tui exited.");
     Ok(())
+}
+
+/// A panic skips the teardown at the end of `main`, leaving the shell in raw
+/// mode, on the alternate screen and with mouse reporting on (so every mouse
+/// move prints SGR junk like `35;85;25M`). Undo all of that first, then let
+/// the default hook print the panic onto the restored, readable screen.
+fn install_terminal_restoring_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let mut out = io::stdout();
+        let _ = out.queue(cursor::Show);
+        let _ = out.queue(DisableMouseCapture);
+        let _ = out.queue(DisableBracketedPaste);
+        let _ = out.write_all(b"\x1b[?1007l");
+        let _ = out.queue(LeaveAlternateScreen);
+        let _ = out.flush();
+        let _ = ct::disable_raw_mode();
+        default_hook(info);
+    }));
 }
 
 
