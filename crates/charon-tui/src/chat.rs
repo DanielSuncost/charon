@@ -269,6 +269,9 @@ fn fit(text: &str, width: usize) -> String {
 /// team is working. Every clock is computed against `now`, and the countdown
 /// is only shown while the backend is alive and still reporting.
 pub fn team_band_lines(status: &Value, backend_alive: bool, silent_for: u64, now: f64, width: usize, max_agents: usize) -> Vec<(TeamTone, String)> {
+    // Callers that only count rows pass usize::MAX; the right-align pad below
+    // would then ask for ~usize::MAX spaces. No terminal row is wider than u16.
+    let width = width.min(u16::MAX as usize);
     let state = status.get("state").and_then(Value::as_str).unwrap_or("idle");
     if state == "stopped" {
         let msg = status.get("message").and_then(Value::as_str).unwrap_or("Team stopped");
@@ -2499,6 +2502,15 @@ mod tests {
              "started_at": now - 1290.0, "last_event_at": now - 545.0, "health": "quiet"},
             {"label": "qa", "doing": "Read PomemoTests.swift", "phase": "inspect", "phase_index": 1, "phase_count": 4,
              "started_at": now - 95.0, "last_event_at": now - 1.0, "health": "ok"}]})
+    }
+
+    #[test]
+    fn team_band_survives_an_unbounded_width() {
+        // chat_reserved_bottom only counts rows and used to pass usize::MAX,
+        // which made the right-align pad near usize::MAX and aborted the TUI
+        // with "capacity overflow" the moment the first agent row appeared.
+        let now = 1_000_000.0;
+        assert_eq!(team_band_lines(&team(now), true, 1, now, usize::MAX, 5).len(), 4);
     }
 
     #[test]
