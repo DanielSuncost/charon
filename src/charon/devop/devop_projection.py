@@ -136,6 +136,22 @@ def project_graph(state_dir: Path, operation_id: str) -> dict[str, Any]:
             if actor_id and subject_id:
                 edges.append({'edge_type': 'selects', 'from': actor_id, 'to': subject_id, 'decision_id': dec_id})
 
+    # Actor state comes from durable events, not process/thread existence.
+    actor_status = {}
+    for event in op.get('events_tail') or []:
+        actor = event.get('from_agent_id')
+        kind = str(event.get('kind') or '')
+        if actor and kind.endswith(('_spawned', '_completed', '_failed')):
+            actor_status[actor] = {'spawned': 'running', 'completed': 'finished', 'failed': 'failed'}[kind.rsplit('_', 1)[-1]]
+    slug_ids = {ws.get('slug'): ws.get('workstream_id') for ws in op.get('workstreams') or []}
+    for edge in edges:
+        if edge.get('edge_type') == 'depends_on':
+            edge['to'] = slug_ids.get(edge['to'], edge['to'])
+    for node in nodes:
+        if node.get('node_type') == 'agent':
+            node['status'] = actor_status.get(node['id'], 'assigned')
+            if node['status'] == 'running' and op.get('status') in ('failed', 'stopped'):
+                node['status'] = op['status']
     return {'operation_id': operation_id, 'nodes': nodes, 'edges': edges}
 
 
