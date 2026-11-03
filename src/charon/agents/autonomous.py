@@ -487,10 +487,14 @@ async def infer_goals_from_conversation(
 
     prompt = GOAL_INFERENCE_PROMPT + '\n'.join(conv_lines)
 
+    # Providers consume Message dataclasses (they read msg.role / msg.content
+    # as attributes); a plain dict here raises AttributeError inside stream()
+    # on every cycle and the loop never infers anything.
+    from charon.providers import Message
     text_parts = []
     try:
         async for delta in provider.stream(
-            messages=[{'role': 'user', 'content': prompt}],
+            messages=[Message(role='user', content=prompt)],
             model=model,
             system_prompt='You are a goal extraction assistant. Output only valid JSON.',
             max_tokens=2048,

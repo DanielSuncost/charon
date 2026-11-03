@@ -296,3 +296,47 @@ def test_run_loop_processes_self_assigned_task_when_queue_empty(tmp_path, monkey
     queue = json.loads((state_dir / 'queue.json').read_text())
     assert queue
     assert queue[0]['status'] == 'completed'
+
+
+# ── Goal inference message shape ───────────────────────────────────
+
+def test_infer_goals_sends_message_objects_to_provider(tmp_path):
+    # Regression: the inference prompt was sent as a plain dict. Every real
+    # provider reads `msg.role` as an attribute, so stream() raised
+    # AttributeError on each cycle and no goal was ever inferred.
+    import asyncio
+    import json
+    from charon.providers import Message, StreamDelta
+    from charon.agents.autonomous import infer_goals_from_conversation
+
+    seen = []
+
+    class _Provider:
+        async def stream(self, messages, model, system_prompt, tools=None,
+                         thinking_level='off', max_tokens=16384):
+            for m in messages:
+                assert not isinstance(m, dict), 'provider got a dict, not a Message'
+                seen.append((m.role, m.content))
+            yield StreamDelta(type='text', text=json.dumps({
+                'goals': [{'title': 'Ship it', 'acceptance_criteria': ['done'], 'plan': []}],
+                'reasoning': 'x',
+            }))
+            yield StreamDelta(type='done')
+
+    # Conversation history may arrive as Message objects or plain dicts; both
+    # must be accepted on the input side.
+    history = [
+        Message(role='user', content='Please add CI'),
+        {'role': 'assistant', 'content': 'Sure, which runner?'},
+        Message(role='user', content='GitHub Actions'),
+    ]
+    goals = asyncio.run(infer_goals_from_conversation(
+        tmp_path, agent_id='AG-001', messages=history, provider=_Provider(), model=object(),
+    ))
+
+    assert goals == [{'title': 'Ship it', 'acceptance_criteria': ['done'], 'plan': []}]
+    assert len(seen) == 1
+    role, content = seen[0]
+    assert role == 'user'
+    assert '[user]: Please add CI' in content
+    assert '[assistant]: Sure, which runner?' in content
