@@ -23,6 +23,7 @@ apps/tui/opentui/dist/
 # Rust / Cargo
 target/
 **/target/
+crates/charon-tui/target-merge/
 
 # Benchmark data and results (large files)
 data/
