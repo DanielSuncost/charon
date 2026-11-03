@@ -94,7 +94,11 @@ def infer_candidate_workstreams(prompt: str, limit: int = 5) -> list[dict[str, A
             'dependency_ids': list(deps or []),
         })
 
-    if 'web app' in lower or 'app' in lower or 'frontend' in lower or 'backend' in lower:
+    if 'ios' in lower or 'swiftui' in lower:
+        add('Speech and Tracking', 'Inspect existing audio/tracking implementation and partial work; implement fast local streaming, phonetic tolerance and regression tests. Own Services and ViewModels only.', 0.95)
+        add('Native Interface', 'Inspect web visual identity and existing SwiftUI work; improve ContentView, Views and UI assets only. Preserve engine public API.', 0.90)
+        add('Testing and Integration', 'After implementation, build combined app, run tests, inspect simulator UI and document physical-device acceptance gaps. Own project configuration, model tests and UI tests.', 0.88, deps=['speech-and-tracking', 'native-interface'])
+    elif 'web app' in lower or 'app' in lower or 'frontend' in lower or 'backend' in lower:
         add('Frontend UI', 'User-facing interface, flows, forms, and visual shell.', 0.88)
         add('Backend API', 'Server-side endpoints, business logic, and service boundaries.', 0.90)
         add('Data/Auth Layer', 'Persistence, schema, auth/session model, and access control.', 0.83)
@@ -186,6 +190,11 @@ def create_devop_engine(
         parent_agent_id=agent.get('parent_agent_id', ''),
         max_tokens=16384,
     )
+    # Devop roles run in a background process with nobody to answer a
+    # clarifying question. Withhold Clarify by tool list, not via the
+    # interactive flag, which would also impose a wall-clock cap per pass.
+    engine._available_tools = [t for t in engine._available_tools if t.get('name') != 'Clarify']
+    engine.tools = [t for t in engine.tools if t.get('name') != 'Clarify']
     return engine, model
 
 
@@ -213,12 +222,26 @@ def spawn_devop_role(
         require_tmux=False,
     )
 
+    # Register the actor before starting it: fast failures must not race a later
+    # controller write that sets the lane back to active/reviewing.
+    from charon.devop.devop_runtime import update_workstream_runtime, operation_dir
+    if workstream_slug:
+        fields = {'owner_agent_id': agent['id']} if role == 'implementer' else {'paired_judge_agent_id': agent['id']}
+        update_workstream_runtime(state_dir, operation_id, workstream_slug,
+                                 status='active' if role == 'implementer' else 'reviewing', **fields)
+    elif role == 'coordinator':
+        path = operation_dir(state_dir, operation_id) / 'operation.json'
+        doc = json.loads(path.read_text())
+        doc['coordinator_agent_id'] = agent['id']
+        path.write_text(json.dumps(doc, indent=2))
     thread = threading.Thread(
         target=_run_devop_role,
         args=(state_dir, project_root, agent, role, operation_id, workstream_slug, user_goal),
         daemon=True,
     )
     thread.start()
+    # Internal handle lets the controller sequence review after implementation.
+    agent['_thread'] = thread
     return agent
 
 
@@ -232,47 +255,19 @@ def start_autonomous_software_operation(
     policy: dict[str, Any] | None = None,
     max_workstreams_default: int = 4,
 ) -> dict[str, Any]:
-    from charon.devop.devop_runtime import init_operation, append_operation_event
+    # All entry points share the managed-process launcher, including /devop.
+    from charon.tools.software_team_tool import launch_software_team
+    return launch_software_team(state_dir, project_root, prompt=prompt,
+                                parent_agent_id=parent_agent_id, budget=budget,
+                                policy=policy, max_workstreams=max_workstreams_default)
 
-    op = init_operation(
-        state_dir,
-        project_root,
-        prompt=prompt,
-        title=prompt[:120],
-        budget=budget,
-        policy=policy,
-    )
-    coordinator = spawn_devop_role(
-        state_dir,
-        project_root,
-        role='coordinator',
-        operation_id=op['operation_id'],
-        user_goal=prompt,
-        parent_agent_id=parent_agent_id,
-    )
-    try:
-        from charon.devop.devop_runtime import operation_dir
-        op_path = operation_dir(state_dir, op['operation_id']) / 'operation.json'
-        doc = json.loads(op_path.read_text())
-        doc['coordinator_agent_id'] = coordinator.get('id', '')
-        op_path.write_text(json.dumps(doc, indent=2))
-    except Exception as e:
-        _diag('devop_agents', 'failed to record coordinator id in operation.json', error=e)
-    append_operation_event(
-        state_dir,
-        op['operation_id'],
-        'autonomous_software_started',
-        from_agent_id=coordinator.get('id', ''),
-        summary=prompt[:240],
-        payload={'parent_agent_id': parent_agent_id, 'max_workstreams_default': max_workstreams_default},
-    )
-    thread = threading.Thread(
-        target=_run_operation_controller,
-        args=(state_dir, project_root, op['operation_id'], prompt, coordinator, max_workstreams_default),
-        daemon=True,
-    )
-    thread.start()
-    return {'operation': op, 'coordinator': coordinator}
+
+def _stop_requested(state_dir: Path, operation_id: str) -> bool:
+    from charon.devop.devop_runtime import get_operation_state, set_operation_status
+    if get_operation_state(state_dir, operation_id).get('stop_requested'):
+        set_operation_status(state_dir, operation_id, 'stopped', 'Stopped between worker passes; artifacts retained.')
+        return True
+    return False
 
 
 def _run_operation_controller(
@@ -307,6 +302,8 @@ def _run_operation_controller(
             set_operation_status(state_dir, operation_id, 'paused', 'No candidate workstreams selected.')
             return
 
+        set_operation_status(state_dir, operation_id, 'running', 'Executing selected workstreams with review gates.')
+        lanes = []
         for item in selected:
             ws = init_workstream(
                 state_dir,
@@ -315,6 +312,11 @@ def _run_operation_controller(
                 summary=str(item.get('summary') or ''),
                 dependency_ids=list(item.get('dependency_ids') or []),
             )
+            update_workstream_runtime(state_dir, operation_id, ws['slug'], status='pending')
+            lanes.append(ws)
+        for ws in lanes:
+            if _stop_requested(state_dir, operation_id):
+                return
             impl = spawn_devop_role(
                 state_dir,
                 project_root,
@@ -324,6 +326,17 @@ def _run_operation_controller(
                 user_goal=prompt,
                 parent_agent_id=coordinator.get('id', ''),
             )
+            impl['_thread'].join()
+            if _stop_requested(state_dir, operation_id):
+                return
+            from charon.devop.devop_runtime import get_workstream_state
+            lane_status = get_workstream_state(state_dir, operation_id, ws['slug']).get('status')
+            if lane_status == 'failed':
+                set_operation_status(state_dir, operation_id, 'failed', f'Implementation failed: {ws["slug"]}')
+                return
+            if lane_status == 'incomplete':
+                set_operation_status(state_dir, operation_id, 'needs_review', f'Implementation stopped before finishing: {ws["slug"]}; artifacts retained.')
+                return
             judge = spawn_devop_role(
                 state_dir,
                 project_root,
@@ -332,14 +345,6 @@ def _run_operation_controller(
                 workstream_slug=ws['slug'],
                 user_goal=prompt,
                 parent_agent_id=coordinator.get('id', ''),
-            )
-            update_workstream_runtime(
-                state_dir,
-                operation_id,
-                ws['slug'],
-                owner_agent_id=impl.get('id', ''),
-                paired_judge_agent_id=judge.get('id', ''),
-                extras={'status': 'active'},
             )
             append_handoff(
                 state_dir,
@@ -352,7 +357,23 @@ def _run_operation_controller(
                 to_role='implementer',
                 summary=f'Assigned workstream {ws["title"]}',
             )
-        set_operation_status(state_dir, operation_id, 'running', 'Implementers and judges spawned.')
+            judge['_thread'].join()
+            if _stop_requested(state_dir, operation_id):
+                return
+            lane_status = get_workstream_state(state_dir, operation_id, ws['slug']).get('status')
+            if lane_status == 'failed':
+                set_operation_status(state_dir, operation_id, 'failed', f'Review failed: {ws["slug"]}')
+                return
+            if lane_status == 'incomplete':
+                set_operation_status(state_dir, operation_id, 'needs_review', f'Review stopped before a verdict: {ws["slug"]}; artifacts retained.')
+                return
+            reviewed = get_workstream_state(state_dir, operation_id, ws['slug'])
+            if (reviewed.get('latest_review') or {}).get('decision') != 'approve':
+                update_workstream_runtime(state_dir, operation_id, ws['slug'], status='needs_revision')
+                set_operation_status(state_dir, operation_id, 'needs_review', f'Review requires changes: {ws["slug"]}')
+                return
+            update_workstream_runtime(state_dir, operation_id, ws['slug'], status='reviewed')
+        set_operation_status(state_dir, operation_id, 'needs_review', 'Worker passes finished; acceptance and integration evidence require review.')
     except Exception as e:
         try:
             from charon.devop.devop_runtime import append_operation_event, set_operation_status
@@ -393,7 +414,46 @@ def _run_devop_role(
             payload={'agent_id': agent.get('id', ''), 'model': getattr(model, 'model_id', '')},
         )
         instruction = _role_instruction(role, operation_id, workstream_slug, user_goal)
+        if workstream_slug:
+            from charon.devop.devop_runtime import get_workstream_state
+            instruction += '\n\nCurrent workstream (including checkpoint evidence):\n' + json.dumps(get_workstream_state(state_dir, operation_id, workstream_slug), default=str)
+            if role == 'judge':
+                from charon.devop.devop_runtime import workstream_dir
+                report = workstream_dir(state_dir, operation_id, workstream_slug) / 'implementer-report.md'
+                instruction += '\n\nImplementation report:\n' + report.read_text(encoding='utf-8')
+                instruction += '\nRead-only review: do not edit implementation. End with exactly VERDICT: approve or VERDICT: revise. Approve only with concrete evidence for this lane, not claims of unrun device validation.'
+        else:
+            instruction += '\nPlanning only: do not edit source files or spawn workers. The controller owns assignments.'
         response, events = asyncio.run(engine.submit_and_collect(instruction))
+        # A guard stop (no-progress, or an explicit time budget) ends this pass
+        # incomplete. Record it and keep the artifacts; one wedged pass must not
+        # mark the whole operation failed. The controller decides what follows.
+        if any(getattr(e, 'type', '') == 'budget_stop' for e in events) or (
+                'Stopped:' in (response or '') and 'Task is incomplete;' in (response or '')):
+            from charon.devop.devop_runtime import append_operation_event, update_workstream_runtime, workstream_dir
+            if workstream_slug:
+                (workstream_dir(state_dir, operation_id, workstream_slug) / f'{role}-report.md').write_text(response or '', encoding='utf-8')
+                update_workstream_runtime(state_dir, operation_id, workstream_slug, status='incomplete',
+                                          extras={'last_error': (response or '').strip()[-500:]})
+            append_operation_event(state_dir, operation_id, f'{role}_incomplete', workstream_id=workstream_slug,
+                                   from_agent_id=agent.get('id', ''), summary=(response or f'{role} stopped')[-240:])
+            return
+        failures = [e for e in events if getattr(e, 'type', '') == 'error' or (getattr(e, 'type', '') == 'done' and (getattr(e, 'data', {}) or {}).get('stop_reason') in ('error', 'aborted'))]
+        if failures or not (response or '').strip():
+            raise RuntimeError(f'{role} interrupted or returned no output: ' + str([getattr(e, 'data', {}) for e in failures]))
+        if workstream_slug:
+            from charon.devop.devop_runtime import workstream_dir
+            (workstream_dir(state_dir, operation_id, workstream_slug) / f'{role}-report.md').write_text(response or '', encoding='utf-8')
+            from charon.devop.devop_runtime import save_checkpoint, save_review, get_workstream_state
+            if role == 'implementer':
+                save_checkpoint(state_dir, operation_id, workstream_slug, producer_agent_id=agent['id'], markdown=response, summary=response[:240])
+            elif role == 'judge':
+                cp = get_workstream_state(state_dir, operation_id, workstream_slug).get('latest_checkpoint') or {}
+                verdict = 'approve' if response.strip().splitlines()[-1].strip() == 'VERDICT: approve' else 'revise'
+                save_review(state_dir, operation_id, workstream_slug, checkpoint_id=cp.get('checkpoint_id', ''), reviewer_agent_id=agent['id'], review_type='implementation', decision=verdict, critique_markdown=response, summary=response[:240])
+        else:
+            from charon.devop.devop_runtime import operation_dir
+            (operation_dir(state_dir, operation_id) / f'{role}-report.md').write_text(response, encoding='utf-8')
         inp, out = _collect_usage(events)
         append_operation_event(
             state_dir,
@@ -406,7 +466,10 @@ def _run_devop_role(
         )
     except Exception as e:
         try:
-            from charon.devop.devop_runtime import append_operation_event
+            from charon.devop.devop_runtime import append_operation_event, update_workstream_runtime, set_operation_status
+            if workstream_slug:
+                update_workstream_runtime(state_dir, operation_id, workstream_slug, status='failed', extras={'last_error': str(e)})
+            set_operation_status(state_dir, operation_id, 'failed', str(e))
             append_operation_event(
                 state_dir,
                 operation_id,

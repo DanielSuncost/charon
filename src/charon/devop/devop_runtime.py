@@ -326,6 +326,21 @@ def get_operation_state(state_dir: Path, operation_id: str) -> dict[str, Any]:
     op = _read_json(op_dir / 'operation.json', {})
     if not op:
         return {}
+    # A dead managed runner is a failure, not an indefinitely running team.
+    # launch.json is written by the parent after spawn; absence during startup
+    # is legitimate and legacy thread-hosted operations have no launch record.
+    if op.get('status') in ('starting', 'running', 'stopping'):
+        launch = _read_json(op_dir / 'launch.json', {})
+        pid = launch.get('pid')
+        if pid:
+            import os
+            try:
+                os.kill(int(pid), 0)
+            except ProcessLookupError:
+                op = set_operation_status(state_dir, operation_id, 'stopped' if op.get('stop_requested') else 'failed',
+                                          'Managed runner exited without recording a terminal status; partial artifacts retained.')
+            except (PermissionError, ValueError, TypeError):
+                pass
     workstreams = []
     for ws_path in sorted((op_dir / 'workstreams').glob('*')):
         rec = get_workstream_state(state_dir, operation_id, ws_path.name)

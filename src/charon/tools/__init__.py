@@ -1371,6 +1371,7 @@ from charon.tools.web_tool import WEB_TOOL_DEF, execute_web
 from charon.tools.paper_tool import PAPER_TOOL_DEF, execute_paper
 from charon.tools.source_discovery_tool import SOURCE_DISCOVERY_TOOL_DEF, execute_source_discovery
 from charon.tools.research_tool import RESEARCH_TOOL_DEF, execute_research
+from charon.tools.software_team_tool import SOFTWARE_TEAM_TOOL_DEF, execute_software_team
 from charon.tools.x_tool import X_TOOL_DEF, execute_x
 from charon.tools.cron_tool import CRON_TOOL_DEF, execute_cron
 from charon.tools.skills_tool import SKILLS_TOOL_DEF, execute_skills
@@ -1481,7 +1482,7 @@ ALL_TOOL_DEFS = [
     SHADE_TOOL_DEF, LIST_RETAINED_SHADES_TOOL_DEF, SPAWN_BATCH_TOOL_DEF, JUDGE_LOOP_TOOL_DEF,
     SEARCH_TOOL_DEF, WEB_TOOL_DEF, PAPER_TOOL_DEF, SOURCE_DISCOVERY_TOOL_DEF, RESEARCH_TOOL_DEF, X_TOOL_DEF,
     CRON_TOOL_DEF, SKILLS_TOOL_DEF, EXECUTE_CODE_TOOL_DEF, CLARIFY_TOOL_DEF,
-    PYKERNEL_TOOL_DEF, REFINE_TOOL_DEF, AST_TOOL_DEF,
+    PYKERNEL_TOOL_DEF, REFINE_TOOL_DEF, AST_TOOL_DEF, SOFTWARE_TEAM_TOOL_DEF,
 ] + ([BROWSER_TOOL_DEF] if _HAS_BROWSER else []) + ([RECALL_TOOL_DEF] if _HAS_RECALL else []) + ([TIMELINE_TOOL_DEF] if _HAS_TIMELINE else []) + (_FLEET_DEFS if _HAS_FLEET else []) + (_OVERSEER_DEFS if _HAS_OVERSEER else []) + (_SYSTEM_MAP_DEFS if _HAS_SYSTEM_MAP else [])
 
 TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
@@ -1508,6 +1509,7 @@ TOOL_EXECUTORS: dict[str, Callable[[dict, ToolContext], ToolResult]] = {
     'Paper': execute_paper,
     'SourceDiscovery': execute_source_discovery,
     'Research': execute_research,
+    'SoftwareTeam': execute_software_team,
     'X': execute_x,
     'Cron': execute_cron,
     'Skills': execute_skills,
