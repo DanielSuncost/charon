@@ -887,6 +887,10 @@ class WorkCommandsMixin:
             return
         return UNHANDLED
 
+    def _persistent_project(self) -> str:
+        onboarding = common._load_json(common.STATE_DIR / 'onboarding.json', {})
+        return str(onboarding.get('project') or str(common.ROOT)).strip()
+
     def _cmd_persistent(self, command: str, request_id: str | None):
         """On/off control for the persistent agent.
 
@@ -903,9 +907,14 @@ class WorkCommandsMixin:
                 return
             if rest == 'on':
                 persistent_agent.set_enabled(common.STATE_DIR, True)
-                summary = persistent_agent.status_summary(common.STATE_DIR)
-                note = ('runner already running' if summary['alive']
-                        else 'no runner is attached yet, so nothing operates the machine')
+                launched = persistent_agent.ensure_runner(common.STATE_DIR, self._persistent_project())
+                action = launched.get('action')
+                if action == 'adopted':
+                    note = f'runner already running, pid {launched.get("pid")}'
+                elif action == 'launched':
+                    note = f'runner started, pid {launched.get("pid")}'
+                else:
+                    note = f'runner not started: {launched.get("reason") or launched.get("error") or action}'
                 common.emit({'type': 'status', 'message': f'Persistent agent ON ({note}).', 'request_id': request_id})
                 common.emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': request_id})
                 return

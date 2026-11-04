@@ -173,13 +173,16 @@ def test_persistent_command_turns_on_shows_status_and_stops(tmp_path, monkeypatc
     monkeypatch.setattr(common, 'emit', lambda e: emitted.append(e))
     backend = ChatBackend()
     monkeypatch.setattr(backend, '_get_refresh_payload', lambda: {})
+    launches = []
+    monkeypatch.setattr(pa, '_launch', lambda sd, project: launches.append(project) or {'pid': 4242, 'process_id': 'proc-x'})
 
     backend.handle_command('/persistent status', 'r0')
     assert emitted[-1]['message'].startswith('Persistent agent: OFF')
 
     backend.handle_command('/persistent on', 'r1')
     assert load_autonomous_config(state_dir)['persistent'] is True
-    assert emitted[-2]['message'].startswith('Persistent agent ON')
+    assert emitted[-2]['message'] == 'Persistent agent ON (runner started, pid 4242).'
+    assert len(launches) == 1
 
     proc = _sleeper()
     try:

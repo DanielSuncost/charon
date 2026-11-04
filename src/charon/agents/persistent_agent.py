@@ -45,11 +45,16 @@ except Exception:  # diagnostics is best-effort and must never block import
 
 RUNTIME_DIRNAME = 'persistent_agent'
 CONFIG_KEY = 'persistent'
-# Marker the runner puts in its own argv so a pid can be verified as ours.
-RUNNER_MARKER = 'charon-persistent-agent'
+# The runner's module path appears in its argv (python -m ...), so a pid
+# whose command line carries it is verifiably ours.
+RUNNER_MARKER = 'charon.agents.persistent_runner'
 # How long without a heartbeat before the band calls the runner quiet.
 QUIET_AFTER_SECONDS = 120
-ACTIVE_STATUSES = {'starting', 'running', 'stopping'}
+ACTIVE_STATUSES = {'starting', 'running', 'paused', 'stopping'}
+# A runner that dies this soon after launch, this many times in a row, is
+# not relaunched; the toggle is turned off and the audit says why.
+CRASH_WINDOW_SECONDS = 60
+CRASH_LIMIT = 3
 
 DEFAULT_RUNTIME = {
     'status': 'off',          # off | starting | running | stopping | stopped
@@ -284,6 +289,89 @@ def request_stop(state_dir: Path, *, timeout: float = 5.0, actor: str = 'user') 
     return result
 
 
+# ── Launch and reconcile ────────────────────────────────────────────
+
+def _launch(state_dir: Path, project: str) -> dict:
+    """Start the runner in its own session through the run-process tool,
+    the same launcher the software team uses. The bash wrapper's pid is
+    recorded first (its command line carries the marker too); the runner
+    replaces it with its own pid on the first heartbeat."""
+    import shlex
+    import sys
+    from charon.tools import ToolContext, execute_run_process
+    state = Path(state_dir).resolve()
+    root = Path(project).expanduser()
+    if not root.is_dir():
+        root = Path.cwd()
+    source = str(Path(__file__).resolve().parents[2])
+    pythonpath = source + (os.pathsep + os.environ['PYTHONPATH'] if os.environ.get('PYTHONPATH') else '')
+    cmd = shlex.join(['env', 'PYTHONPATH=' + pythonpath, 'CHARON_STATE_DIR=' + str(state),
+                      sys.executable, '-m', RUNNER_MARKER, '--state-dir', str(state), '--project', str(project)])
+    ctx = ToolContext(project_root=root, state_dir=state, agent_id='persistent-agent')
+    result = execute_run_process({'command': cmd, 'cwd': str(root), 'name': 'persistent-agent'}, ctx)
+    if result.is_error:
+        raise RuntimeError(result.content)
+    return dict(result.details or {})
+
+
+def ensure_runner(state_dir: Path, project: str, *, now: float | None = None) -> dict:
+    """Make the process state match the toggle. Called on /persistent on
+    and on every backend cycle, so a Charon restart adopts a live runner,
+    relaunches a dead one, and leaves an off agent alone.
+
+    Returns {'action': adopted|launched|idle|backed_off|gave_up, ...}."""
+    now = time.time() if now is None else now
+    rt = load_runtime(state_dir)
+    if not persistent_enabled(state_dir):
+        return {'action': 'idle', 'reason': 'off'}
+    if process_alive(rt):
+        return {'action': 'adopted', 'pid': rt.get('pid')}
+    # Only bad endings count toward the crash loop: a runner that exited
+    # because it was turned off or stopped may be relaunched at once.
+    crashes = [float(t) for t in (rt.get('recent_crashes') or []) if isinstance(t, (int, float))]
+    crashes = [t for t in crashes if now - t < CRASH_WINDOW_SECONDS]
+    counted_now = False
+    if rt.get('status') in ACTIVE_STATUSES and rt.get('pid'):
+        audit(state_dir, 'runner_lost', pid=rt.get('pid'), note='runtime said active but the process is gone')
+        crashes.append(now)
+        counted_now = True
+        write_runtime(state_dir, status='stopped', pid=None, doing='', crash_counted=True,
+                      exit_note=rt.get('exit_note') or f'runner pid {rt.get("pid")} disappeared',
+                      recent_crashes=crashes)
+    elif str(rt.get('exit_note') or '').startswith('crashed:') and not rt.get('crash_counted'):
+        crashes.append(now)
+        counted_now = True
+        write_runtime(state_dir, crash_counted=True, recent_crashes=crashes)
+
+    if len(crashes) >= CRASH_LIMIT:
+        note = f'runner crashed {CRASH_LIMIT} times within {CRASH_WINDOW_SECONDS}s; turned off'
+        audit(state_dir, 'runner_gave_up', note=note, last_exit=rt.get('exit_note'))
+        write_runtime(state_dir, status='stopped', exit_note=note, recent_crashes=[])
+        set_enabled(state_dir, False, actor='reconcile')
+        return {'action': 'gave_up', 'reason': note}
+    # A crash seen for the first time is relaunched at once; repeated calls
+    # within a few seconds of it wait, so a backend ticking every 2s cannot
+    # stack launches.
+    if crashes and not counted_now and now - crashes[-1] < 5.0:
+        return {'action': 'backed_off', 'reason': 'runner crashed moments ago'}
+
+    try:
+        details = _launch(state_dir, project)
+    except Exception as e:
+        audit(state_dir, 'runner_launch_failed', error=str(e)[:300])
+        write_runtime(state_dir, status='stopped', exit_note=f'launch failed: {str(e)[:200]}',
+                      recent_crashes=crashes + [now])
+        return {'action': 'launch_failed', 'error': str(e)}
+    write_runtime(state_dir, status='starting', pid=details.get('pid'), cmd_marker=RUNNER_MARKER,
+                  started_at=_now_iso(), heartbeat_at=_now_iso(), doing='starting', stop_requested=False,
+                  exit_note='', project=str(project), launch={'process_id': details.get('process_id'),
+                                                              'log_path': details.get('log_path')},
+                  recent_crashes=crashes, crash_counted=False)
+    audit(state_dir, 'runner_launched', pid=details.get('pid'), process_id=details.get('process_id'),
+          project=str(project))
+    return {'action': 'launched', 'pid': details.get('pid'), 'process_id': details.get('process_id')}
+
+
 # ── Status for humans and the band ──────────────────────────────────
 
 def status_summary(state_dir: Path, now: float | None = None) -> dict:
@@ -292,7 +380,11 @@ def status_summary(state_dir: Path, now: float | None = None) -> dict:
     rt = load_runtime(state_dir)
     alive = process_alive(rt)
     hb = _ts(rt.get('heartbeat_at'))
-    if alive:
+    if alive and rt.get('status') == 'paused':
+        state = 'paused'
+    elif alive and rt.get('status') == 'starting':
+        state = 'starting'
+    elif alive:
         state = 'running'
     elif rt.get('status') in ACTIVE_STATUSES:
         state = 'process gone'
@@ -310,6 +402,9 @@ def status_summary(state_dir: Path, now: float | None = None) -> dict:
         'heartbeat_age': (now - hb) if hb else None,
         'stop_requested': bool(rt.get('stop_requested')),
         'exit_note': rt.get('exit_note') or '',
+        'current_task': rt.get('current_task') if isinstance(rt.get('current_task'), dict) else None,
+        'last_task': rt.get('last_task') if isinstance(rt.get('last_task'), dict) else None,
+        'runtime_status': rt.get('status') or 'off',
     }
 
 
@@ -322,6 +417,9 @@ def status_lines(summary: dict) -> list[str]:
         lines.append(f'Doing: {summary["doing"] or "idle"}')
     elif summary['exit_note']:
         lines.append(f'Last stop: {summary["exit_note"]}')
+    last = summary.get('last_task')
+    if last:
+        lines.append(f'Last unit: {last.get("title", "")[:60]} → {last.get("outcome", "")}')
     if summary['stop_requested'] and summary['alive']:
         lines.append('Stop requested; runner has not exited yet')
     return lines
@@ -337,7 +435,9 @@ def band_row(state_dir: Path, now: float | None = None) -> dict | None:
     rt = load_runtime(state_dir)
     started = _ts(rt.get('started_at')) or _ts(rt.get('updated_at')) or now
     last = _ts(rt.get('heartbeat_at')) or started
-    if s['alive']:
+    if s['alive'] and s['state'] == 'paused':
+        health, doing = 'ok', f'paused · {s["doing"] or "user is at the keyboard"}'
+    elif s['alive']:
         health = 'quiet' if now - last >= QUIET_AFTER_SECONDS else 'ok'
         doing = s['doing'] or 'idle'
     elif s['state'] == 'process gone':
@@ -356,6 +456,7 @@ def band_row(state_dir: Path, now: float | None = None) -> dict | None:
         'health': health,
         'pid': s['pid'],
         'enabled': s['enabled'],
+        'paused': s['state'] == 'paused',
     }
 
 
@@ -393,6 +494,8 @@ def band_headline(row: dict) -> str:
         return 'Persistent agent ON · runner exited'
     if row['health'] == 'quiet':
         return 'Persistent agent ON · runner quiet'
+    if row.get('paused'):
+        return 'Persistent agent ON · paused'
     if row.get('pid'):
         return 'Persistent agent ON · running'
     return 'Persistent agent ON · no runner process'

@@ -849,6 +849,17 @@ class ChatMixin:
                     except Exception as e:
                         _diag('chat_mixin', 'background consolidation cycle failed; user model not updated', error=e)
 
+                # Persistent agent: adopt a live runner, relaunch a dead one,
+                # leave an off agent alone. Cheap (two JSON reads) when off.
+                try:
+                    from charon.agents import persistent_agent
+                    if persistent_agent.persistent_enabled(common.STATE_DIR):
+                        onboarding = common._load_json(common.STATE_DIR / 'onboarding.json', {})
+                        project = str(onboarding.get('project') or str(common.ROOT)).strip()
+                        persistent_agent.ensure_runner(common.STATE_DIR, project)
+                except Exception as e:
+                    _diag('chat_mixin', 'persistent agent reconcile failed; runner may not be started', error=e)
+
                 # Goal inference — always runs when there are enough messages
                 # (independent of autonomous mode, which controls self-assignment)
                 if cycle - last_goal_inference >= goal_inference_interval:

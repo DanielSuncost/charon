@@ -1,12 +1,11 @@
 """Managed host for software teams; never relies on the initiating chat thread."""
 import argparse
 import os
-import signal
-import threading
 from pathlib import Path
 
 from charon.devop.devop_runtime import get_operation_state, set_operation_status
 from charon.devop.devop_agents import spawn_devop_role, _run_operation_controller
+from charon.devop.managed_host import run_managed
 
 
 def main():
@@ -24,21 +23,7 @@ def main():
     if Path(op['project_root']).resolve() != args.project_root.resolve():
         raise SystemExit('Operation project mismatch')
 
-    def stop(*_):
-        set_operation_status(args.state_dir, args.operation_id, 'stopped', 'Runner stopped; partial artifacts retained.')
-        raise SystemExit(143)
-
-    signal.signal(signal.SIGTERM, stop)
-    done = threading.Event()
-
-    def watch_stop():
-        while not done.wait(1):
-            if get_operation_state(args.state_dir, args.operation_id).get('stop_requested'):
-                os.kill(os.getpid(), signal.SIGTERM)
-                return
-
-    threading.Thread(target=watch_stop, daemon=True).start()
-    try:
+    def body():
         set_operation_status(args.state_dir, args.operation_id, 'running', 'Managed runner started; coordinator preparing workstreams.')
         coordinator = spawn_devop_role(args.state_dir, args.project_root, role='coordinator', operation_id=args.operation_id,
                                        user_goal=op['prompt'], parent_agent_id=args.parent_agent_id)
@@ -50,11 +35,13 @@ def main():
         print('Final status: ' + status, flush=True)
         if status == 'failed':
             raise SystemExit(1)
-    except Exception as exc:
-        set_operation_status(args.state_dir, args.operation_id, 'failed', str(exc))
-        raise
-    finally:
-        done.set()
+
+    run_managed(
+        body,
+        stop_requested=lambda: bool(get_operation_state(args.state_dir, args.operation_id).get('stop_requested')),
+        on_stop=lambda: set_operation_status(args.state_dir, args.operation_id, 'stopped', 'Runner stopped; partial artifacts retained.'),
+        on_failure=lambda exc: set_operation_status(args.state_dir, args.operation_id, 'failed', str(exc)),
+    )
 
 
 if __name__ == '__main__':
