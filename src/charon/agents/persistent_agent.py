@@ -405,6 +405,7 @@ def status_summary(state_dir: Path, now: float | None = None) -> dict:
         'current_task': rt.get('current_task') if isinstance(rt.get('current_task'), dict) else None,
         'last_task': rt.get('last_task') if isinstance(rt.get('last_task'), dict) else None,
         'runtime_status': rt.get('status') or 'off',
+        'computer_access': rt.get('computer_access') if isinstance(rt.get('computer_access'), dict) else None,
     }
 
 
@@ -422,6 +423,24 @@ def status_lines(summary: dict) -> list[str]:
         lines.append(f'Last unit: {last.get("title", "")[:60]} → {last.get("outcome", "")}')
     if summary['stop_requested'] and summary['alive']:
         lines.append('Stop requested; runner has not exited yet')
+    access = summary.get('computer_access')
+    if access and not access.get('ready'):
+        missing = ', '.join(access.get('missing') or []) or 'unavailable'
+        lines.append(f'Desktop control: OFF — not granted: {missing} (see /persistent access)')
+    return lines
+
+
+def access_lines(state_dir: Path) -> list[str]:
+    """The desktop grant report. Prefers what the runner recorded about
+    itself; otherwise probes from the calling process and says so."""
+    rt = load_runtime(state_dir)
+    access = rt.get('computer_access') if isinstance(rt.get('computer_access'), dict) else None
+    if access and process_alive(rt):
+        return list(access.get('message') or [])
+    from charon.computer.permissions import probe
+    lines = list(probe(where='the chat backend').get('message') or [])
+    lines.append('The runner checks again from its own process when it starts; its result can differ '
+                 'if it is launched differently.')
     return lines
 
 

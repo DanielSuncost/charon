@@ -71,6 +71,7 @@ class CommandsMixin:
             {'cmd': '/persistent on', 'desc': 'Turn the persistent agent on (works on your behalf across sessions; off by default)'},
             {'cmd': '/persistent off', 'desc': 'Turn the persistent agent off and stop its runner if one is running'},
             {'cmd': '/persistent status', 'desc': 'Show whether the persistent agent is on and what its runner is doing'},
+            {'cmd': '/persistent access', 'desc': 'Show which macOS grants desktop control needs and which program they must go to'},
             {'cmd': '/monitor every hour <url>', 'desc': 'Create a recurring website health monitor'},
             {'cmd': '/automate every <n> <unit> check <url>', 'desc': 'Create a recurring automation for HTTP checking'},
             {'cmd': '/automate list', 'desc': 'List all automations'},

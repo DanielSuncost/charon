@@ -18,6 +18,10 @@ memory = [
 browser = [
     "playwright>=1.50",
 ]
+desktop = [
+    "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",
+    "pyobjc-framework-ApplicationServices>=10; sys_platform == 'darwin'",
+]
 office = [
     "openpyxl>=3.1",
     "python-docx>=1.1",

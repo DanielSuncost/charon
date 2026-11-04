@@ -141,6 +141,7 @@ class PersistentRunner:
                          started_at=pa._now_iso(), heartbeat_at=pa._now_iso(), stop_requested=False,
                          project=self.project, doing='starting', current_task=None, exit_note='')
         self.ensure_agent()
+        self.record_computer_access()
         pa.audit(self.state_dir, 'runner_started', pid=os.getpid(), project=self.project,
                  agent_id=self.agent['id'], resumed_after=(resumed_from or {}).get('title'))
         self.recover_interrupted()
@@ -152,6 +153,21 @@ class PersistentRunner:
             did = self.step()
             if did == 'idle':
                 self.wait_for_change()
+
+    def record_computer_access(self) -> dict:
+        """Probe the macOS grants from this process, the one that will make
+        the desktop calls, and record what it found. Grants depend on the
+        launch chain, so the chat backend's own view is not a substitute."""
+        from charon.computer.permissions import probe
+        try:
+            access = probe(where='the persistent runner')
+        except Exception as exc:
+            access = {'supported': False, 'ready': False, 'missing': [], 'where': 'the persistent runner',
+                      'message': [f'Desktop access check failed: {type(exc).__name__}: {exc}']}
+        pa.write_runtime(self.state_dir, computer_access=access)
+        pa.audit(self.state_dir, 'computer_access_checked', ready=access.get('ready'),
+                 missing=access.get('missing'), grant_target=(access.get('responsible') or {}).get('grant_target'))
+        return access
 
     def recover_interrupted(self) -> list[str]:
         """A goal left in 'planning' by a stop has no plan and would never
