@@ -444,9 +444,12 @@ class CoreCommandsMixin:
                     tb = auto.get('time_budget_minutes')
                     lines.append(f'Time budget: {tb} min' if tb else 'Time budget: unlimited')
                     lines.append(f'Git checkpoints: {"on" if auto.get("git_checkpoint") else "off"}')
+                    from charon.agents.persistent_agent import is_enabled as _persistent_on
+                    lines.append(f'Persistent agent: {"ON" if _persistent_on(auto) else "OFF"}')
                 except Exception as exc:
                     _diag('commands_mixin', 'autonomous config unreadable; /settings assumes autonomous mode OFF', error=exc)
                     lines.append('Autonomous mode: OFF')
+                    lines.append('Persistent agent: OFF')
                 lines.append('')
 
                 # Consolidation

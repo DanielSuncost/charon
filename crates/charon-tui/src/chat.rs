@@ -284,7 +284,12 @@ pub fn team_band_lines(status: &Value, backend_alive: bool, silent_for: u64, now
     let n = agents.len();
     let health = |a: &Value| a.get("health").and_then(Value::as_str).unwrap_or("ok").to_string();
     let quiet = agents.iter().filter(|a| health(a) == "quiet").count();
-    let mut head = format!("{} agent{} working on your task", n, if n == 1 { "" } else { "s" });
+    // The backend may name the band itself (the persistent agent is not a
+    // team working on a task); otherwise describe the team by count.
+    let mut head = match status.get("headline").and_then(Value::as_str) {
+        Some(h) if !h.is_empty() => h.to_string(),
+        _ => format!("{} agent{} working on your task", n, if n == 1 { "" } else { "s" }),
+    };
     if quiet > 0 {
         head.push_str(&format!(" · {} quiet", quiet));
     }
@@ -2525,6 +2530,17 @@ mod tests {
         assert_eq!(lines[2].0, TeamTone::Quiet);
         // Narrow terminals truncate instead of wrapping.
         assert!(team_band_lines(&team(now), true, 1, now, 30, 5).iter().all(|(_, l)| l.chars().count() <= 30));
+    }
+
+    #[test]
+    fn team_band_uses_the_backend_headline_for_the_persistent_agent() {
+        let now = 1_800_000_000.0;
+        let status = json!({"state": "working", "headline": "Persistent agent ON · no runner process", "agents": [
+            {"label": "persistent", "doing": "on · no runner process", "phase": "", "phase_index": 0, "phase_count": 0,
+             "started_at": now - 30.0, "last_event_at": now - 30.0, "health": "ok"}]});
+        let lines = team_band_lines(&status, true, 1, now, 72, 5);
+        assert_eq!(lines[0].1, "● Persistent agent ON · no runner process");
+        assert!(lines[1].1.starts_with("  · persistent  on · no runner process"));
     }
 
     #[test]

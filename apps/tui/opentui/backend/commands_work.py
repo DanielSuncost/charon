@@ -830,6 +830,7 @@ class WorkCommandsMixin:
         if command == '/autonomous' or command == '/autonomous status':
             try:
                 from charon.agents.autonomous import load_autonomous_config, get_proposed_goals, get_goals_by_status
+                from charon.agents import persistent_agent
                 config = load_autonomous_config(common.STATE_DIR)
                 onboarding = common._load_json(common.STATE_DIR / 'onboarding.json', {})
                 project = str(onboarding.get('project') or str(common.ROOT)).strip()
@@ -841,7 +842,8 @@ class WorkCommandsMixin:
                     f'Time budget: {config.get("time_budget_minutes") or "unlimited"} min\n'
                     f'Token budget: {config.get("token_budget") or "unlimited"}\n'
                     f'Git checkpoints: {"on" if config.get("git_checkpoint") else "off"}\n'
-                    f'Goals — proposed: {len(proposed)}, confirmed: {len(confirmed)}, executing: {len(executing)}'
+                    f'Goals — proposed: {len(proposed)}, confirmed: {len(confirmed)}, executing: {len(executing)}\n'
+                    + '\n'.join(persistent_agent.status_lines(persistent_agent.status_summary(common.STATE_DIR)))
                 )
                 common.emit({'type': 'status', 'message': msg, 'request_id': request_id})
             except Exception as e:
@@ -884,6 +886,42 @@ class WorkCommandsMixin:
                 common.emit({'type': 'error', 'error': 'Usage: /autonomous tokens <count>', 'request_id': request_id})
             return
         return UNHANDLED
+
+    def _cmd_persistent(self, command: str, request_id: str | None):
+        """On/off control for the persistent agent.
+
+        `off` is a real stop: the config is turned off first so nothing can
+        relaunch, then the runner process (if any) is signalled and the
+        reply says whether it actually exited.
+        """
+        rest = command[len('/persistent'):].strip().lower()
+        from charon.agents import persistent_agent
+        try:
+            if rest in ('', 'status'):
+                lines = persistent_agent.status_lines(persistent_agent.status_summary(common.STATE_DIR))
+                common.emit({'type': 'status', 'message': '\n'.join(lines), 'request_id': request_id})
+                return
+            if rest == 'on':
+                persistent_agent.set_enabled(common.STATE_DIR, True)
+                summary = persistent_agent.status_summary(common.STATE_DIR)
+                note = ('runner already running' if summary['alive']
+                        else 'no runner is attached yet, so nothing operates the machine')
+                common.emit({'type': 'status', 'message': f'Persistent agent ON ({note}).', 'request_id': request_id})
+                common.emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': request_id})
+                return
+            if rest in ('off', 'stop'):
+                persistent_agent.set_enabled(common.STATE_DIR, False)
+                result = persistent_agent.request_stop(common.STATE_DIR)
+                if result['was_running'] and not result['exited']:
+                    common.emit({'type': 'error', 'error': f'Persistent agent OFF, but {result["note"]}.', 'request_id': request_id})
+                else:
+                    common.emit({'type': 'status', 'message': f'Persistent agent OFF ({result["note"]}).', 'request_id': request_id})
+                common.emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': request_id})
+                return
+            common.emit({'type': 'error', 'error': 'Usage: /persistent on | off | status', 'request_id': request_id})
+        except Exception as e:
+            common.emit({'type': 'error', 'error': f'Persistent agent command failed: {e}', 'request_id': request_id})
+        return
 
     def _cmd_confirm(self, command: str, request_id: str | None):
         if command == '/confirm' or command.startswith('/confirm '):

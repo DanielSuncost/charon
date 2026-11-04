@@ -1045,13 +1045,24 @@ class ChatMixin:
         """
         import time as _time
         from backend.team_status import TeamTracker
+        from charon.agents import persistent_agent
         tracker, owner, shown = TeamTracker(), None, False
+        persistent = persistent_agent.PersistentBandTracker()
         while True:
             try:
                 current = str(getattr(self, '_bound_agent_id', None) or self._active_agent_id or '')
                 if current != owner:
                     tracker, owner = TeamTracker(), current
                 status, lines = tracker.tick(common.STATE_DIR, owner)
+                # The persistent agent is not a shade, but it works for the
+                # user in the same sense, so it gets a row in the same band.
+                prow, plines = persistent.tick(common.STATE_DIR)
+                lines = lines + plines
+                if prow and status['state'] == 'idle':
+                    status = {**status, 'state': 'working', 'agents': [prow],
+                              'headline': persistent_agent.band_headline(prow)}
+                elif prow and status['state'] == 'working':
+                    status = {**status, 'agents': list(status['agents']) + [prow]}
                 if lines:
                     common.emit({'type': 'team_update', 'lines': lines})
                 if status['state'] != 'idle' or shown:

@@ -45,6 +45,7 @@ DEFAULT_AUTONOMOUS_CONFIG = {
     'goal_inference_interval': 10,  # heartbeats between goal inference attempts
     'require_confirmation': True,   # goals must be user-confirmed before execution
     'auto_propose_from_backlog': True,  # propose backlog ideas when idle
+    'persistent': False,            # persistent agent off; only a literal true turns it on
 }
 
 
