@@ -19,6 +19,7 @@ __pycache__/
 
 # Build artifacts
 apps/tui/opentui/dist/
+build/desktop/
 
 # Rust / Cargo
 target/

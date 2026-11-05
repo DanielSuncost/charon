@@ -155,18 +155,18 @@ class PersistentRunner:
                 self.wait_for_change()
 
     def record_computer_access(self) -> dict:
-        """Probe the macOS grants from this process, the one that will make
-        the desktop calls, and record what it found. Grants depend on the
-        launch chain, so the chat backend's own view is not a substitute."""
+        """Ask the Charon Desktop helper which grants it holds and record
+        it, so status can say plainly that desktop control is off."""
         from charon.computer.permissions import probe
         try:
-            access = probe(where='the persistent runner')
+            access = probe()
         except Exception as exc:
-            access = {'supported': False, 'ready': False, 'missing': [], 'where': 'the persistent runner',
+            access = {'supported': False, 'ready': False, 'missing': [], 'error': str(exc),
                       'message': [f'Desktop access check failed: {type(exc).__name__}: {exc}']}
         pa.write_runtime(self.state_dir, computer_access=access)
         pa.audit(self.state_dir, 'computer_access_checked', ready=access.get('ready'),
-                 missing=access.get('missing'), grant_target=(access.get('responsible') or {}).get('grant_target'))
+                 missing=access.get('missing'), error=access.get('error') or '',
+                 helper=(access.get('helper') or {}).get('app'))
         return access
 
     def recover_interrupted(self) -> list[str]:

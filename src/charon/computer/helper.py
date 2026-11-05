@@ -1,0 +1,167 @@
+"""Client for the Charon Desktop helper (ai.charon.desktop).
+
+The helper is a separate signed binary (source in apps/desktop-helper) and
+the only process that holds the macOS desktop grants. Python never calls
+the capture, injection or event-tap APIs itself; it asks the helper over a
+pipe (one JSON object per line each way).
+
+Before trusting a helper binary, ``verify`` checks its signature: it must
+carry the identifier ``ai.charon.desktop`` and a real team identity, never
+an ad-hoc signature, because the grants are pinned to that identity and a
+binary that merely sits at the expected path must not inherit them. Set
+``CHARON_DESKTOP_TEAM`` to require a specific team.
+
+On start the helper re-execs itself with responsibility disclaimed, so the
+grants macOS checks are its own whichever process launched it. ``start``
+confirms that from the helper's own report and refuses otherwise.
+"""
+from __future__ import annotations
+
+import json
+import os
+import select
+import subprocess
+import threading
+from pathlib import Path
+
+BUNDLE_ID = 'ai.charon.desktop'
+EXECUTABLE = 'Contents/MacOS/CharonDesktop'
+PROTOCOL = 1
+# Liveness bound for one request/reply on the pipe. The helper answers
+# these instantly; this is not a cap on any unit of agent work.
+REPLY_TIMEOUT_SECONDS = 10.0
+BUILD_HINT = 'CHARON_DESKTOP_SIGN_IDENTITY="<Developer ID>" apps/desktop-helper/build.sh'
+
+
+class HelperError(RuntimeError):
+    pass
+
+
+def default_app_path() -> Path:
+    env = os.environ.get('CHARON_DESKTOP_APP')
+    if env:
+        return Path(env).expanduser()
+    return Path(__file__).resolve().parents[3] / 'build' / 'desktop' / 'CharonDesktop.app'
+
+
+def verify(app: Path) -> dict:
+    """Signature facts for the helper bundle, with ``error`` set when it
+    must not be used."""
+    app = Path(app)
+    info: dict = {'app': str(app), 'identifier': '', 'team': '', 'adhoc': False, 'error': ''}
+    if not (app / EXECUTABLE).exists():
+        info['error'] = f'Charon Desktop helper is not built (expected {app}). Build it with: {BUILD_HINT}'
+        return info
+    try:
+        check = subprocess.run(['codesign', '--verify', '--strict', str(app)], capture_output=True, text=True, timeout=15)
+        desc = subprocess.run(['codesign', '-dv', str(app)], capture_output=True, text=True, timeout=15).stderr
+    except (OSError, subprocess.SubprocessError) as exc:
+        info['error'] = f'cannot check the helper signature: {exc}'
+        return info
+    for line in desc.splitlines():
+        key, _, value = line.partition('=')
+        if key == 'Identifier':
+            info['identifier'] = value
+        elif key == 'TeamIdentifier':
+            info['team'] = '' if value == 'not set' else value
+        elif key == 'Signature' and value == 'adhoc':
+            info['adhoc'] = True
+    if 'flags=0x2(adhoc)' in desc:
+        info['adhoc'] = True
+    want_team = os.environ.get('CHARON_DESKTOP_TEAM', '').strip()
+    if check.returncode != 0:
+        info['error'] = f'the helper signature is invalid: {(check.stderr or "").strip()[:200]}'
+    elif info['identifier'] != BUNDLE_ID:
+        info['error'] = f'the helper is signed as {info["identifier"] or "nothing"}, not {BUNDLE_ID}'
+    elif info['adhoc'] or not info['team']:
+        info['error'] = ('the helper is ad-hoc signed; macOS would drop its grants on every rebuild. '
+                         f'Rebuild with a Developer ID: {BUILD_HINT}')
+    elif want_team and info['team'] != want_team:
+        info['error'] = f'the helper is signed by team {info["team"]}, not the required {want_team}'
+    return info
+
+
+class DesktopHelper:
+    """One running helper process. Not thread-safe across processes; calls
+    from threads in this process are serialised."""
+
+    def __init__(self, app: Path | None = None):
+        self.app = Path(app) if app else default_app_path()
+        self.proc: subprocess.Popen | None = None
+        self.identity: dict = {}
+        self.signature: dict = {}
+        self._lock = threading.Lock()
+        self._next_id = 0
+        self._buf = b''
+
+    def start(self) -> dict:
+        self.signature = verify(self.app)
+        if self.signature['error']:
+            raise HelperError(self.signature['error'])
+        env = {k: v for k, v in os.environ.items() if k != 'CHARON_DESKTOP_DISCLAIMED'}
+        self.proc = subprocess.Popen([str(self.app / EXECUTABLE), 'serve'], stdin=subprocess.PIPE,
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, bufsize=0)
+        hello = self.call('hello')
+        ident = hello.get('identity') or {}
+        if ident.get('bundle_id') != BUNDLE_ID or ident.get('protocol') != PROTOCOL:
+            self.close()
+            raise HelperError(f'unexpected helper identity: {ident}')
+        if not ident.get('is_self_responsible'):
+            self.close()
+            raise HelperError('the helper could not take responsibility for its own grants; macOS would '
+                              f'attribute them to pid {ident.get("responsible_pid")} instead')
+        self.identity = ident
+        return ident
+
+    def call(self, cmd: str, **fields) -> dict:
+        if self.proc is None or self.proc.poll() is not None:
+            raise HelperError('the helper is not running')
+        with self._lock:
+            self._next_id += 1
+            req = {'id': self._next_id, 'cmd': cmd, **fields}
+            try:
+                self.proc.stdin.write((json.dumps(req) + '\n').encode())
+                self.proc.stdin.flush()
+            except (BrokenPipeError, OSError) as exc:
+                raise HelperError(f'the helper exited: {exc}') from exc
+            line = self._readline()
+        try:
+            reply = json.loads(line)
+        except ValueError as exc:
+            raise HelperError(f'malformed reply from the helper: {line[:200]!r}') from exc
+        if reply.get('fatal'):
+            raise HelperError(str(reply.get('error')))
+        if reply.get('id') != req['id']:
+            raise HelperError('the helper replied out of order')
+        return reply
+
+    def _readline(self) -> str:
+        out = self.proc.stdout
+        while b'\n' not in self._buf:
+            ready, _, _ = select.select([out], [], [], REPLY_TIMEOUT_SECONDS)
+            if not ready:
+                raise HelperError('the helper did not answer')
+            chunk = os.read(out.fileno(), 65536)
+            if not chunk:
+                raise HelperError(f'the helper exited (code {self.proc.poll()})')
+            self._buf += chunk
+        line, _, self._buf = self._buf.partition(b'\n')
+        return line.decode('utf-8', 'replace').strip()
+
+    def close(self) -> None:
+        proc, self.proc = self.proc, None
+        if proc is None:
+            return
+        try:
+            proc.stdin.close()  # EOF: the helper exits on its own
+            proc.wait(timeout=2)
+        except Exception:
+            proc.kill()
+            proc.wait()
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, *exc):
+        self.close()

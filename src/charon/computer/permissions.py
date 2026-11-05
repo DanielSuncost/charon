@@ -1,23 +1,17 @@
 """Which macOS privacy grants desktop computer use needs, and who holds them.
 
 TCC (the macOS privacy database) attaches a grant to the code identity of
-the *responsible process*, not to the program that asked for it and not to
-"Charon" as a product. Which process is responsible depends on how the
-caller was launched, so it is measured here, in the process that will make
-the calls, never assumed:
+the *responsible process*. Measured on this machine: under tmux a Python
+child is its own responsible process, so without a helper the grant would
+fall on Homebrew's interpreter (org.python.python, ad-hoc signed). That
+would hand screen capture and input injection to every script the
+interpreter runs, and an upgrade would silently drop it. Launched from
+Terminal.app the same child is attributed to Terminal instead.
 
-* Under tmux (how Charon normally runs) the tmux server is detached from any
-  app, and a Python started beneath it is its own responsible process. The
-  grant must go to the interpreter binary itself: for a venv over Homebrew
-  Python that is ``.../Python.framework/.../Resources/Python.app``, which
-  ``.venv/bin/python`` re-execs into. Measured on this machine.
-* Started directly from a terminal window, the terminal app (Terminal,
-  iTerm, Ghostty, ...) is responsible and the grant must go to it.
-
-A probe run in one process says nothing about another with a different
-launch chain, which is why the persistent runner probes itself at start and
-records the result, and why a probe from the chat backend is labelled as
-such.
+So no Charon Python process holds these grants. They belong to the Charon
+Desktop helper (``ai.charon.desktop``, see ``helper.py``), which is signed
+with a Developer ID and disclaims responsibility on start, so the grants
+are its own whoever launched it (verified under both tmux and Terminal).
 
 Three grants are involved:
 
@@ -30,20 +24,19 @@ Three grants are involved:
 A missing grant fails silently in the macOS APIs (a black or wallpaper-only
 capture, events that go nowhere, a tap that never fires), so every caller
 must check ``probe()`` first and refuse with its plain-language message
-rather than run degraded.
+rather than run degraded. A helper that is absent, unsigned, ad-hoc signed
+or unable to take responsibility for itself counts as nothing granted.
 
 Preflight is read-only and never prompts. ``request()`` shows the system
-prompt and is only called from an explicit user command. Screen Recording
-preflight can stay false until the granted process restarts; the message
-says so.
+prompts and is only called from an explicit user command. Screen Recording
+preflight can stay false until the helper restarts; it is started fresh
+for every probe, so a re-check after granting is enough.
 """
 from __future__ import annotations
 
-import ctypes
-import os
-import subprocess
 import sys
-from pathlib import Path
+
+from charon.computer.helper import DesktopHelper, HelperError, default_app_path
 
 SCREEN_RECORDING = 'screen_recording'
 ACCESSIBILITY = 'accessibility'
@@ -62,175 +55,80 @@ PURPOSE = {
 }
 
 
-# ── Responsible process ─────────────────────────────────────────────
-
-def _responsible_pid(pid: int) -> int | None:
-    """The pid TCC attributes this process's requests to. Uses the libSystem
-    responsibility API (present since 10.14, not in public headers)."""
-    try:
-        lib = ctypes.CDLL('/usr/lib/libSystem.B.dylib')
-        fn = lib.responsibility_get_pid_responsible_for_pid
-    except (OSError, AttributeError):
-        return None
-    fn.restype = ctypes.c_int
-    fn.argtypes = [ctypes.c_int]
-    r = fn(pid)
-    return r if r > 0 else None
+def _unavailable(reason: str, app: str = '') -> dict:
+    result = {'supported': sys.platform == 'darwin', 'ready': False, 'grants': {g: None for g in GRANTS},
+              'missing': list(GRANTS), 'helper': {'app': app}, 'error': reason}
+    result['message'] = explain(result)
+    return result
 
 
-def _executable_of(pid: int) -> str | None:
-    try:
-        lib = ctypes.CDLL('/usr/lib/libproc.dylib')
-        buf = ctypes.create_string_buffer(4096)
-        n = lib.proc_pidpath(ctypes.c_int(pid), buf, ctypes.c_uint32(4096))
-        if n > 0:
-            return buf.value.decode('utf-8', 'replace')
-    except (OSError, AttributeError):
-        pass
-    return None
-
-
-def _bundle_of(path: str) -> str | None:
-    for parent in Path(path).parents:
-        if parent.suffix == '.app':
-            return str(parent)
-    return None
-
-
-def _signature(path: str) -> dict:
-    """Signing facts that decide whether a grant survives: TCC pins an
-    ad-hoc signed binary by its exact hash, so any rebuild or upgrade
-    silently voids the grant."""
-    try:
-        out = subprocess.run(['codesign', '-dv', path], capture_output=True, text=True, timeout=5).stderr
-    except (OSError, subprocess.SubprocessError):
-        return {}
-    info = {}
-    for line in out.splitlines():
-        key, _, value = line.partition('=')
-        if key == 'Identifier':
-            info['identifier'] = value
-        elif key == 'TeamIdentifier':
-            info['team'] = '' if value == 'not set' else value
-        elif key == 'Signature':
-            info['adhoc'] = value == 'adhoc'
-    if 'adhoc' not in info and 'flags=0x2(adhoc)' in out:
-        info['adhoc'] = True
-    return info
-
-
-def responsible_process(pid: int | None = None) -> dict:
-    pid = os.getpid() if pid is None else pid
-    rpid = _responsible_pid(pid) or pid
-    exe = _executable_of(rpid) or (sys.executable if rpid == os.getpid() else '')
-    bundle = _bundle_of(exe) if exe else None
-    target = bundle or exe
-    sig = _signature(target) if target else {}
-    return {
-        'pid': pid,
-        'responsible_pid': rpid,
-        'is_self': rpid == pid,
-        'executable': exe,
-        'bundle': bundle,
-        'grant_target': target,
-        'name': Path(bundle).stem if bundle else (Path(exe).name if exe else 'unknown'),
-        'identifier': sig.get('identifier', ''),
-        'team': sig.get('team', ''),
-        'adhoc': bool(sig.get('adhoc')),
-        'interpreter': _is_interpreter(exe),
-    }
-
-
-def _is_interpreter(exe: str | None) -> bool:
-    name = Path(exe or '').name.lower()
-    return name.startswith('python') or name in ('node', 'ruby', 'perl', 'bash', 'zsh', 'sh')
-
-
-# ── Grants ──────────────────────────────────────────────────────────
-
-def _preflight() -> dict:
-    """Read-only checks. A value of None means the check itself could not
-    run, which callers treat as not granted."""
-    out: dict = {g: None for g in GRANTS}
-    try:
-        import Quartz
-    except Exception:
-        return out
-    try:
-        out[SCREEN_RECORDING] = bool(Quartz.CGPreflightScreenCaptureAccess())
-    except Exception:
-        pass
-    try:
-        from ApplicationServices import AXIsProcessTrusted
-        ax = bool(AXIsProcessTrusted())
-        post = bool(Quartz.CGPreflightPostEventAccess())
-        out[ACCESSIBILITY] = ax and post
-    except Exception:
-        pass
-    try:
-        out[INPUT_MONITORING] = bool(Quartz.CGPreflightListenEventAccess())
-    except Exception:
-        pass
-    return out
-
-
-def probe(*, where: str = 'this process') -> dict:
-    """Grant status as seen by the calling process. ``where`` names that
-    process for the message ('the persistent runner', 'the chat backend')."""
+def probe(helper: DesktopHelper | None = None) -> dict:
+    """Grant status as the helper itself sees it. Pass a running helper to
+    reuse it; otherwise a fresh one is started and closed."""
     if sys.platform != 'darwin':
-        return {'supported': False, 'where': where, 'grants': {}, 'missing': list(GRANTS),
-                'ready': False, 'responsible': {},
+        return {'supported': False, 'ready': False, 'grants': {}, 'missing': list(GRANTS), 'helper': {},
+                'error': 'macOS only',
                 'message': ['Desktop computer use is macOS only; it is unavailable on this system.']}
-    grants = _preflight()
-    missing = [g for g in GRANTS if grants.get(g) is not True]
-    resp = responsible_process()
-    result = {'supported': True, 'where': where, 'grants': grants, 'missing': missing,
-              'ready': not missing, 'responsible': resp}
+    own = helper is None
+    helper = helper or DesktopHelper()
+    try:
+        if own:
+            helper.start()
+        reply = helper.call('permissions')
+    except HelperError as exc:
+        return _unavailable(str(exc), str(helper.app))
+    finally:
+        if own:
+            helper.close()
+    raw = reply.get('grants') or {}
+    grants = {g: (raw.get(g) if isinstance(raw.get(g), bool) else None) for g in GRANTS}
+    missing = [g for g in GRANTS if grants[g] is not True]
+    result = {'supported': True, 'ready': not missing, 'grants': grants, 'missing': missing, 'error': '',
+              'helper': {'app': str(helper.app), 'team': helper.signature.get('team', ''),
+                         'bundle_id': helper.identity.get('bundle_id', ''),
+                         'version': helper.identity.get('version', '')}}
     result['message'] = explain(result)
     return result
 
 
 def explain(result: dict) -> list[str]:
     if not result.get('supported'):
-        return list(result.get('message') or [])
-    resp = result.get('responsible') or {}
+        return list(result.get('message') or ['Desktop computer use is macOS only.'])
     grants = result.get('grants') or {}
-    name = resp.get('name') or 'unknown'
-    target = resp.get('grant_target') or 'unknown'
+    app = (result.get('helper') or {}).get('app') or str(default_app_path())
     lines = []
+    if result.get('error'):
+        lines.append(f'Desktop computer use is OFF: {result["error"]}')
+        return lines
     for g in GRANTS:
         mark = '✓' if grants.get(g) is True else '✗'
         lines.append(f'{mark} {PANE[g]} — to {PURPOSE[g]}')
+    team = (result.get('helper') or {}).get('team')
     if not result.get('missing'):
-        lines.append(f'All granted to {name} ({target}), checked from {result.get("where")}.')
+        lines.append(f'All granted to Charon Desktop ({app}, team {team}).')
         return lines
-    lines.append(f'Desktop computer use is OFF until these are granted. macOS checks {result.get("where")} as: {name}')
-    lines.append(f'  {target}')
-    lines.append('Grant it in System Settings → Privacy & Security → each pane above (use + and pick that path).')
-    if grants.get(SCREEN_RECORDING) is not True:
-        lines.append('After granting Screen Recording, restart Charon; macOS reports it only to a fresh process.')
-    if resp.get('interpreter'):
-        lines.append(f'Note: {name} is a general interpreter. A grant to it applies to every script it runs, '
-                     'not only Charon.')
-    if resp.get('adhoc'):
-        lines.append(f'Note: {name} is ad-hoc signed, so macOS ties the grant to this exact build; '
-                     'an upgrade or rebuild drops it without warning.')
+    lines.append('Desktop computer use is OFF until these are granted to Charon Desktop:')
+    lines.append(f'  {app}')
+    lines.append('System Settings → Privacy & Security → each ✗ pane above → + → choose that app '
+                 '(or run /persistent access request to have macOS list it for you), then switch it on.')
+    lines.append('Grant it to Charon Desktop only, not to Python or your terminal.')
     return lines
 
 
-def request(grant: str) -> bool | None:
-    """Show the macOS prompt for one grant. Only from an explicit user
-    command; returns the preflight result afterwards (often still False
-    until the user acts in System Settings)."""
-    if sys.platform != 'darwin' or grant not in GRANTS:
-        return None
-    import Quartz
-    if grant == SCREEN_RECORDING:
-        Quartz.CGRequestScreenCaptureAccess()
-    elif grant == INPUT_MONITORING:
-        Quartz.CGRequestListenEventAccess()
-    elif grant == ACCESSIBILITY:
-        from ApplicationServices import AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt
-        AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True})
-        Quartz.CGRequestPostEventAccess()
-    return _preflight().get(grant)
+def request(helper: DesktopHelper | None = None) -> dict:
+    """Ask macOS to show its prompt for each missing grant, which also adds
+    Charon Desktop to those panes. Only from an explicit user command."""
+    own = helper is None
+    helper = helper or DesktopHelper()
+    try:
+        if own:
+            helper.start()
+        before = probe(helper)
+        for g in before['missing']:
+            helper.call('request_access', grant=g)
+        return probe(helper)
+    except HelperError as exc:
+        return _unavailable(str(exc), str(helper.app))
+    finally:
+        if own:
+            helper.close()

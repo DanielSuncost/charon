@@ -918,8 +918,8 @@ class WorkCommandsMixin:
                 common.emit({'type': 'status', 'message': f'Persistent agent ON ({note}).', 'request_id': request_id})
                 common.emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': request_id})
                 return
-            if rest == 'access':
-                lines = persistent_agent.access_lines(common.STATE_DIR)
+            if rest in ('access', 'access request'):
+                lines = persistent_agent.access_lines(common.STATE_DIR, request=rest == 'access request')
                 common.emit({'type': 'status', 'message': 'Desktop access\n' + '\n'.join(lines), 'request_id': request_id})
                 return
             if rest in ('off', 'stop'):
@@ -931,7 +931,7 @@ class WorkCommandsMixin:
                     common.emit({'type': 'status', 'message': f'Persistent agent OFF ({result["note"]}).', 'request_id': request_id})
                 common.emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': request_id})
                 return
-            common.emit({'type': 'error', 'error': 'Usage: /persistent on | off | status | access', 'request_id': request_id})
+            common.emit({'type': 'error', 'error': 'Usage: /persistent on | off | status | access [request]', 'request_id': request_id})
         except Exception as e:
             common.emit({'type': 'error', 'error': f'Persistent agent command failed: {e}', 'request_id': request_id})
         return

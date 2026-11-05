@@ -426,22 +426,20 @@ def status_lines(summary: dict) -> list[str]:
     access = summary.get('computer_access')
     if access and not access.get('ready'):
         missing = ', '.join(access.get('missing') or []) or 'unavailable'
-        lines.append(f'Desktop control: OFF — not granted: {missing} (see /persistent access)')
+        why = access.get('error') or f'not granted: {missing}'
+        lines.append(f'Desktop control: OFF — {why[:160]} (see /persistent access)')
     return lines
 
 
-def access_lines(state_dir: Path) -> list[str]:
-    """The desktop grant report. Prefers what the runner recorded about
-    itself; otherwise probes from the calling process and says so."""
-    rt = load_runtime(state_dir)
-    access = rt.get('computer_access') if isinstance(rt.get('computer_access'), dict) else None
-    if access and process_alive(rt):
-        return list(access.get('message') or [])
-    from charon.computer.permissions import probe
-    lines = list(probe(where='the chat backend').get('message') or [])
-    lines.append('The runner checks again from its own process when it starts; its result can differ '
-                 'if it is launched differently.')
-    return lines
+def access_lines(state_dir: Path, *, request: bool = False) -> list[str]:
+    """The desktop grant report, checked fresh against the Charon Desktop
+    helper (its grants are its own whichever process asks). With
+    ``request`` macOS is asked to prompt for each missing grant."""
+    from charon.computer import permissions
+    result = permissions.request() if request else permissions.probe()
+    audit(state_dir, 'computer_access_requested' if request else 'computer_access_checked',
+          ready=result.get('ready'), missing=result.get('missing'), error=result.get('error') or '')
+    return list(result.get('message') or [])
 
 
 def band_row(state_dir: Path, now: float | None = None) -> dict | None:
