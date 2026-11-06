@@ -97,6 +97,9 @@ class DesktopHelper:
         self.proc: subprocess.Popen | None = None
         self.sock: socket.socket | None = None
         self.caller: dict = {}
+        # Unsolicited notices from the helper, oldest first (kill switch
+        # trips). Delivered alongside replies; read and clear them here.
+        self.events: list[dict] = []
         self.identity: dict = {}
         self.signature: dict = {}
         self._lock = threading.Lock()
@@ -146,11 +149,17 @@ class DesktopHelper:
                 self.sock.sendall((json.dumps(req) + '\n').encode())
             except OSError as exc:
                 raise HelperError(f'the helper exited: {exc}') from exc
-            line = self._readline()
-        try:
-            reply = json.loads(line)
-        except ValueError as exc:
-            raise HelperError(f'malformed reply from the helper: {line[:200]!r}') from exc
+            while True:
+                line = self._readline()
+                try:
+                    reply = json.loads(line)
+                except ValueError as exc:
+                    raise HelperError(f'malformed reply from the helper: {line[:200]!r}') from exc
+                if 'event' in reply and 'id' not in reply:
+                    # Unsolicited, e.g. the kill switch tripping.
+                    self.events.append(reply)
+                    continue
+                break
         if reply.get('fatal'):
             raise HelperError(str(reply.get('error')))
         if reply.get('id') != req['id']:

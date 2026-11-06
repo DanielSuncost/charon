@@ -164,6 +164,17 @@ func handle(_ req: [String: Any], caller: CallerIdentity) -> [String: Any] {
         return ["id": id, "ok": true, "identity": identity(), "caller": caller.json]
     case "permissions":
         return ["id": id, "ok": true, "grants": grants()]
+    case "killswitch_status":
+        return ["id": id, "ok": true, "killswitch": KillSwitch.shared.status()]
+    case "killswitch_arm":
+        let (ok, why) = KillSwitch.shared.arm()
+        return ["id": id, "ok": ok, "note": why, "killswitch": KillSwitch.shared.status()]
+    case "killswitch_selftest":
+        // Bounded so the verb cannot become a long-running injector.
+        let seconds = min(max((req["seconds"] as? Double) ?? 10, 1), 30)
+        let r = killSwitchSelfTest(seconds: seconds)
+        return ["id": id, "ok": true, "completed": r.completed, "total": r.total,
+                "interrupted": r.interrupted ?? NSNull(), "restored": r.restored]
     case "request_access":
         let grant = req["grant"] as? String ?? ""
         guard let after = requestAccess(grant) else { return ["id": id, "ok": false, "error": "unknown grant: \(grant)"] }
@@ -213,4 +224,11 @@ do {
 } catch {
     fail(fd, "caller refused: \(error)", code: 77)
 }
-serve(channel, caller: caller)
+KillSwitch.shared.onTrip = { why in channel.send(["event": "paused", "reason": why]) }
+_ = KillSwitch.shared.start()  // false without Input Monitoring: stays tripped, nothing can run
+// Requests are served on their own thread; the main thread runs the main
+// loop so AppKit calls (re-activating the user's app) behave.
+let server = Thread { serve(channel, caller: caller) }
+server.name = "channel"
+server.start()
+RunLoop.main.run()

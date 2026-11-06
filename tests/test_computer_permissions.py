@@ -73,3 +73,17 @@ def test_helper_refuses_an_untrusted_caller():
     ) % (str(__import__('pathlib').Path(hp.__file__).parents[2]), str(APP))
     out = subprocess.run(['/usr/bin/python3', '-I', '-c', code], capture_output=True, text=True, timeout=60).stdout
     assert out.startswith('REFUSED') and 'caller refused' in out
+
+
+@pytest.mark.skipif(not BUILT, reason='Charon Desktop helper not built')
+def test_kill_switch_starts_tripped_and_will_not_arm_unproven():
+    with hp.DesktopHelper() as h:
+        ks = h.call('killswitch_status')['killswitch']
+        assert ks['armed'] is False
+        if ks['input_monitoring'] and ks['accessibility']:
+            pytest.skip('grants present; arming is a manual check')
+        armed = h.call('killswitch_arm')
+        assert armed['ok'] is False and armed['killswitch']['armed'] is False
+        # Nothing is posted while the switch is not armed.
+        r = h.call('killswitch_selftest', seconds=1)
+        assert r['completed'] == 0 and r['interrupted']
