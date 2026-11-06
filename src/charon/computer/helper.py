@@ -2,8 +2,14 @@
 
 The helper is a separate signed binary (source in apps/desktop-helper) and
 the only process that holds the macOS desktop grants. Python never calls
-the capture, injection or event-tap APIs itself; it asks the helper over a
-pipe (one JSON object per line each way).
+the capture, injection or event-tap APIs itself; it asks the helper over
+one end of an AF_UNIX socketpair passed at spawn (one JSON object per line
+each way). Nothing else can reach that channel: there is no path, port or
+name to connect to.
+
+The helper authenticates this side too, from the socket's audit token
+against a requirement compiled into it at build time (see
+apps/desktop-helper/Sources/Caller.swift), and refuses any other caller.
 
 Before trusting a helper binary, ``verify`` checks its signature: it must
 carry the identifier ``ai.charon.desktop`` and a real team identity, never
@@ -20,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import select
+import socket
 import subprocess
 import threading
 from pathlib import Path
@@ -88,6 +95,8 @@ class DesktopHelper:
     def __init__(self, app: Path | None = None):
         self.app = Path(app) if app else default_app_path()
         self.proc: subprocess.Popen | None = None
+        self.sock: socket.socket | None = None
+        self.caller: dict = {}
         self.identity: dict = {}
         self.signature: dict = {}
         self._lock = threading.Lock()
@@ -99,10 +108,24 @@ class DesktopHelper:
         if self.signature['error']:
             raise HelperError(self.signature['error'])
         env = {k: v for k, v in os.environ.items() if k != 'CHARON_DESKTOP_DISCLAIMED'}
-        self.proc = subprocess.Popen([str(self.app / EXECUTABLE), 'serve'], stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, bufsize=0)
-        hello = self.call('hello')
+        ours, theirs = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            self.proc = subprocess.Popen([str(self.app / EXECUTABLE), 'serve', '--fd', str(theirs.fileno())],
+                                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL, env=env, pass_fds=(theirs.fileno(),))
+        finally:
+            theirs.close()
+        self.sock = ours
+        try:
+            hello = self.call('hello')
+        except HelperError as exc:
+            self.close()
+            if 'caller refused' in str(exc):
+                raise HelperError(f'{exc}. The helper trusts only the Python it was built for; '
+                                  f'if Python was upgraded, rebuild it: {BUILD_HINT}') from exc
+            raise
         ident = hello.get('identity') or {}
+        self.caller = hello.get('caller') or {}
         if ident.get('bundle_id') != BUNDLE_ID or ident.get('protocol') != PROTOCOL:
             self.close()
             raise HelperError(f'unexpected helper identity: {ident}')
@@ -114,15 +137,14 @@ class DesktopHelper:
         return ident
 
     def call(self, cmd: str, **fields) -> dict:
-        if self.proc is None or self.proc.poll() is not None:
+        if self.sock is None:
             raise HelperError('the helper is not running')
         with self._lock:
             self._next_id += 1
             req = {'id': self._next_id, 'cmd': cmd, **fields}
             try:
-                self.proc.stdin.write((json.dumps(req) + '\n').encode())
-                self.proc.stdin.flush()
-            except (BrokenPipeError, OSError) as exc:
+                self.sock.sendall((json.dumps(req) + '\n').encode())
+            except OSError as exc:
                 raise HelperError(f'the helper exited: {exc}') from exc
             line = self._readline()
         try:
@@ -136,12 +158,11 @@ class DesktopHelper:
         return reply
 
     def _readline(self) -> str:
-        out = self.proc.stdout
         while b'\n' not in self._buf:
-            ready, _, _ = select.select([out], [], [], REPLY_TIMEOUT_SECONDS)
+            ready, _, _ = select.select([self.sock], [], [], REPLY_TIMEOUT_SECONDS)
             if not ready:
                 raise HelperError('the helper did not answer')
-            chunk = os.read(out.fileno(), 65536)
+            chunk = self.sock.recv(65536)
             if not chunk:
                 raise HelperError(f'the helper exited (code {self.proc.poll()})')
             self._buf += chunk
@@ -150,10 +171,12 @@ class DesktopHelper:
 
     def close(self) -> None:
         proc, self.proc = self.proc, None
+        sock, self.sock = self.sock, None
+        if sock is not None:
+            sock.close()  # EOF: the helper exits on its own
         if proc is None:
             return
         try:
-            proc.stdin.close()  # EOF: the helper exits on its own
             proc.wait(timeout=2)
         except Exception:
             proc.kill()

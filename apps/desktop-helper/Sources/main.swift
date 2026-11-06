@@ -13,12 +13,13 @@
 // disclaimed, so macOS attributes its requests to this binary, not to
 // Python, the terminal, or tmux, whichever launched it.
 //
-// Protocol: one JSON object per line on stdin, one JSON reply per line on
-// stdout. EOF on stdin means the parent is gone; the helper exits. It has
-// no network code and opens no files of its own choosing.
+// Channel: one end of an AF_UNIX socketpair the parent passes at spawn
+// (``serve --fd N``); JSON lines both ways. The caller is authenticated by
+// its audit token before any request is read (Caller.swift). EOF on the
+// channel means the parent is gone; the helper exits. It has no network
+// code and opens no files of its own choosing.
 //
-// Capability is deliberately narrow and grows only with the work: this
-// build answers identity and grant questions and nothing else.
+// Capability is deliberately narrow and grows only with the work.
 
 import ApplicationServices
 import CoreGraphics
@@ -114,18 +115,53 @@ func identity() -> [String: Any] {
 
 // ── Serve ───────────────────────────────────────────────────────────
 
-func reply(_ obj: [String: Any]) {
-    guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]) else { return }
-    FileHandle.standardOutput.write(data)
-    FileHandle.standardOutput.write("\n".data(using: .utf8)!)
+/// The authenticated channel. Writes are serialised because the kill
+/// switch reports from its own thread.
+final class Channel {
+    let fd: Int32
+    private var buffer = Data()
+    private let writeLock = NSLock()
+
+    init(fd: Int32) { self.fd = fd }
+
+    func send(_ obj: [String: Any]) {
+        guard var data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]) else { return }
+        data.append(0x0A)
+        writeLock.lock(); defer { writeLock.unlock() }
+        data.withUnsafeBytes { raw in
+            var off = 0
+            while off < raw.count {
+                let n = write(fd, raw.baseAddress! + off, raw.count - off)
+                if n < 0 && errno == EINTR { continue }
+                if n <= 0 { return }
+                off += n
+            }
+        }
+    }
+
+    /// Next line, or nil at EOF.
+    func readLine() -> String? {
+        var chunk = [UInt8](repeating: 0, count: 65536)
+        while true {
+            if let nl = buffer.firstIndex(of: 0x0A) {
+                let line = buffer[buffer.startIndex..<nl]
+                buffer = Data(buffer[buffer.index(after: nl)...])
+                return String(decoding: line, as: UTF8.self)
+            }
+            let n = read(fd, &chunk, chunk.count)
+            if n < 0 && errno == EINTR { continue }
+            if n <= 0 { return nil }
+            buffer.append(contentsOf: chunk[0..<n])
+        }
+    }
 }
 
-func handle(_ req: [String: Any]) -> [String: Any] {
+func handle(_ req: [String: Any], caller: CallerIdentity) -> [String: Any] {
     let id = req["id"] ?? NSNull()
     let cmd = req["cmd"] as? String ?? ""
     switch cmd {
     case "hello":
-        return ["id": id, "ok": true, "identity": identity()]
+        return ["id": id, "ok": true, "identity": identity(), "caller": caller.json]
     case "permissions":
         return ["id": id, "ok": true, "grants": grants()]
     case "request_access":
@@ -137,29 +173,44 @@ func handle(_ req: [String: Any]) -> [String: Any] {
     }
 }
 
-func serve() -> Never {
-    setvbuf(stdout, nil, _IOLBF, 0)
-    while let line = readLine(strippingNewline: true) {
+func serve(_ channel: Channel, caller: CallerIdentity) -> Never {
+    while let line = channel.readLine() {
         if line.isEmpty { continue }
         guard let data = line.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            reply(["ok": false, "error": "malformed request"])
+            channel.send(["ok": false, "error": "malformed request"])
             continue
         }
-        reply(handle(obj))
+        channel.send(handle(obj, caller: caller))
     }
-    exit(0)  // stdin closed: the parent is gone
+    exit(0)  // channel closed: the parent is gone
+}
+
+func fail(_ fd: Int32?, _ message: String, code: Int32) -> Never {
+    if let fd = fd { Channel(fd: fd).send(["ok": false, "fatal": true, "error": message]) }
+    FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
+    exit(code)
 }
 
 let args = CommandLine.arguments
-guard args.count >= 2, args[1] == "serve" else {
-    FileHandle.standardError.write("usage: CharonDesktop serve\n".data(using: .utf8)!)
-    exit(64)
+guard args.count == 4, args[1] == "serve", args[2] == "--fd", let fd = Int32(args[3]), fd > 2,
+      fcntl(fd, F_GETFD) != -1 else {
+    fail(nil, "usage: CharonDesktop serve --fd N (an inherited socket)", code: 64)
+}
+var st = stat()
+guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFSOCK else {
+    fail(nil, "fd \(fd) is not a socket", code: 64)
 }
 if ProcessInfo.processInfo.environment[disclaimedMarker] == nil {
     let why = reexecDisclaimed()
-    reply(["ok": false, "fatal": true, "error": "could not take responsibility for own grants: \(why)"])
-    exit(70)
+    fail(fd, "could not take responsibility for own grants: \(why)", code: 70)
 }
 unsetenv(disclaimedMarker)
-serve()
+let channel = Channel(fd: fd)
+let caller: CallerIdentity
+do {
+    caller = try authenticateCaller(fd: fd, requirement: allowedCallerRequirement)
+} catch {
+    fail(fd, "caller refused: \(error)", code: 77)
+}
+serve(channel, caller: caller)

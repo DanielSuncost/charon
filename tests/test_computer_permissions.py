@@ -53,7 +53,23 @@ def test_built_helper_is_self_responsible_and_answers():
     with hp.DesktopHelper() as h:
         assert h.identity['bundle_id'] == hp.BUNDLE_ID
         assert h.identity['is_self_responsible'] is True
+        # The helper authenticated us from the socket's audit token.
+        assert h.caller['pid'] == __import__('os').getpid()
+        assert h.caller['cdhash']
         assert h.call('nope')['ok'] is False
         r = perm.probe(h)
     assert set(r['grants']) == set(perm.GRANTS)
     assert all(isinstance(v, bool) for v in r['grants'].values())
+
+
+@pytest.mark.skipif(not BUILT or not __import__('os').path.exists('/usr/bin/python3'), reason='needs helper and a second interpreter')
+def test_helper_refuses_an_untrusted_caller():
+    import subprocess
+    code = (
+        'import sys; sys.path.insert(0, %r)\n'
+        'from charon.computer.helper import DesktopHelper, HelperError\n'
+        'try:\n    DesktopHelper(%r).start(); print("ACCEPTED")\n'
+        'except HelperError as e:\n    print("REFUSED", e)\n'
+    ) % (str(__import__('pathlib').Path(hp.__file__).parents[2]), str(APP))
+    out = subprocess.run(['/usr/bin/python3', '-I', '-c', code], capture_output=True, text=True, timeout=60).stdout
+    assert out.startswith('REFUSED') and 'caller refused' in out

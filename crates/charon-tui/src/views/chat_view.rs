@@ -471,7 +471,9 @@ pub fn chat_reserved_bottom(app: &App, variant: ChatLayoutVariant) -> u16 {
         ChatLayoutVariant::Tiny => 4,
     };
     if chat_rowing_active(app) && variant != ChatLayoutVariant::Tiny {
-        reserved += 3;
+        // The one-row activity indicator sits directly above the input
+        // border; the transcript must end on the row above it.
+        reserved = reserved.max(ROWING_ROW_OFFSET);
     }
     let team_rows = app.chat.team_band(usize::MAX, team_band_max_agents(variant)).len() as u16;
     if team_rows > 0 {
@@ -479,6 +481,11 @@ pub fn chat_reserved_bottom(app: &App, variant: ChatLayoutVariant) -> u16 {
     }
     reserved
 }
+
+/// The activity indicator is drawn at row `h - ROWING_ROW_OFFSET`, directly
+/// above the input border (h-6). Used as a reserved-bottom / band offset it
+/// makes everything above end at `h - ROWING_ROW_OFFSET - 1`.
+const ROWING_ROW_OFFSET: u16 = 7;
 
 fn team_band_max_agents(variant: ChatLayoutVariant) -> usize {
     match variant {
@@ -493,7 +500,7 @@ fn team_band_max_agents(variant: ChatLayoutVariant) -> usize {
 fn team_band_bottom_offset(app: &App, variant: ChatLayoutVariant) -> u16 {
     match variant {
         ChatLayoutVariant::Tiny => 4,
-        _ if chat_rowing_active(app) => 9,
+        _ if chat_rowing_active(app) => ROWING_ROW_OFFSET,
         _ => 6,
     }
 }
@@ -602,47 +609,42 @@ pub fn draw_chat<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16, repaint_tr
     draw_chat_chrome(stdout, app, w, h)
 }
 
-pub(crate) fn rowing_indicator_lines(frame: usize) -> Vec<ChatRenderLine> {
-    let water = style::Color::Rgb { r: 99, g: 102, b: 241 };
-    let wave_d = style::Color::Rgb { r: 67, g: 56, b: 202 };
-    let hull = style::Color::Rgb { r: 127, g: 29, b: 29 };
-    let hull_l = style::Color::Rgb { r: 153, g: 27, b: 27 };
+/// One-row activity indicator: the ferryman's oar stroke, his lantern
+/// pulsing, and sparks drifting off it downstream. Four frames, advanced by
+/// `animation_clock_start()` every 300ms; the spark trail has period 4 so the
+/// loop is seamless.
+pub(crate) fn rowing_indicator_line(frame: usize) -> ChatRenderLine {
     let figure = style::Color::Rgb { r: 220, g: 38, b: 38 };
-    let figure_d = style::Color::Rgb { r: 153, g: 27, b: 27 };
     let oar = style::Color::Rgb { r: 212, g: 196, b: 168 };
     let lantern_bright = style::Color::Rgb { r: 251, g: 191, b: 36 };
     let lantern_dim = style::Color::Rgb { r: 245, g: 158, b: 11 };
     let lantern_glow = style::Color::Rgb { r: 253, g: 230, b: 138 };
     let spark = style::Color::Rgb { r: 252, g: 211, b: 77 };
-    let mk = |spans: Vec<(style::Color, &str)>| ChatRenderLine {
-        spans: spans.into_iter().map(|(fg, text)| ChatSpan { fg, text: text.to_string() }).collect(),
-        bg: None,
-        copy_text: String::new(),
-        copy_offset: 0,
-        selectable: false,
-    };
-    match frame % 4 {
-        0 => vec![
-            mk(vec![(style::Color::Reset, "        "), (figure, "▵"), (oar, "_"), (spark, "·"), (lantern_bright, "◈"), (spark, "*."), (style::Color::Reset, "      ")]),
-            mk(vec![(style::Color::Reset, "       "), (figure_d, "█"), (oar, "─╱"), (style::Color::Reset, "            ")]),
-            mk(vec![(water, "  ≈"), (wave_d, "~"), (hull, "╘"), (hull_l, "▬▬"), (hull, "▬"), (hull_l, "▬▬"), (hull, "╛"), (wave_d, "~"), (water, "≈"), (wave_d, "~~  ")]),
-        ],
-        1 => vec![
-            mk(vec![(style::Color::Reset, "       "), (figure, "▵"), (oar, "_"), (spark, "·"), (lantern_dim, "◈"), (spark, " *"), (style::Color::Reset, "       ")]),
-            mk(vec![(style::Color::Reset, "      "), (figure_d, "█"), (oar, "─│"), (style::Color::Reset, "             ")]),
-            mk(vec![(wave_d, " ~"), (water, "≈"), (hull, "╘"), (hull_l, "▬▬"), (hull, "▬"), (hull_l, "▬▬"), (hull, "╛"), (water, "≈"), (wave_d, "~"), (water, "≈   ")]),
-        ],
-        2 => vec![
-            mk(vec![(style::Color::Reset, "        "), (figure, "▵"), (oar, "_"), (spark, "*"), (lantern_bright, "◈"), (lantern_glow, "˙"), (style::Color::Reset, "      ")]),
-            mk(vec![(style::Color::Reset, "       "), (figure_d, "█"), (oar, "─╲"), (style::Color::Reset, "            ")]),
-            mk(vec![(water, " ≈"), (wave_d, "~"), (water, "≈"), (hull, "╘"), (hull_l, "▬▬"), (hull, "▬"), (hull_l, "▬▬"), (hull, "╛"), (wave_d, "~"), (water, "≈   ")]),
-        ],
-        _ => vec![
-            mk(vec![(style::Color::Reset, "        "), (figure, "▵"), (oar, "_"), (spark, " ·"), (lantern_dim, "◈"), (spark, "*"), (style::Color::Reset, "      ")]),
-            mk(vec![(style::Color::Reset, "       "), (figure_d, "█"), (oar, "─│"), (style::Color::Reset, "            ")]),
-            mk(vec![(wave_d, "  ~"), (water, "≈"), (hull, "╘"), (hull_l, "▬▬"), (hull, "▬"), (hull_l, "▬▬"), (hull, "╛"), (water, "≈"), (wave_d, "~~  ")]),
-        ],
+    let ember = style::Color::Rgb { r: 180, g: 83, b: 9 };
+    let frame = frame % 4;
+    let stroke = ["╱", "│", "╲", "│"][frame];
+    let lantern = if frame % 2 == 0 { lantern_bright } else { lantern_dim };
+    const TRAIL: usize = 8;
+    let mut spans = vec![
+        ChatSpan { fg: style::Color::Reset, text: "  ".to_string() },
+        ChatSpan { fg: figure, text: "▵".to_string() },
+        ChatSpan { fg: oar, text: stroke.to_string() },
+        ChatSpan { fg: lantern, text: "◈".to_string() },
+        ChatSpan { fg: style::Color::Reset, text: " ".to_string() },
+    ];
+    for pos in 0..TRAIL {
+        let (fg, ch) = if pos % 4 != frame {
+            (style::Color::Reset, " ")
+        } else if pos < 2 {
+            (spark, "*")
+        } else if pos < 5 {
+            (lantern_glow, "·")
+        } else {
+            (ember, "˙")
+        };
+        spans.push(ChatSpan { fg, text: ch.to_string() });
     }
+    ChatRenderLine { spans, bg: None, copy_text: String::new(), copy_offset: 0, selectable: false }
 }
 
 fn wrap_plain_text(s: &str, width: usize) -> Vec<String> {
@@ -1330,12 +1332,8 @@ fn draw_chat_chrome<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::
     if let Some((notice, _ok)) = app.chat.clipboard_notice_text() { right2 = notice.to_string(); }
     if chat_rowing_active(app) && variant != ChatLayoutVariant::Tiny {
         let frame = ((animation_clock_start().elapsed().as_millis() / 300) % 4) as usize;
-        let activity_lines = rowing_indicator_lines(frame);
-        let activity_y = h.saturating_sub(9);
-        for (i, line) in activity_lines.iter().enumerate() {
-            if activity_y + i as u16 >= h.saturating_sub(5) { break; }
-            draw_chat_line(stdout, 2, activity_y + i as u16, left_w.saturating_sub(4) as usize, line, None)?;
-        }
+        let activity_y = h.saturating_sub(ROWING_ROW_OFFSET);
+        draw_chat_line(stdout, 2, activity_y, left_w.saturating_sub(4) as usize, &rowing_indicator_line(frame), None)?;
     }
     draw_team_band(stdout, app, variant, h, left_w)?;
     let input_area = if variant == ChatLayoutVariant::Tiny {

@@ -25,7 +25,9 @@ pub(crate) fn transcript_area_with_rowing(w: u16, h: u16, rowing: bool) -> Rect 
     let y = 2;
     let width = w.saturating_sub(4).max(8);
     let reserved_bottom = if h >= 24 { 7 } else { 5 };
-    let rowing_reserve = if rowing && h >= 24 { 4 } else { 0 };
+    // One row for the activity indicator, between the transcript's bottom
+    // border and the input's top border.
+    let rowing_reserve = if rowing && h >= 24 { 1 } else { 0 };
     let height = h.saturating_sub(y + reserved_bottom + rowing_reserve).max(3);
     Rect { x, y, width, height }
 }
@@ -549,12 +551,9 @@ pub fn draw(buf: &mut ScreenBuf, app: &App, w: u16, h: u16, cache: &F1MonoCache)
     // Rowing/thinking animation between transcript and input
     if rowing {
         let frame = ((chat_view::animation_clock_start().elapsed().as_millis() / 300) % 4) as usize;
-        let activity_lines = chat_view::rowing_indicator_lines(frame);
         let (ry, ravail) = rowing_area(w, h);
-        let width = transcript.width as usize;
-        for (i, line) in activity_lines.iter().enumerate() {
-            if i as u16 >= ravail { break; }
-            draw_line(buf, transcript.x, ry + i as u16, width, line, None);
+        if ravail > 0 {
+            draw_line(buf, transcript.x, ry, transcript.width as usize, &chat_view::rowing_indicator_line(frame), None);
         }
     }
 
