@@ -1414,6 +1414,21 @@ mod tests {
     }
 
     #[test]
+    fn rowing_indicator_is_one_fixed_width_row_per_frame() {
+        let widths: Vec<usize> = (0..4)
+            .map(|frame| {
+                rowing_indicator_line(frame)
+                    .spans
+                    .iter()
+                    .map(|span| span.text.chars().count())
+                    .sum()
+            })
+            .collect();
+        assert!(widths.iter().all(|w| *w == widths[0]));
+        assert!(widths[0] <= 20);
+    }
+
+    #[test]
     fn modal_text_wraps_to_the_available_width() {
         let lines = wrap_modal_text(
             "A deliberately long research direction with one supercalifragilistic token.",
