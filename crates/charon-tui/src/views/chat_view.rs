@@ -538,12 +538,95 @@ pub fn chat_info_pane_width(app: &App, w: u16, h: u16) -> u16 {
     }
 }
 
+/// Width of the tool-use pane when it is open and the layout has room, else 0.
+pub fn chat_tool_pane_width(app: &App, w: u16, h: u16) -> u16 {
+    if !app.chat.tool_pane_open {
+        return 0;
+    }
+    match chat_layout_variant(w, h) {
+        ChatLayoutVariant::Full => (((w as f32) * 0.22).floor() as u16).clamp(28, 44),
+        ChatLayoutVariant::Mid => (((w as f32) * 0.28).floor() as u16).clamp(24, 36),
+        ChatLayoutVariant::Tiny => 0,
+    }
+}
+
+/// Columns between the chat column and a side pane's content, plus the
+/// pane's own border columns: a pane of width `pw` occupies `pw + 5`.
+const SIDE_PANE_GUTTER: u16 = 5;
+/// The tool pane yields rather than squeeze the chat column below this.
+const MIN_CHAT_COLUMN_W: u16 = 40;
+
+/// The chat column and the side panes reserved beside it. Every layout that
+/// sits left of the panes (transcript, input, footer, band) takes `left_w`;
+/// `info` and `tools` are the panes' content rects (borders drawn around them).
+#[derive(Clone, Copy, Debug)]
+pub struct ChatSidePanes {
+    pub left_w: u16,
+    pub info: Option<Rect>,
+    pub tools: Option<Rect>,
+}
+
+pub fn chat_side_panes(app: &App, w: u16, h: u16) -> ChatSidePanes {
+    layout_side_panes(w, h, chat_info_pane_width(app, w, h), chat_tool_pane_width(app, w, h))
+}
+
+fn layout_side_panes(w: u16, h: u16, info_w: u16, mut tools_w: u16) -> ChatSidePanes {
+    let slot = |pw: u16| if pw > 0 { pw + SIDE_PANE_GUTTER } else { 0 };
+    if w.saturating_sub(slot(info_w) + slot(tools_w)) < MIN_CHAT_COLUMN_W {
+        tools_w = 0;
+    }
+    let left_w = w.saturating_sub(slot(info_w) + slot(tools_w));
+    let pane = |x0: u16, pw: u16| Rect { x: x0 + 2, y: 2, width: pw.saturating_sub(2), height: h.saturating_sub(4) };
+    ChatSidePanes {
+        left_w,
+        info: (info_w > 0).then(|| pane(left_w, info_w)),
+        tools: (tools_w > 0).then(|| pane(left_w + slot(info_w), tools_w)),
+    }
+}
+
+/// The tool pane's rows for a content rect of `width` x `height`: the newest
+/// entries, oldest at the top, one line each, padded to exactly `width` so a
+/// redraw never leaves stale characters.
+pub(crate) fn tool_pane_lines(app: &App, width: usize, height: usize) -> Vec<(style::Color, String)> {
+    let clock_fg = style::Color::Rgb { r: 100, g: 100, b: 120 };
+    let fg = style::Color::Rgb { r: 212, g: 196, b: 168 };
+    let fit = |text: String| {
+        let mut out: String = text.chars().take(width).collect();
+        let used = out.chars().count();
+        out.extend(std::iter::repeat(' ').take(width - used));
+        out
+    };
+    let log = &app.chat.tool_log;
+    let mut lines: Vec<(style::Color, String)> = if log.is_empty() {
+        vec![(clock_fg, fit("No tool calls yet.".to_string()))]
+    } else {
+        log.iter()
+            .skip(log.len().saturating_sub(height))
+            .map(|e| {
+                let text = if e.summary.is_empty() {
+                    format!("{} {}", e.clock, e.tool)
+                } else {
+                    format!("{} {}  {}", e.clock, e.tool, e.summary)
+                };
+                (if e.clock.starts_with('-') { clock_fg } else { fg }, fit(text))
+            })
+            .collect()
+    };
+    while lines.len() < height {
+        lines.push((style::Color::Reset, fit(String::new())));
+    }
+    lines.truncate(height);
+    lines
+}
+
+pub(crate) fn tool_pane_title(app: &App) -> String {
+    format!("tools {}  F8 close", app.chat.tool_log.len())
+}
+
 pub fn chat_content_area(app: &App, w: u16, h: u16) -> Rect {
     let variant = chat_layout_variant(w, h);
     let reserved_bottom = chat_reserved_bottom(app, variant);
-    let info_pane_w = chat_info_pane_width(app, w, h);
-    let pane_gutter = if info_pane_w > 0 { 5 } else { 0 };
-    let left_w = if info_pane_w > 0 { w.saturating_sub(info_pane_w + pane_gutter) } else { w };
+    let left_w = chat_side_panes(app, w, h).left_w;
     Rect {
         x: if variant == ChatLayoutVariant::Tiny { 1 } else { 2 },
         y: if variant == ChatLayoutVariant::Tiny { 1 } else { 2 },
@@ -1295,17 +1378,20 @@ fn draw_chat_transcript<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16, vis
 
 fn draw_chat_chrome<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::Result<()> {
     let variant = chat_layout_variant(w, h);
-    let info_pane_w = chat_info_pane_width(app, w, h);
-    let pane_gutter = if info_pane_w > 0 { 5 } else { 0 };
-    let left_w = if info_pane_w > 0 { w.saturating_sub(info_pane_w + pane_gutter) } else { w };
-    if info_pane_w > 0 {
-        let area = Rect { x: left_w + 2, y: 2, width: info_pane_w.saturating_sub(2), height: h.saturating_sub(4) };
+    let panes = chat_side_panes(app, w, h);
+    let left_w = panes.left_w;
+    if let Some(area) = panes.info {
         draw_info_panel(stdout, app, area)?;
     } else if app.chat.view_mode == ChatViewMode::Transcript && app.chat.info_pane_open && variant != ChatLayoutVariant::Tiny {
-        let overlay_w = (w.saturating_sub(8)).min(42).max(28);
+        // Overlay on the chat column's right edge, never over the tool pane.
+        let overlay_w = (left_w.saturating_sub(8)).min(42).max(28);
         let overlay_h = h.saturating_sub(8).min(28).max(12);
-        let area = Rect { x: w.saturating_sub(overlay_w + 3), y: 3, width: overlay_w, height: overlay_h };
+        let area = Rect { x: left_w.saturating_sub(overlay_w + 3), y: 3, width: overlay_w, height: overlay_h };
         draw_info_panel(stdout, app, area)?;
+    }
+    if let Some(area) = panes.tools {
+        let lines = tool_pane_lines(app, area.width as usize, area.height as usize);
+        draw_popup_box(stdout, area, &tool_pane_title(app), &lines)?;
     }
     let provider = app.chat.provider_model();
     let onboarding = if app.chat.refresh_payload.is_none() { "loading" } else if app.chat.onboarding_complete() { "complete" } else { "setup" };
@@ -1326,8 +1412,8 @@ fn draw_chat_chrome<W: Write>(stdout: &mut W, app: &App, w: u16, h: u16) -> io::
     let mode_label = match app.chat.view_mode { ChatViewMode::Transcript => "transcript", ChatViewMode::Workspace => "workspace" };
     let mouse_mode = if app.chat.app_mouse_mode { "mouse:app" } else { "mouse:terminal" };
     let mut right2 = match app.chat.view_mode {
-        ChatViewMode::Transcript => if app.chat.streaming { "Enter: steer  /queue: later".to_string() } else { format!("F5:{}  Native wheel/select/right-click  Ctrl+P:peek  F6:{}", mode_label, mouse_mode) },
-        ChatViewMode::Workspace => if app.chat.streaming { "Enter: steer  /queue: later".to_string() } else { format!("F5:{}  Wheel:scroll  Persistent pane  ←/→/Ctrl+I tabs  F6:{}", mode_label, mouse_mode) },
+        ChatViewMode::Transcript => if app.chat.streaming { "Enter: steer  /queue: later".to_string() } else { format!("F5:{}  Native wheel/select/right-click  Ctrl+P:peek  F8:tools  F6:{}", mode_label, mouse_mode) },
+        ChatViewMode::Workspace => if app.chat.streaming { "Enter: steer  /queue: later".to_string() } else { format!("F5:{}  Wheel:scroll  Persistent pane  ←/→/Ctrl+I tabs  F8:tools  F6:{}", mode_label, mouse_mode) },
     };
     if let Some((notice, _ok)) = app.chat.clipboard_notice_text() { right2 = notice.to_string(); }
     if chat_rowing_active(app) && variant != ChatLayoutVariant::Tiny {
@@ -1411,6 +1497,27 @@ mod tests {
             ],
             selected,
         }
+    }
+
+    #[test]
+    fn side_panes_sit_side_by_side_and_leave_the_chat_column_alone_when_closed() {
+        let (w, h) = (160, 40);
+        // Info only: identical to the original `w - (pane_w + 5)` rule.
+        let info_only = layout_side_panes(w, h, 28, 0);
+        assert_eq!(info_only.left_w, w - (28 + 5));
+        assert!(info_only.tools.is_none());
+        // Both open: chat | info | tools, no column shared, all on screen.
+        let both = layout_side_panes(w, h, 28, 35);
+        let (info, tools) = (both.info.unwrap(), both.tools.unwrap());
+        assert_eq!(both.left_w, w - (28 + 5) - (35 + 5));
+        // f1_mono's transcript right border is at left_w - 2.
+        assert!(both.left_w - 2 < info.x - 1);
+        assert!(info.x + info.width < tools.x - 1);
+        assert!(tools.x + tools.width < w);
+        // Too narrow: the tool pane yields instead of crushing the chat.
+        let tight = layout_side_panes(90, h, 20, 30);
+        assert!(tight.tools.is_none());
+        assert_eq!(tight.left_w, 90 - 25);
     }
 
     #[test]

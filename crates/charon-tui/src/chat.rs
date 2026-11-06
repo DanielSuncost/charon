@@ -242,6 +242,36 @@ pub enum TeamTone {
 /// countdown: the backend publishes every 2s while a team is live.
 const TEAM_STATUS_SILENT_SECS: u64 = 12;
 
+/// Most tool uses the tool pane remembers; older entries fall off the front.
+pub const TOOL_LOG_CAP: usize = 400;
+
+/// One tool use as the tool pane lists it, stamped when the TUI received it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolLogEntry {
+    /// Local wall-clock `HH:MM:SS`, or `--:--:--` for a call replayed from a
+    /// restored conversation (the backend sends no time for those).
+    pub clock: String,
+    pub tool: String,
+    pub summary: String,
+}
+
+/// Local wall-clock time of day as `HH:MM:SS`.
+pub fn local_clock_hms(at: std::time::SystemTime) -> String {
+    let secs = at.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    #[cfg(unix)]
+    {
+        let t = secs as libc::time_t;
+        // SAFETY: `tm` is plain data that localtime_r fully writes on success;
+        // both pointers are valid for the duration of the call.
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        if !unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+            return format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec);
+        }
+    }
+    let day = secs % 86_400;
+    format!("{:02}:{:02}:{:02}", day / 3600, (day % 3600) / 60, day % 60)
+}
+
 fn fmt_dur(secs: f64) -> String {
     let s = secs.max(0.0) as u64;
     if s < 60 {
@@ -670,6 +700,10 @@ pub struct ChatState {
     pub view_mode: ChatViewMode,
     pub info_pane_open: bool,
     pub info_pane_tab: usize,
+    /// Right-side pane listing every tool use; F8 or /toollog toggles it.
+    pub tool_pane_open: bool,
+    /// Bounded log behind the tool pane, oldest first, capped at TOOL_LOG_CAP.
+    pub tool_log: VecDeque<ToolLogEntry>,
     pub copy_mode: bool,
     pub app_mouse_mode: bool,
     pub selection_anchor: Option<ChatTextPoint>,
@@ -742,6 +776,8 @@ impl ChatState {
             view_mode: ChatViewMode::Transcript,
             info_pane_open: false,
             info_pane_tab: 0,
+            tool_pane_open: false,
+            tool_log: VecDeque::new(),
             copy_mode: false,
             app_mouse_mode: true,
             selection_anchor: None,
@@ -862,7 +898,9 @@ impl ChatState {
             }
         } else if text.starts_with('/') {
             // Commands always go through immediately
-            if text.starts_with("/steer ") {
+            if text == "/toollog" {
+                self.toggle_tool_pane();
+            } else if text.starts_with("/steer ") {
                 let msg = text.trim_start_matches("/steer ").trim();
                 if !msg.is_empty() {
                     if !self.send_tracked_steer(msg) { return; }
@@ -1393,6 +1431,21 @@ impl ChatState {
         }
     }
 
+    /// Append one tool use to the pane's log. `at` is None for calls replayed
+    /// from a restored conversation, which carry no time.
+    fn record_tool_use(&mut self, at: Option<std::time::SystemTime>, tool: &str, summary: &str) {
+        let clock = at.map(local_clock_hms).unwrap_or_else(|| "--:--:--".to_string());
+        let summary = summary.split_whitespace().collect::<Vec<_>>().join(" ");
+        self.tool_log.push_back(ToolLogEntry { clock, tool: tool.to_string(), summary });
+        while self.tool_log.len() > TOOL_LOG_CAP {
+            self.tool_log.pop_front();
+        }
+    }
+
+    pub fn toggle_tool_pane(&mut self) {
+        self.tool_pane_open = !self.tool_pane_open;
+    }
+
     fn push_restored_message(&mut self, m: &Value) {
         let role = m.get("role").and_then(|x| x.as_str()).unwrap_or("msg");
         let content = m.get("content").and_then(|x| x.as_str()).unwrap_or("");
@@ -1430,6 +1483,7 @@ impl ChatState {
                             serde_json::to_string(&arguments).unwrap_or_default().chars().take(120).collect()
                         };
                         self.transcript.push(format!("[tool] {}", tool));
+                        self.record_tool_use(None, tool, &summary);
                         self.messages.push(ChatMessage::ToolCall {
                             tool: tool.to_string(),
                             summary,
@@ -1557,6 +1611,7 @@ impl ChatState {
                     serde_json::to_string(&arguments).unwrap_or_default().chars().take(80).collect()
                 };
                 self.transcript.push(format!("[tool] {}", tool));
+                self.record_tool_use(Some(std::time::SystemTime::now()), tool, &summary);
                 self.messages.push(ChatMessage::ToolCall { tool: tool.to_string(), summary });
             }
             "tool_result" => {
@@ -1754,6 +1809,7 @@ impl ChatState {
                 let agent_id = v.get("agent_id").and_then(|x| x.as_str()).unwrap_or("");
                 self.transcript.clear();
                 self.messages.clear();
+                self.tool_log.clear();
                 self.streaming = false;
                 self.approval = None;
                 self.approval_queue.clear();
@@ -1875,6 +1931,7 @@ impl ChatState {
                 self.auth_action_index = 0;
                 self.transcript.clear();
                 self.messages.clear();
+                self.tool_log.clear();
                 self.push_status("✓ Setup complete");
                 if !agent.is_empty() {
                     self.push_status(&format!("Agent: {}", agent));
@@ -2013,6 +2070,7 @@ impl ChatState {
             item("/models", "List available models"),
             item("/tools", "List tools"),
             item("/tools reload", "Reload dynamic tools"),
+            item("/toollog", "Show/hide the tool-use pane (F8)"),
             item("/approve", "Approve tools for current session"),
             item("/approve status", "Show tool approvals"),
             item("/approve all", "Approve all tools for session"),
@@ -2069,6 +2127,7 @@ impl ChatState {
                 item("Escape", "Close menu"),
                 item("Ctrl+F", "Zoom/unzoom session in grid"),
                 item("Ctrl+T", "Toggle timestamps"),
+                item("F8", "Show/hide the tool-use pane"),
                 item("Ctrl+Y", "Toggle visible thoughts"),
             ]);
         }
@@ -2317,6 +2376,20 @@ mod tests {
         });
         state.input_trace_path = "/dev/null".into();
         (state, requests)
+    }
+
+    #[test]
+    fn tool_log_is_one_line_per_call_and_bounded() {
+        let (mut state, _requests) = queue_state();
+        for i in 0..TOOL_LOG_CAP + 25 {
+            state.record_tool_use(Some(std::time::SystemTime::now()), "bash", &format!("echo {i}\n  && true"));
+        }
+        assert_eq!(state.tool_log.len(), TOOL_LOG_CAP);
+        let newest = state.tool_log.back().unwrap();
+        assert_eq!(newest.summary, format!("echo {} && true", TOOL_LOG_CAP + 24));
+        assert_eq!(newest.clock.len(), 8);
+        state.record_tool_use(None, "read", "a.txt");
+        assert_eq!(state.tool_log.back().unwrap().clock, "--:--:--");
     }
 
     #[test]

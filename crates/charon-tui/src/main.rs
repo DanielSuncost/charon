@@ -725,6 +725,11 @@ impl EventLoop {
                 }
             }
             self.needs_full_redraw = true;
+        } else if key.code == KeyCode::F(8) {
+            if key.kind == event::KeyEventKind::Press {
+                self.app.chat.toggle_tool_pane();
+                self.needs_full_redraw = true;
+            }
         } else if key.code == KeyCode::F(6) {
             self.app.chat.app_mouse_mode = !self.app.chat.app_mouse_mode;
             self.app.chat.selection_dragging = false;
@@ -1548,7 +1553,7 @@ impl EventLoop {
     /// Handle scroll/click/drag events for the views that capture the mouse.
     fn handle_mouse(&mut self, mouse: event::MouseEvent) -> io::Result<()> {
         if self.app.active_view == View::Chat && self.app.chat.app_mouse_mode {
-            let area = f1_mono::content_area(self.outer_w, self.outer_h);
+            let area = f1_mono::content_area(&self.app, self.outer_w, self.outer_h);
             let lines = &self.cached_chat.visual.lines;
             match mouse.kind {
                 MouseEventKind::ScrollUp => {

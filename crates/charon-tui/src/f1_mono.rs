@@ -20,10 +20,12 @@ pub fn ensure_cache(app: &App, w: u16, h: u16, cache: &mut F1MonoCache, force: b
     chat_view::ensure_chat_visual_cache(app, w, h, &mut cache.visual, force);
 }
 
-pub(crate) fn transcript_area_with_rowing(w: u16, h: u16, rowing: bool) -> Rect {
+/// `left_w` is the chat column's width: the screen minus any side panes
+/// (`chat_view::chat_side_panes`). Transcript, input and footer all take it.
+pub(crate) fn transcript_area_with_rowing(left_w: u16, h: u16, rowing: bool) -> Rect {
     let x = 2;
     let y = 2;
-    let width = w.saturating_sub(4).max(8);
+    let width = left_w.saturating_sub(4).max(8);
     let reserved_bottom = if h >= 24 { 7 } else { 5 };
     // One row for the activity indicator, between the transcript's bottom
     // border and the input's top border.
@@ -32,12 +34,12 @@ pub(crate) fn transcript_area_with_rowing(w: u16, h: u16, rowing: bool) -> Rect 
     Rect { x, y, width, height }
 }
 
-pub(crate) fn transcript_area(w: u16, h: u16) -> Rect {
-    transcript_area_with_rowing(w, h, false)
+pub(crate) fn transcript_area(left_w: u16, h: u16) -> Rect {
+    transcript_area_with_rowing(left_w, h, false)
 }
 
-pub(crate) fn input_area(w: u16, h: u16) -> Rect {
-    let width = w.saturating_sub(4).max(8);
+pub(crate) fn input_area(left_w: u16, h: u16) -> Rect {
+    let width = left_w.saturating_sub(4).max(8);
     let y = h.saturating_sub(5);
     Rect { x: 2, y, width, height: 1 }
 }
@@ -46,10 +48,10 @@ pub(crate) fn footer_y(h: u16) -> u16 {
     h.saturating_sub(2)
 }
 
-fn rowing_area(w: u16, h: u16) -> (u16, u16) {
-    let transcript = transcript_area_with_rowing(w, h, true);
+fn rowing_area(left_w: u16, h: u16) -> (u16, u16) {
+    let transcript = transcript_area_with_rowing(left_w, h, true);
     let y = transcript.y + transcript.height + 1; // row after transcript border bottom
-    let input = input_area(w, h);
+    let input = input_area(left_w, h);
     let available = input.y.saturating_sub(1).saturating_sub(y); // rows between transcript bottom and input border top
     (y, available)
 }
@@ -144,7 +146,8 @@ fn render_border(buf: &mut ScreenBuf, area: Rect, title: &str, focused: bool) {
         cx += 1;
         buf.set(cx, ty, Cell { ch: ' ', fg: border, bg: Color::Reset, bold: false });
         cx += 1;
-        for ch in title.chars() {
+        // Clip so a long title never runs past the right corner.
+        for ch in title.chars().take(area.width.saturating_sub(3) as usize) {
             buf.set(cx, ty, Cell { ch, fg: title_color, bg: Color::Reset, bold: false });
             cx += 1;
         }
@@ -214,6 +217,7 @@ fn draw_input(buf: &mut ScreenBuf, app: &App, area: Rect) {
     buf.fill(area.y, area.x + used, area.x + area.width, ' ', fg, Color::Reset);
 }
 
+/// `w` is the chat column's width, so the footer stops short of side panes.
 fn draw_footer(buf: &mut ScreenBuf, app: &App, w: u16, h: u16) {
     let y0 = footer_y(h).saturating_sub(1);
     let provider = app.chat.provider_model();
@@ -223,9 +227,9 @@ fn draw_footer(buf: &mut ScreenBuf, app: &App, w: u16, h: u16) {
     let queue_str = format!("  {}", app.chat.input_queue_label());
     let left = format!("  ❈ CHARON  {}  ctx:{}  chat:{}↑ {}↓{}", provider, ctx, fmt_k(chat_in), fmt_k(chat_out), queue_str);
     let right = if app.chat.streaming {
-        "Esc/F7 interrupt/next  Enter steer  /queue later  PgUp/PgDn scroll"
+        "Esc/F7 interrupt/next  Enter steer  /queue later  F8 tools  PgUp/PgDn scroll"
     } else {
-        "Esc/F7 next  Enter send  / commands  PgUp/PgDn scroll"
+        "Esc/F7 next  Enter send  / commands  F8 tools  PgUp/PgDn scroll"
     };
     let input_status = app.chat.input_notice.as_ref().map(|notice| format!("{notice}  Esc/F7 interrupt/next"));
     let right = input_status.as_deref().unwrap_or(right);
@@ -408,12 +412,22 @@ fn draw_auth(buf: &mut ScreenBuf, app: &App, w: u16, h: u16) {
     draw_popup(buf, popup_x, popup_y, popup_w, popup_h, "authentication", &lines);
 }
 
-fn draw_info_pane(buf: &mut ScreenBuf, app: &App, w: u16, h: u16) {
-    let pane_w = (w.saturating_sub(8)).min(44).max(28);
+/// Content rect for the info pane drawn as an overlay on the chat column's
+/// right edge (transcript mode, Ctrl+P), when no width is reserved for it.
+fn info_overlay_area(left_w: u16, h: u16) -> Rect {
+    let pane_w = (left_w.saturating_sub(8)).min(44).max(28);
     let pane_h = h.saturating_sub(8).min(30).max(10);
-    let px = w.saturating_sub(pane_w + 3);
+    let px = left_w.saturating_sub(pane_w + 3);
     let py: u16 = 3;
+    Rect { x: px + 1, y: py + 1, width: pane_w.saturating_sub(2), height: pane_h.saturating_sub(2) }
+}
 
+fn draw_tool_pane(buf: &mut ScreenBuf, app: &App, area: Rect) {
+    let lines = chat_view::tool_pane_lines(app, area.width as usize, area.height as usize);
+    draw_popup(buf, area.x - 1, area.y - 1, area.width + 2, area.height + 2, &chat_view::tool_pane_title(app), &lines);
+}
+
+fn draw_info_pane(buf: &mut ScreenBuf, app: &App, area: Rect) {
     let tab = app.chat.info_pane_tab;
     let tabs = ["Outcomes", "Goals", "Model", "Ideas"];
     let tab_line: String = tabs.iter().enumerate().map(|(i, t)| {
@@ -428,13 +442,13 @@ fn draw_info_pane(buf: &mut ScreenBuf, app: &App, w: u16, h: u16) {
     let bg = Color::Rgb { r: 15, g: 15, b: 25 };
 
     // Draw pane background + border
-    let area = Rect { x: px + 1, y: py + 1, width: pane_w.saturating_sub(2), height: pane_h.saturating_sub(2) };
     render_border(buf, area, "info (Ctrl+I cycle, Ctrl+P close)", true);
     for row in 0..area.height {
         buf.fill(area.y + row, area.x, area.x + area.width, ' ', dim, bg);
     }
 
     // Tab bar
+    let tab_line: String = tab_line.chars().take(area.width as usize).collect();
     buf.put_str(area.x, area.y, &tab_line, hi, bg, false);
     let used = tab_line.chars().count() as u16;
     buf.fill(area.y, area.x + used, area.x + area.width, ' ', dim, bg);
@@ -543,29 +557,39 @@ fn draw_info_pane(buf: &mut ScreenBuf, app: &App, w: u16, h: u16) {
 /// Render the full F1 chat view into the screen buffer.
 pub fn draw(buf: &mut ScreenBuf, app: &App, w: u16, h: u16, cache: &F1MonoCache) {
     let rowing = chat_view::chat_rowing_active(app);
-    let transcript = transcript_area_with_rowing(w, h, rowing);
-    let input = input_area(w, h);
+    let panes = chat_view::chat_side_panes(app, w, h);
+    let left_w = panes.left_w;
+    let transcript = transcript_area_with_rowing(left_w, h, rowing);
+    let input = input_area(left_w, h);
 
     draw_transcript(buf, app, transcript, &cache.visual.lines);
 
     // Rowing/thinking animation between transcript and input
     if rowing {
         let frame = ((chat_view::animation_clock_start().elapsed().as_millis() / 300) % 4) as usize;
-        let (ry, ravail) = rowing_area(w, h);
+        let (ry, ravail) = rowing_area(left_w, h);
         if ravail > 0 {
             draw_line(buf, transcript.x, ry, transcript.width as usize, &chat_view::rowing_indicator_line(frame), None);
         }
     }
 
     draw_input(buf, app, input);
-    draw_footer(buf, app, w, h);
+    draw_footer(buf, app, left_w, h);
+    if let Some(area) = panes.tools {
+        draw_tool_pane(buf, app, area);
+    }
     draw_menu(buf, app, input);
     if let Some(ref ctx) = app.chat.context_menu {
         draw_context_menu(buf, ctx, w, h);
     }
     // Overlays
-    if app.chat.info_pane_open {
-        draw_info_pane(buf, app, w, h);
+    // The info pane fills its reserved slot when the layout reserves one
+    // (workspace mode); otherwise it overlays the chat column's right edge.
+    // Either way it never covers the tool pane.
+    if let Some(area) = panes.info {
+        draw_info_pane(buf, app, area);
+    } else if app.chat.info_pane_open {
+        draw_info_pane(buf, app, info_overlay_area(left_w, h));
     }
     if app.chat.approval_open() {
         draw_approval(buf, app, w, h);
@@ -579,6 +603,6 @@ pub fn copy_selection(app: &mut App, cache: &F1MonoCache) -> bool {
     chat_view::copy_chat_selection(app, &cache.visual.lines)
 }
 
-pub fn content_area(w: u16, h: u16) -> Rect {
-    transcript_area(w, h)
+pub fn content_area(app: &App, w: u16, h: u16) -> Rect {
+    transcript_area(chat_view::chat_side_panes(app, w, h).left_w, h)
 }
