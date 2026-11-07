@@ -100,9 +100,13 @@ final class Kernel {
     /// Ask the user for a grant. Returns the grant, or the denial reason.
     func requestGrant(classId: String, target: Target, seconds: Double, reason: String,
                       requester: Requester) -> Result<Grant, KernelDenial> {
-        guard let cls = actionClass(classId) else { return .failure(.init("unknown action class \(classId)")) }
+        guard let cls = actionClass(classId) else {
+            log("grant_refused", ["class": classId, "target": target.id, "reason": "unknown action class",
+                                  "caller": requester.audit])
+            return .failure(.init("unknown action class \(classId)"))
+        }
         let probe = ActionRequest(classId: classId, target: target, args: [:])
-        if let why = refusal(cls, probe) {
+        if let why = refusal(cls, probe, atGrant: true) {
             log("grant_refused", ["class": classId, "target": target.id, "reason": why, "caller": requester.audit])
             return .failure(.init(why))
         }
@@ -196,9 +200,9 @@ final class Kernel {
 
     // ── Decisions ───────────────────────────────────────────────────
 
-    private func refusal(_ cls: ActionClass, _ request: ActionRequest) -> String? {
+    private func refusal(_ cls: ActionClass, _ request: ActionRequest, atGrant: Bool = false) -> String? {
         lock.lock(); let gs = guards[cls.family] ?? []; lock.unlock()
-        for g in gs {
+        for g in gs where !atGrant || g.appliesAtGrant {
             if let why = g.refusal(for: request) { return why }
         }
         return nil

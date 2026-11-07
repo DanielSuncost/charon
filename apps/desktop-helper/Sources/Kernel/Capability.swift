@@ -44,7 +44,12 @@ struct ActionRequest {
 /// A refusal no approval can override (a focused password field, a
 /// blocklisted app). Returns the reason, or nil to let the request through
 /// to the grant check.
+///
+/// ``appliesAtGrant``: also checked when a grant is requested, so the user
+/// is never even asked (a blocklisted app). Guards about the moment of
+/// acting (what has focus, what is frontmost) apply to actions only.
 protocol NeverApprovable {
+    var appliesAtGrant: Bool { get }
     func refusal(for request: ActionRequest) -> String?
 }
 

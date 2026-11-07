@@ -87,3 +87,16 @@ def test_kill_switch_starts_tripped_and_will_not_arm_unproven():
         # Nothing is posted while the switch is not armed.
         r = h.call('killswitch_selftest', seconds=1)
         assert r['completed'] == 0 and r['interrupted']
+
+
+@pytest.mark.skipif(not BUILT, reason='Charon Desktop helper not built')
+def test_kernel_refuses_without_asking_and_audits():
+    with hp.DesktopHelper() as h:
+        for target in ('com.apple.keychainaccess', 'com.apple.Terminal', 'ai.charon.desktop'):
+            r = h.request_grant('desktop.input.text', target, 5)
+            assert r['ok'] is False and 'never-allowed' in r['error']
+        assert h.request_grant('desktop.run.shell', 'com.apple.Notes', 5)['ok'] is False
+        assert h.narrow_grant('g-0', 1)['ok'] is False
+        assert h.grants() == []
+        v = h.verify_audit()
+        assert v['audit']['ok'] is True, v

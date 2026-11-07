@@ -32,6 +32,7 @@ final class ScriptedPrompter: Prompter {
 
 struct BlockApp: NeverApprovable {
     let blocked: String
+    var appliesAtGrant: Bool { true }
     func refusal(for r: ActionRequest) -> String? { r.target.id == blocked ? "\(blocked) is blocklisted" : nil }
 }
 
@@ -103,6 +104,21 @@ check((try? k.requestGrant(classId: "desktop.input.text", target: keychain, seco
 check(prompter.asked == asked0, "user is not asked about a never-approvable target")
 prompter.answers = []
 check(k.revokeAll(by: "test") == 1, "revoke all")
+
+final class Toggle: NeverApprovable {
+    var on = false
+    var appliesAtGrant: Bool { false }
+    func refusal(for r: ActionRequest) -> String? { on ? "secure field focused" : nil }
+}
+let toggle = Toggle()
+k.register(family: "desktop", classes: [], guards: [toggle])
+prompter.answers = [.allow]
+_ = try! k.requestGrant(classId: "desktop.input.text", target: safari, seconds: 300, reason: "", requester: me).get()
+toggle.on = true
+check(!allowed(k.authorize(typing(safari), requester: me)), "action-time guard overrides a live grant")
+toggle.on = false
+check(allowed(k.authorize(typing(safari), requester: me)), "and only while it applies")
+_ = k.revokeAll(by: "test")
 
 // ── Audit
 let v = k.audit.verify()

@@ -37,6 +37,10 @@ PROTOCOL = 1
 # Liveness bound for one request/reply on the pipe. The helper answers
 # these instantly; this is not a cap on any unit of agent work.
 REPLY_TIMEOUT_SECONDS = 10.0
+# Verbs that wait for the user to answer the helper's dialog. The helper
+# itself denies after 120 s unanswered; this bound only has to outlast it.
+PROMPTING_VERBS = {'grant_request'}
+PROMPT_REPLY_TIMEOUT_SECONDS = 150.0
 BUILD_HINT = 'CHARON_DESKTOP_SIGN_IDENTITY="<Developer ID>" apps/desktop-helper/build.sh'
 
 
@@ -150,7 +154,8 @@ class DesktopHelper:
             except OSError as exc:
                 raise HelperError(f'the helper exited: {exc}') from exc
             while True:
-                line = self._readline()
+                line = self._readline(PROMPT_REPLY_TIMEOUT_SECONDS if cmd in PROMPTING_VERBS
+                                      else REPLY_TIMEOUT_SECONDS)
                 try:
                     reply = json.loads(line)
                 except ValueError as exc:
@@ -166,9 +171,9 @@ class DesktopHelper:
             raise HelperError('the helper replied out of order')
         return reply
 
-    def _readline(self) -> str:
+    def _readline(self, timeout: float = REPLY_TIMEOUT_SECONDS) -> str:
         while b'\n' not in self._buf:
-            ready, _, _ = select.select([self.sock], [], [], REPLY_TIMEOUT_SECONDS)
+            ready, _, _ = select.select([self.sock], [], [], timeout)
             if not ready:
                 raise HelperError('the helper did not answer')
             chunk = self.sock.recv(65536)
@@ -177,6 +182,29 @@ class DesktopHelper:
             self._buf += chunk
         line, _, self._buf = self._buf.partition(b'\n')
         return line.decode('utf-8', 'replace').strip()
+
+    # ── Grants: the caller may ask, narrow and revoke; only the user grants.
+
+    def request_grant(self, action_class: str, target_bundle_id: str, minutes: float, reason: str = '') -> dict:
+        """Ask the user, in the helper's own dialog, for a time-boxed grant.
+        Returns the reply; ``ok`` is False unless the user clicked Allow."""
+        return self.call('grant_request', **{'class': action_class, 'target': target_bundle_id,
+                                             'minutes': minutes, 'reason': reason})
+
+    def grants(self) -> list[dict]:
+        return list(self.call('grants_list').get('grants') or [])
+
+    def narrow_grant(self, grant_id: str, minutes: float) -> dict:
+        return self.call('grant_narrow', grant=grant_id, minutes=minutes)
+
+    def revoke_grant(self, grant_id: str) -> dict:
+        return self.call('grant_revoke', grant=grant_id)
+
+    def revoke_all(self) -> dict:
+        return self.call('grants_revoke_all')
+
+    def verify_audit(self) -> dict:
+        return self.call('audit_verify')
 
     def close(self) -> None:
         proc, self.proc = self.proc, None

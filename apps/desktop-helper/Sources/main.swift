@@ -21,6 +21,7 @@
 //
 // Capability is deliberately narrow and grows only with the work.
 
+import AppKit
 import ApplicationServices
 import CoreGraphics
 import Darwin
@@ -175,10 +176,65 @@ func handle(_ req: [String: Any], caller: CallerIdentity) -> [String: Any] {
         let r = killSwitchSelfTest(seconds: seconds)
         return ["id": id, "ok": true, "completed": r.completed, "total": r.total,
                 "interrupted": r.interrupted ?? NSNull(), "restored": r.restored]
+    case "grant_request", "grants_list", "grant_narrow", "grant_revoke", "grants_revoke_all", "audit_verify":
+        return handleKernel(cmd, req, id: id, caller: caller)
     case "request_access":
         let grant = req["grant"] as? String ?? ""
         guard let after = requestAccess(grant) else { return ["id": id, "ok": false, "error": "unknown grant: \(grant)"] }
         return ["id": id, "ok": true, "grant": grant, "granted": after]
+    default:
+        return ["id": id, "ok": false, "error": "unknown command: \(cmd)"]
+    }
+}
+
+// ── Kernel verbs ────────────────────────────────────────────────────
+
+/// Where the helper writes its audit. Fixed here, not chosen by the caller.
+let auditPath = FileManager.default.homeDirectoryForCurrentUser
+    .appendingPathComponent("Library/Application Support/Charon Desktop/audit.jsonl")
+var kernel: Kernel?
+var kernelError = ""
+var statusMenu: StatusMenu?
+
+func requester(_ caller: CallerIdentity) -> Requester {
+    let name = URL(fileURLWithPath: caller.path).deletingPathExtension().lastPathComponent
+    return Requester(description: "Charon (\(name.isEmpty ? "unknown program" : name), pid \(caller.pid))",
+                     audit: caller.json)
+}
+
+func handleKernel(_ cmd: String, _ req: [String: Any], id: Any, caller: CallerIdentity) -> [String: Any] {
+    guard let k = kernel else {
+        return ["id": id, "ok": false, "error": "audit unavailable, so nothing can be granted: \(kernelError)"]
+    }
+    let who = requester(caller)
+    let minutes = (req["minutes"] as? Double) ?? Double(req["minutes"] as? Int ?? 0)
+    switch cmd {
+    case "grant_request":
+        let classId = req["class"] as? String ?? ""
+        let bundle = req["target"] as? String ?? ""
+        guard let target = Desktop.target(bundleId: bundle) else {
+            k.log("grant_refused", ["class": classId, "target": bundle, "reason": "no installed app", "caller": caller.json])
+            return ["id": id, "ok": false, "error": "no installed app with bundle id \(bundle)"]
+        }
+        switch k.requestGrant(classId: classId, target: target, seconds: minutes * 60,
+                              reason: req["reason"] as? String ?? "", requester: who) {
+        case .success(let g): return ["id": id, "ok": true, "grant": g.json(now: Date())]
+        case .failure(let e): return ["id": id, "ok": false, "error": e.reason]
+        }
+    case "grants_list":
+        return ["id": id, "ok": true, "grants": k.liveGrants().map { $0.json(now: Date()) }]
+    case "grant_narrow":
+        switch k.narrow(id: req["grant"] as? String ?? "", seconds: minutes * 60, requester: who) {
+        case .success(let g): return ["id": id, "ok": true, "grant": g.json(now: Date())]
+        case .failure(let e): return ["id": id, "ok": false, "error": e.reason]
+        }
+    case "grant_revoke":
+        let ok = k.revoke(id: req["grant"] as? String ?? "", by: "caller")
+        return ["id": id, "ok": ok, "error": ok ? NSNull() : "no such grant"]
+    case "grants_revoke_all":
+        return ["id": id, "ok": true, "revoked": k.revokeAll(by: "caller")]
+    case "audit_verify":
+        return ["id": id, "ok": true, "audit": k.audit.verify().json, "path": k.audit.path.path]
     default:
         return ["id": id, "ok": false, "error": "unknown command: \(cmd)"]
     }
@@ -194,7 +250,10 @@ func serve(_ channel: Channel, caller: CallerIdentity) -> Never {
         }
         channel.send(handle(obj, caller: caller))
     }
-    exit(0)  // channel closed: the parent is gone
+    // Channel closed: the parent is gone. Grants live only in this
+    // process, so they end here.
+    kernel?.log("helper_exit", ["live_grants": kernel?.liveGrants().count ?? 0])
+    exit(0)
 }
 
 func fail(_ fd: Int32?, _ message: String, code: Int32) -> Never {
@@ -224,11 +283,33 @@ do {
 } catch {
     fail(fd, "caller refused: \(error)", code: 77)
 }
-KillSwitch.shared.onTrip = { why in channel.send(["event": "paused", "reason": why]) }
+// The audit must exist before anything can be granted; without it the
+// helper still answers identity and grant-status questions, nothing else.
+do {
+    let audit = try AuditLog(path: auditPath, store: KeychainAuditStore())
+    let k = Kernel(audit: audit, prompter: NativePrompter())
+    Desktop.register(with: k)
+    kernel = k
+    k.log("helper_started", ["caller": caller.json, "pid": Int(getpid())])
+} catch {
+    kernelError = "\(error)"
+}
+KillSwitch.shared.onTrip = { why in
+    kernel?.log("killswitch_tripped", ["reason": why])
+    channel.send(["event": "paused", "reason": why])
+}
 _ = KillSwitch.shared.start()  // false without Input Monitoring: stays tripped, nothing can run
-// Requests are served on their own thread; the main thread runs the main
-// loop so AppKit calls (re-activating the user's app) behave.
+
+// The main thread runs AppKit (approval dialog, menu-bar item); requests
+// are served on their own thread, which blocks while the user is asked.
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+if let k = kernel {
+    let menu = StatusMenu(kernel: k)
+    statusMenu = menu
+    k.onGrantsChanged = { menu.update($0) }
+}
 let server = Thread { serve(channel, caller: caller) }
 server.name = "channel"
 server.start()
-RunLoop.main.run()
+app.run()

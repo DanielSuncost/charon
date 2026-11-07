@@ -51,7 +51,7 @@ SWIFT
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS"
 cp "$here/Info.plist" "$app/Contents/Info.plist"
-swiftc -O -swift-version 5 -o "$app/Contents/MacOS/CharonDesktop" "$here"/Sources/*.swift "$gen/BuildConfig.swift"
+swiftc -O -swift-version 5 -o "$app/Contents/MacOS/CharonDesktop" "$here"/Sources/*.swift "$here"/Sources/Kernel/*.swift "$gen/BuildConfig.swift"
 # Hardened runtime, no entitlements: the helper needs none of the
 # exceptions (no JIT, no unsigned libraries, no debugger attach).
 codesign --force --timestamp --options runtime --sign "$identity" "$app"
