@@ -197,8 +197,11 @@ var kernelError = ""
 var statusMenu: StatusMenu?
 
 func requester(_ caller: CallerIdentity) -> Requester {
+    // Say only what was verified: the program's identity, not that it is
+    // Charon. Caller authentication proves the interpreter, and any script
+    // it runs would look the same, so the dialog must not claim more.
     let name = URL(fileURLWithPath: caller.path).deletingPathExtension().lastPathComponent
-    return Requester(description: "Charon (\(name.isEmpty ? "unknown program" : name), pid \(caller.pid))",
+    return Requester(description: "A \(name.isEmpty ? "program" : name) process (pid \(caller.pid), verified signature)",
                      audit: caller.json)
 }
 
