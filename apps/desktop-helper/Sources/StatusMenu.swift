@@ -3,6 +3,11 @@
 // without the chat: revoke one grant, revoke all, or stop now (trips the
 // kill switch and revokes everything). It works when Charon's UI is
 // closed, because it belongs to the process that holds the grants.
+//
+// It also shows the redacted captures the helper still holds in memory
+// (what the agent was shown), lets the user look at the latest one, and
+// delete them all. This window and menu belong to this process, so they
+// are never in a capture.
 
 import AppKit
 import Foundation
@@ -11,6 +16,7 @@ final class StatusMenu: NSObject {
     private let item: NSStatusItem
     private let kernel: Kernel
     private var refresh: Timer?
+    private var viewer: NSWindow?
 
     init(kernel: Kernel) {
         self.kernel = kernel
@@ -44,6 +50,18 @@ final class StatusMenu: NSObject {
             menu.addItem(entry)
         }
         menu.addItem(.separator())
+        let held = captureRetention.current()
+        menu.addItem(withTitle: "Screenshots held in memory: \(held.count) (each deleted after \(Int(heldCaptureSeconds / 60)) min)",
+                     action: nil, keyEquivalent: "")
+        let show = NSMenuItem(title: "Show the latest screenshot", action: #selector(showLatest), keyEquivalent: "")
+        show.target = self
+        show.isEnabled = !held.isEmpty
+        menu.addItem(show)
+        let wipe = NSMenuItem(title: "Delete held screenshots", action: #selector(deleteCaptures), keyEquivalent: "")
+        wipe.target = self
+        wipe.isEnabled = !held.isEmpty
+        menu.addItem(wipe)
+        menu.addItem(.separator())
         menu.addItem(withTitle: armed ? "Kill switch: armed (touch any key to pause)" : "Kill switch: paused",
                      action: nil, keyEquivalent: "")
         let all = NSMenuItem(title: "Revoke all grants", action: #selector(revokeAll), keyEquivalent: "")
@@ -65,8 +83,33 @@ final class StatusMenu: NSObject {
         DispatchQueue.global().async { _ = self.kernel.revokeAll(by: "user (menu)") }
     }
 
+    @objc private func showLatest() {
+        guard let last = captureRetention.current().last, let image = NSImage(data: last.png) else { return }
+        let view = NSImageView(image: image)
+        view.imageScaling = .scaleProportionallyDown
+        let size = NSSize(width: min(image.size.width, 900), height: min(image.size.height, 700))
+        let w = viewer ?? NSWindow(contentRect: NSRect(origin: .zero, size: size),
+                                   styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        w.isReleasedWhenClosed = false
+        w.title = "What the agent saw: \(last.target), \(DateFormatter.localizedString(from: last.at, dateStyle: .none, timeStyle: .medium))"
+        w.contentView = view
+        w.setContentSize(size)
+        w.center()
+        viewer = w
+        NSApp.activate(ignoringOtherApps: true)
+        w.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func deleteCaptures() {
+        _ = captureRetention.clear()
+        viewer?.close()
+        render(kernel.liveGrants())
+    }
+
     @objc private func stopNow() {
         KillSwitch.shared.trip("stopped from the menu bar")
+        _ = captureRetention.clear()
+        viewer?.close()
         DispatchQueue.global().async { _ = self.kernel.revokeAll(by: "user (menu, stop)") }
     }
 }

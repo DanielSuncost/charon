@@ -1,6 +1,7 @@
 // Kernel tests, compiled with Sources/Kernel/*.swift by test.sh into a
 // scratch binary. No keychain, no UI, no grants needed.
 
+import CoreGraphics
 import CryptoKit
 import Foundation
 
@@ -173,6 +174,68 @@ fp.answers = [.allow]
 _ = try! k4.requestGrant(classId: "desktop.input.text", target: notes, seconds: 300, reason: "", requester: me).get()
 failing.failWrites = true
 check(!allowed(k4.authorize(typing(notes), requester: me)), "audit write failure denies the action")
+
+// ── Re-check after acting (stillAllowed)
+let rp = ScriptedPrompter(), rs = MemoryStore()
+let k5 = makeKernel(rs, rp, file: "recheck.jsonl")
+let gate = Toggle()
+k5.register(family: "desktop", classes: [], guards: [gate])
+rp.answers = [.allow]
+let g5 = try! k5.requestGrant(classId: "desktop.input.text", target: notes, seconds: 300, reason: "", requester: me).get()
+let entries5 = k5.audit.verify().entries
+check(k5.stillAllowed(typing(notes), grantId: g5.id) == nil, "recheck passes while guards and grant hold")
+check(k5.audit.verify().entries == entries5, "recheck writes nothing to the audit")
+gate.on = true
+check(k5.stillAllowed(typing(notes), grantId: g5.id) != nil, "recheck fails when a guard starts refusing")
+gate.on = false
+check(k5.stillAllowed(typing(safari), grantId: g5.id) != nil, "recheck fails for a different target")
+_ = k5.revoke(id: g5.id, by: "test")
+check(k5.stillAllowed(typing(notes), grantId: g5.id) != nil, "recheck fails once the grant is revoked")
+rp.answers = [.allow]
+let g6 = try! k5.requestGrant(classId: "desktop.input.text", target: notes, seconds: 60, reason: "", requester: me).get()
+clock = clock.addingTimeInterval(61)
+check(k5.stillAllowed(typing(notes), grantId: g6.id) != nil, "recheck fails once the grant expires")
+
+// ── Capture core: coordinate mapping, redaction, retention
+let mapped = pixelRects([CGRect(x: 110, y: 220, width: 50, height: 10)], origin: CGPoint(x: 100, y: 200),
+                        scale: 2, imageSize: CGSize(width: 400, height: 400), pad: 0)
+check(mapped == [CGRect(x: 20, y: 40, width: 100, height: 20)], "global points map to image pixels: \(mapped)")
+check(pixelRects([CGRect(x: 0, y: 0, width: 10, height: 10)], origin: CGPoint(x: 100, y: 100), scale: 1,
+                 imageSize: CGSize(width: 50, height: 50)).isEmpty, "rects outside the image are dropped")
+let clipped = pixelRects([CGRect(x: 90, y: 90, width: 30, height: 30)], origin: CGPoint(x: 100, y: 100), scale: 1,
+                         imageSize: CGSize(width: 50, height: 50), pad: 0)
+check(clipped == [CGRect(x: 0, y: 0, width: 20, height: 20)], "partly visible rects are clipped, not dropped")
+
+func whiteImage(_ w: Int, _ h: Int) -> CGImage {
+    let c = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    c.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1)); c.fill(CGRect(x: 0, y: 0, width: w, height: h))
+    return c.makeImage()!
+}
+func pixel(_ img: CGImage, _ x: Int, _ y: Int) -> UInt8 {   // red channel, top-left origin
+    let c = CGContext(data: nil, width: img.width, height: img.height, bitsPerComponent: 8, bytesPerRow: img.width * 4,
+                      space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    c.draw(img, in: CGRect(x: 0, y: 0, width: img.width, height: img.height))
+    return c.data!.assumingMemoryBound(to: UInt8.self)[(y * img.width + x) * 4]
+}
+let red = redact(whiteImage(100, 80), [CGRect(x: 10, y: 5, width: 20, height: 10)])!
+check(pixel(red, 15, 8) == 0, "redacted rect is black (top-left coordinates)")
+check(pixel(red, 15, 70) == 255, "the mirrored position is untouched (no y-flip error)")
+check(pixel(red, 50, 40) == 255, "outside the rect is untouched")
+let png = encodePNG(red)!
+check(png.starts(with: [0x89, 0x50, 0x4E, 0x47]), "encodes as PNG")
+
+var capClock = Date(timeIntervalSince1970: 1_800_000_000)
+let held = CaptureRetention(now: { capClock })
+for i in 0..<(maxHeldCaptures + 3) {
+    held.add(HeldCapture(id: "c\(i)", at: capClock, target: "t", png: png, sha256: "x"))
+}
+check(held.current().count == maxHeldCaptures, "retention holds at most \(maxHeldCaptures)")
+check(held.current().first?.id == "c3", "the oldest are dropped first")
+capClock = capClock.addingTimeInterval(heldCaptureSeconds)
+check(held.current().isEmpty, "everything is gone after \(Int(heldCaptureSeconds))s")
+held.add(HeldCapture(id: "n", at: capClock, target: "t", png: png, sha256: "x"))
+check(held.clear() == 1 && held.current().isEmpty, "clear deletes what is held")
 
 try? FileManager.default.removeItem(at: dir)
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")

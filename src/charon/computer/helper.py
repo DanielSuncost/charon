@@ -23,6 +23,7 @@ confirms that from the helper's own report and refuses otherwise.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import select
@@ -202,6 +203,17 @@ class DesktopHelper:
 
     def revoke_all(self) -> dict:
         return self.call('grants_revoke_all')
+
+    def capture(self, target_bundle_id: str) -> dict:
+        """A redacted screenshot of the target app's own windows, if a live
+        ``desktop.observe.screen`` grant covers it and every guard passes.
+        On success ``reply['capture']['png']`` holds the PNG bytes. They are
+        returned in memory only; this module never writes them to disk."""
+        reply = self.call('capture', target=target_bundle_id)
+        cap = reply.get('capture')
+        if reply.get('ok') and cap:
+            cap['png'] = base64.b64decode(cap.pop('png_base64'))
+        return reply
 
     def verify_audit(self) -> dict:
         return self.call('audit_verify')

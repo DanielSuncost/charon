@@ -176,7 +176,8 @@ func handle(_ req: [String: Any], caller: CallerIdentity) -> [String: Any] {
         let r = killSwitchSelfTest(seconds: seconds)
         return ["id": id, "ok": true, "completed": r.completed, "total": r.total,
                 "interrupted": r.interrupted ?? NSNull(), "restored": r.restored]
-    case "grant_request", "grants_list", "grant_narrow", "grant_revoke", "grants_revoke_all", "audit_verify":
+    case "grant_request", "grants_list", "grant_narrow", "grant_revoke", "grants_revoke_all", "audit_verify",
+         "capture":
         return handleKernel(cmd, req, id: id, caller: caller)
     case "request_access":
         let grant = req["grant"] as? String ?? ""
@@ -238,6 +239,21 @@ func handleKernel(_ cmd: String, _ req: [String: Any], id: Any, caller: CallerId
         return ["id": id, "ok": true, "revoked": k.revokeAll(by: "caller")]
     case "audit_verify":
         return ["id": id, "ok": true, "audit": k.audit.verify().json, "path": k.audit.path.path]
+    case "capture":
+        // The target is resolved here, never taken as a window id or
+        // region from the caller: what is captured is decided by the grant.
+        let bundle = req["target"] as? String ?? ""
+        guard let target = Desktop.target(bundleId: bundle) else {
+            k.log("action_denied", ["class": Desktop.observeScreen, "target": bundle, "reason": "no installed app",
+                                    "caller": caller.json])
+            return ["id": id, "ok": false, "error": "no installed app with bundle id \(bundle)"]
+        }
+        switch captureVerb(kernel: k, target: target, requester: who) {
+        case .success(let c):
+            statusMenu?.update(k.liveGrants())
+            return ["id": id, "ok": true, "capture": c]
+        case .failure(let e): return ["id": id, "ok": false, "error": e.description]
+        }
     default:
         return ["id": id, "ok": false, "error": "unknown command: \(cmd)"]
     }
@@ -302,6 +318,7 @@ KillSwitch.shared.onTrip = { why in
     channel.send(["event": "paused", "reason": why])
 }
 _ = KillSwitch.shared.start()  // false without Input Monitoring: stays tripped, nothing can run
+FocusWatch.shared.start()
 
 // The main thread runs AppKit (approval dialog, menu-bar item); requests
 // are served on their own thread, which blocks while the user is asked.

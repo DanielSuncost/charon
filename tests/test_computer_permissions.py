@@ -100,3 +100,18 @@ def test_kernel_refuses_without_asking_and_audits():
         assert h.grants() == []
         v = h.verify_audit()
         assert v['audit']['ok'] is True, v
+
+
+@pytest.mark.skipif(not BUILT, reason='Charon Desktop helper not built')
+def test_capture_is_refused_without_a_grant_and_audited():
+    with hp.DesktopHelper() as h:
+        # No grant exists in a fresh helper: default deny, whatever is on screen.
+        r = h.capture('com.apple.Notes')
+        assert r['ok'] is False and 'capture' not in r
+        # Never-allowed targets and unknown apps are refused too.
+        for target in ('com.apple.keychainaccess', 'ai.charon.desktop', 'com.apple.Terminal'):
+            r = h.request_grant('desktop.observe.screen', target, 5)
+            assert r['ok'] is False and 'never-allowed' in r['error']
+            assert h.capture(target)['ok'] is False
+        assert h.capture('no.such.app')['ok'] is False
+        assert h.verify_audit()['audit']['ok'] is True

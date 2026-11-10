@@ -257,6 +257,24 @@ final class Kernel {
         }
     }
 
+    /// Re-check an authorised action after it has happened but before its
+    /// result is used: the never-approvable guards again, and that the
+    /// grant it ran under is still live. Returns the reason to discard the
+    /// result, or nil. Consumes no rate budget and writes nothing; the verb
+    /// records the outcome. This closes the window between the check in
+    /// ``authorize`` and the act, for verbs whose result can be thrown away
+    /// (a capture taken after focus moved is discarded, not delivered).
+    func stillAllowed(_ request: ActionRequest, grantId: String) -> String? {
+        expire()
+        guard let cls = actionClass(request.classId) else { return "unknown action class \(request.classId)" }
+        if let why = refusal(cls, request) { return why }
+        lock.lock(); let g = grants[grantId]; lock.unlock()
+        guard let grant = g, grant.classId == cls.id, grant.target == request.target, grant.expiresAt > now() else {
+            return "the grant ended while acting"
+        }
+        return nil
+    }
+
     func recordOutcome(seq: Int, outcome: String, fields: [String: Any] = [:]) {
         var f = fields
         f["authorized_seq"] = seq
