@@ -7,8 +7,14 @@ from typing import Any
 
 CORE_TOOL_NAMES = frozenset({
     'Read', 'Bash', 'Edit', 'Write', 'Git', 'Http', 'RunProcess',
-    'ProcessStatus', 'ProcessLogs', 'StopProcess', 'Clarify', 'ToolCatalog',
+    'Clarify', 'ToolCatalog',
 })
+
+# Managed-process follow-ups. They are useless until a process exists, so
+# they are not in the core set: the engine enables them as soon as RunProcess
+# runs, or when a message talks about processes, servers or logs (which also
+# covers processes left running by an earlier session).
+PROCESS_FOLLOWUP_TOOL_NAMES = ('ProcessStatus', 'ProcessLogs', 'StopProcess')
 
 
 TOOL_CATALOG_DEF = {
@@ -102,4 +108,4 @@ def execute_tool_catalog(params: dict, ctx: Any):
     return ToolResult(content='Error: action must be search, enable, or list', is_error=True)
 
 
-__all__ = ['CORE_TOOL_NAMES', 'TOOL_CATALOG_DEF', 'execute_tool_catalog']
+__all__ = ['CORE_TOOL_NAMES', 'PROCESS_FOLLOWUP_TOOL_NAMES', 'TOOL_CATALOG_DEF', 'execute_tool_catalog']

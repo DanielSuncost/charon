@@ -28,7 +28,7 @@ from charon.providers import (
     Message, ModelInfo, Provider, ToolCall, Usage, get_provider,
 )
 from charon.tools import ALL_TOOL_DEFS, ToolContext, ToolResult, execute_tool
-from charon.tools.tool_catalog import CORE_TOOL_NAMES
+from charon.tools.tool_catalog import CORE_TOOL_NAMES, PROCESS_FOLLOWUP_TOOL_NAMES
 from charon.memory.execution_memory import record_tool_event
 from charon.conversation.task_policy import LoopGuard, TASK_GUIDANCE, NON_INTERACTIVE_GUIDANCE
 from charon.infra import config
@@ -68,6 +68,7 @@ _DOMAIN_TOOL_NAMES = {
     'fleet': {'FleetStatus', 'FleetSend', 'FleetHistory', 'FleetOnboard'},
     'skills': {'Skills'},
     'code': {'ExecuteCode'},
+    'process': set(PROCESS_FOLLOWUP_TOOL_NAMES),
 }
 
 _DOMAIN_INTENT_PATTERNS = {
@@ -87,6 +88,12 @@ _DOMAIN_INTENT_PATTERNS = {
     'fleet': re.compile(r'\b(fleet|remote agent|onboard node)\b', re.I),
     'skills': re.compile(r'\b(skill|plugin|capability pack)\b', re.I),
     'code': re.compile(r'\b(execute code|python calculation|data analysis)\b', re.I),
+    # Deliberately broad: a false positive costs ~200 tokens, a miss costs a
+    # ToolCatalog round trip.
+    'process': re.compile(
+        r'\b(process(?:es)?|pid|server|servers|daemon|watcher|background|logs?|'
+        r'running|kill|stop|restart)\b', re.I,
+    ),
 }
 
 # Lossless context management (graceful fallback if unavailable)
@@ -651,6 +658,18 @@ class ConversationEngine:
             if name and name.lower() in lowered:
                 names.add(name)
         return self._enable_tools(sorted(names))
+
+    def _enable_process_followups(self) -> list[str]:
+        """Expose ProcessStatus/Logs/Stop once a managed process exists.
+
+        Same boundary as intent activation: only while ToolCatalog is exposed,
+        so an explicit restricted tool set stays restricted.
+        """
+        if not config.adaptive_tools():
+            return []
+        if not any(tool.get('name') == 'ToolCatalog' for tool in self.tools):
+            return []
+        return self._enable_tools(list(PROCESS_FOLLOWUP_TOOL_NAMES))
 
     def abort(self):
         """Signal the engine to stop after current operation."""
@@ -1630,6 +1649,11 @@ class ConversationEngine:
 
                 # Persist completed outputs in provider order, independent of
                 # which shared tool happened to finish first.
+                if any(
+                    o.call.name == 'RunProcess' and o.result is not None and not o.result.is_error
+                    for o in outcomes
+                ):
+                    self._enable_process_followups()
                 for outcome in outcomes:
                     result = outcome.result
                     if result is None:
