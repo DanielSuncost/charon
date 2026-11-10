@@ -491,11 +491,7 @@ def _build_tools(tools: list[dict] | None = None) -> str:
 - When summarizing your actions, output plain text directly
 - Be concise in your responses
 - Show file paths clearly when working with files
-- When you need the full file, continue with offset until complete
-- For x.com workflows, prefer the X tool over generic Browser/Web when possible.
-- If the user asks to check x.com bookmarks for anything new, use X action=triage_new_bookmarks.
-- If the user asks what new bookmarks have been investigated, use X action=list_investigations with new_only=true.
-- If the user asks to deep dive, investigate, or report on a specific bookmarked item, use X action=deep_dive_bookmark or X action=get_investigation depending on whether they want new research or the stored report."""
+- When you need the full file, continue with offset until complete"""
 
 
 def _build_context_files(project: str) -> str:

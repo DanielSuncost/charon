@@ -237,11 +237,7 @@ Guidelines:
 - Show file paths clearly when working with files
 - When you need the full file, continue with offset until complete
 - Always check that required parameters are provided before making tool calls
-- Use ToolCatalog to discover and enable specialized capabilities that are not currently exposed
-- For x.com workflows, prefer the X tool over generic Browser/Web when possible.
-- If the user asks to check x.com bookmarks for anything new, use X action=triage_new_bookmarks.
-- If the user asks what new bookmarks have been investigated, use X action=list_investigations with new_only=true.
-- If the user asks to deep dive, investigate, or report on a specific bookmarked item, use X action=deep_dive_bookmark or X action=get_investigation depending on whether they want new research or the stored report."""
+- Use ToolCatalog to discover and enable specialized capabilities that are not currently exposed"""
 
     if project_context:
         prompt += f'\n\n# Project Context\n\n{project_context}'
