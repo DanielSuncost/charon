@@ -134,7 +134,11 @@ import sys, httpx, charon
 assert sys.prefix != sys.base_prefix, "not running inside the venv"
 assert sys.version_info >= (3, 12), sys.version
 EOF
-task_py=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || echo none)
-log "agent runtime: $VENV/bin/python ($("$VENV/bin/python" -V 2>&1))"
-log "task runtime:  $task_py ($([ "$task_py" = none ] || "$task_py" -V 2>&1))  [left first on PATH]"
+log "agent runtime: $VENV/bin/python ($("$VENV/bin/python" -V 2>&1)) [not on PATH; invoke by path]"
+task_py=$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)
+if [ -n "$task_py" ]; then
+  log "task runtime:  $task_py ($("$task_py" -V 2>&1)) [first on PATH; the task's, not Charon's]"
+else
+  log "task runtime:  no python on PATH"
+fi
 printf 'CHARON_BOOTSTRAP_OK agent_python=%s mode=%s\n' "$VENV/bin/python" "$MODE"
