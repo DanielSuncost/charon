@@ -49,13 +49,18 @@ def sha256(path: Path) -> str:
 
 
 def python_url(arch: str, minor: str) -> tuple[str, str]:
-    """Newest standalone CPython <minor> for linux-<arch>-gnu, as uv knows it."""
+    """Newest standalone CPython <minor> for linux-<arch>-gnu.
+
+    uv's listing is complete for aarch64 but, depending on the host, can list
+    x86_64 only as micro-architecture variants. python-build-standalone ships
+    every arch under one release tag, so the newest aarch64 build is looked up
+    and the target triple swapped; download() fails loudly if it is absent."""
     listing = json.loads(run('uv', 'python', 'list', '--all-platforms', '--all-versions',
                              '--output-format', 'json'))
     best = None
     for p in listing:
         if (p.get('implementation') == 'cpython' and p.get('os') == 'linux'
-                and p.get('libc') == 'gnu' and p.get('arch') == arch
+                and p.get('libc') == 'gnu' and p.get('arch') == 'aarch64'
                 and p.get('variant', 'default') == 'default' and p.get('url')
                 and p['version'].startswith(minor + '.')
                 and p['version'].replace('.', '').isdigit()):
@@ -63,15 +68,20 @@ def python_url(arch: str, minor: str) -> tuple[str, str]:
             if best is None or key > best[0]:
                 best = (key, p['version'], p['url'])
     if best is None:
-        sys.exit(f'build_bundle: uv knows no CPython {minor} build for linux-{arch}-gnu')
-    return best[1], best[2]
+        sys.exit(f'build_bundle: uv knows no CPython {minor} build for linux-gnu')
+    triple = 'aarch64-unknown-linux-gnu'
+    if triple not in best[2]:
+        sys.exit(f'build_bundle: unexpected python-build-standalone URL shape: {best[2]}')
+    return best[1], best[2].replace(triple, f'{arch}-unknown-linux-gnu')
 
 
 def download(url: str, dest: Path, attempts: int = 4) -> None:
     for n in range(1, attempts + 1):
         try:
             tmp = dest.with_suffix(dest.suffix + '.part')
-            with urllib.request.urlopen(url, timeout=60) as r, tmp.open('wb') as f:
+            # releases.astral.sh answers 403 to urllib's default User-Agent.
+            req = urllib.request.Request(url, headers={'User-Agent': 'charon-build-bundle'})
+            with urllib.request.urlopen(req, timeout=60) as r, tmp.open('wb') as f:
                 shutil.copyfileobj(r, f)
             tmp.rename(dest)
             return
