@@ -222,13 +222,10 @@ def build_system_prompt(
         prompt += f'\nCurrent working directory: {cwd}'
         return prompt
 
-    tool_defs = tools or ALL_TOOL_DEFS
-    tool_list = '\n'.join(f"- {t['name']}: {t['description'][:80]}" for t in tool_defs)
-
+    # The tools themselves are not listed here: every provider sends their
+    # full definitions natively, so a text list only repeated them (~210
+    # tokens per call) and changed whenever ToolCatalog enabled a tool.
     prompt = f"""You are {agent_name}, an expert coding assistant. You help users by reading files, executing commands, editing code, and writing new files.
-
-Available tools:
-{tool_list}
 
 Guidelines:
 - Use Bash for file operations like ls, grep, find

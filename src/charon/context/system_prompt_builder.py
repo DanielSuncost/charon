@@ -21,8 +21,6 @@ import re
 import time
 from pathlib import Path
 
-from charon.tools import ALL_TOOL_DEFS
-
 try:
     from charon.infra.diagnostics import record as _diag
 except Exception:  # diagnostics is best-effort and must never block import
@@ -475,14 +473,14 @@ def _build_fleet_context() -> str:
 
 
 def _build_tools(tools: list[dict] | None = None) -> str:
-    """Layer 8: Available tools + guidelines."""
-    tool_defs = ALL_TOOL_DEFS if tools is None else tools
-    tool_list = '\n'.join(f"- {t['name']}: {t['description'][:80]}" for t in tool_defs)
+    """Layer 8: tool-use guidelines.
 
-    return f"""Available tools:
-{tool_list}
-
-Guidelines:
+    The tools are not listed: every provider sends their full definitions
+    natively, so a text list only repeated them (~230 tokens per call) and
+    changed whenever ToolCatalog enabled a tool. ``tools`` is kept for
+    callers' signatures.
+    """
+    return """Guidelines:
 - Use Bash for short-lived shell commands like ls, grep, find, git status, pytest, or bounded smoke tests.
 - Do NOT use Bash for GUI apps, monitors, servers, dev watchers, nohup flows, or background jobs. Use RunProcess for those.
 - After starting a managed process, use ProcessStatus / ProcessLogs / StopProcess to inspect and control it.
@@ -561,7 +559,7 @@ def build_system_prompt(
         state_dir: Path to .charon_state/
         agent: Agent dict (id, name, role, goal, project, etc.)
         task: Current task dict
-        tools: Tool definitions (defaults to ALL_TOOL_DEFS)
+        tools: Tool definitions (unused by the prompt text; providers send them natively)
         contract: Shade contract dict (for shade agents only)
         custom_prompt: Override prompt (skips all layers except date/cwd)
     """
