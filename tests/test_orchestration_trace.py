@@ -12,7 +12,7 @@ def test_cost_estimation_tiers_models_and_fallback():
     assert ot.estimate_cost_usd('strong', 1_000_000, 0) == 3.0
     # real model prefix match (gpt-5.5 → 1.25 in / 10 out per 1M)
     assert ot.estimate_cost_usd('gpt-5.5', 1_000_000, 1_000_000) == round(1.25 + 10.0, 6)
-    assert ot.estimate_cost_usd('claude-opus-4-8', 1_000_000, 0) == 15.0
+    assert ot.estimate_cost_usd('claude-opus-4-8', 1_000_000, 0) == 5.0  # 2026-10-06 list price
     # unknown model falls back to 'fast' tier, never crashes
     assert ot.estimate_cost_usd('some-unknown-model', 1_000_000, 0) == 0.15
     assert ot.estimate_cost_usd('', 0, 0) == 0.0
@@ -151,3 +151,45 @@ def test_producers_share_cross_system_timeline(tmp_path, monkeypatch):
                          event_type='phase_completed')
     systems = {row['system'] for row in ot.timeline(tmp_path)}
     assert {'agent', 'shade'} <= systems
+
+
+def test_cost_prices_cache_reads_and_writes_at_cache_rates():
+    from charon.infra.orchestration_trace import estimate_cost_usd
+
+    # claude-sonnet-5-5: $2.00/MTok input, $10.00 output (2026-10-06).
+    assert estimate_cost_usd('claude-sonnet-5-5', 1_000_000, 0) == 2.0
+    # 900k of the prompt read from cache ($0.20/MTok), 100k written (1.25x, 5m TTL).
+    cached = estimate_cost_usd('claude-sonnet-5-5', 1_000_000, 0,
+                               cache_read_tokens=900_000, cache_write_tokens=100_000)
+    assert cached == round(0.9 * 0.20 + 0.1 * 2.0 * 1.25, 6)
+    # The 1-hour TTL writes at 2x.
+    assert estimate_cost_usd('claude-sonnet-5-5', 100_000, 0, cache_write_tokens=100_000,
+                             cache_ttl='1h') == round(0.1 * 2.0 * 2.0, 6)
+    # Opus 5.5 reads at $0.20 of $4; Fable 5.1 at $0.25 of $10.
+    assert estimate_cost_usd('claude-opus-5-5', 1_000_000, 0, cache_read_tokens=1_000_000) == 0.2
+    assert estimate_cost_usd('claude-fable-5-1', 1_000_000, 0, cache_read_tokens=1_000_000) == 0.25
+    # Callers that pass no cache split are priced exactly as before.
+    assert estimate_cost_usd('gpt-5.5', 1_000_000, 1_000_000) == 11.25
+
+
+def test_anthropic_list_prices_2026_10_06():
+    from charon.infra.orchestration_trace import estimate_cost_usd
+
+    def rates(model):
+        return (estimate_cost_usd(model, 1_000_000, 0), estimate_cost_usd(model, 0, 1_000_000))
+
+    assert rates('claude-opus-5-5') == (4.0, 20.0)
+    assert rates('claude-opus-5') == (5.0, 25.0)
+    for model in ('claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6'):
+        assert rates(model) == (5.0, 25.0)
+    assert rates('claude-sonnet-5-5') == (2.0, 10.0)
+    assert rates('claude-sonnet-5') == (2.0, 10.0)
+    assert rates('claude-sonnet-4-6') == (3.0, 15.0)
+    assert rates('claude-haiku-4-5') == (1.0, 5.0)
+    assert rates('claude-fable-5-1') == rates('claude-fable-5') == (10.0, 50.0)
+    assert rates('claude-opus-5.5') == (4.0, 20.0)  # dotted ids normalise
+    # Haiku 5.5 is tiered per request at 100K prompt tokens.
+    assert estimate_cost_usd('claude-haiku-5-5', 100_000, 100_000) == round(0.1 * 0.10 + 0.1 * 0.50, 6)
+    assert estimate_cost_usd('claude-haiku-5-5', 100_001, 0) == round(100_001 / 1e6 * 0.50, 6)
+    # No current model costs $15 input; unknown ids take the family's highest rate.
+    assert rates('claude-opus-9') == (5.0, 25.0)

@@ -21,8 +21,6 @@ import re
 import time
 from pathlib import Path
 
-from charon.tools import ALL_TOOL_DEFS
-
 try:
     from charon.infra.diagnostics import record as _diag
 except Exception:  # diagnostics is best-effort and must never block import
@@ -109,13 +107,14 @@ def _build_identity(agent: dict, task: dict) -> str:
     lines.append(
         'Key concepts you should know:\n'
         '- You are a **Charon agent** (persistent, named, project-assigned). You have durable memory across tasks.\n'
-        '- **Shades** are ephemeral worker agents that you can spawn for complex tasks. They execute phases of a contract '
+        '- **Shades** are ephemeral worker agents that you can spawn for complex tasks with SpawnShade '
+        '(if it is not among your tools, enable it with ToolCatalog). They execute phases of a contract '
         '(analysis → implementation → verification → report) with scope restrictions and budget limits. '
         'Users never interact with shades directly — they talk to you, you manage shades internally.\n'
         '- You share a **user model** with all other Charon agents — preferences the user has taught any agent are available to you.\n'
         '- You share **project knowledge** with other agents on the same project.\n'
         '- You can see what other agents are working on and coordinate to avoid conflicts.\n'
-        '- You can capture ideas with /idea for the backlog, and query goals with /goals.'
+        '- You can capture ideas with /idea for the backlog, and query goals with /goals.\n'
         '- Use `/browser show [--save]`, `/browser hide [--save]`, or `/browser status` to control browser visibility.'
     )
     lines.append('')
@@ -126,8 +125,9 @@ def _build_identity(agent: dict, task: dict) -> str:
     lines.append('')
     lines.append(
         '**Memory:** Your system prompt includes a snapshot of what you know (user profile, project knowledge, '
-        'recent working memory). But you also have a **Recall** tool for searching all past conversations '
-        'semantically. Use it when:\n'
+        'recent working memory). For anything beyond it, use the **Recall** tool, which searches all past '
+        'conversations semantically. Recall is not loaded by default: if it is not among your tools, enable it '
+        'with ToolCatalog (action=enable, names=["Recall"]). Use it when:\n'
         '- The user references a past conversation ("remember when we...")\n'
         '- You need details not in your current context\n'
         '- The user asks about something you should know but don\'t see in your memory snapshot\n'
@@ -431,8 +431,22 @@ def _build_coordination(state_dir: Path, agent_id: str) -> str:
     return '\n'.join(lines) if lines else ''
 
 
-def _build_fleet_context() -> str:
-    """Layer 7b: Remote fleet status — gives the LLM awareness of remote agents."""
+def _fleet_agent_relevant(online: bool, agent_project: str, project: str) -> bool:
+    """A remote agent is listed when it is online or works on this project."""
+    if online:
+        return True
+    if not agent_project or not project:
+        return False
+    here = Path(project).name.lower()
+    return agent_project.strip().lower() in {here, project.strip().lower()}
+
+
+def _build_fleet_context(project: str = '') -> str:
+    """Layer 7b: Remote fleet status — gives the LLM awareness of remote agents.
+
+    Lists only agents that are online or assigned to this project; the rest
+    are counted in one line, since FleetStatus reports them on demand.
+    """
     try:
         from charon.fleet.fleet_registry import load_fleet
         from charon.fleet.fleet_sync import get_cached_fleet_status
@@ -446,6 +460,7 @@ def _build_fleet_context() -> str:
 
     status = get_cached_fleet_status()
     lines = ['## Active Fleet']
+    omitted = 0
 
     for server in servers:
         sid = server.get('id', server.get('host', ''))
@@ -458,31 +473,40 @@ def _build_fleet_context() -> str:
             sess = sessions.get(aname, {})
             astatus = sess.get('status', 'offline') if online else 'offline'
             spec = agent_cfg.get('specialization', '')
-            project = agent_cfg.get('project', '')
+            agent_project = agent_cfg.get('project', '')
+            if not _fleet_agent_relevant(astatus != 'offline', agent_project, project):
+                omitted += 1
+                continue
             parts = [f'Remote: {aname} @ {sid} ({astatus})']
             if spec:
                 parts.append(f'specialist: {spec}')
-            if project:
-                parts.append(f'project: {project}')
+            if agent_project:
+                parts.append(f'project: {agent_project}')
             lines.append('- ' + ', '.join(parts))
 
-    if len(lines) <= 1:
+    if len(lines) <= 1 and not omitted:
         return ''
+    if omitted:
+        more = 'more ' if len(lines) > 1 else ''
+        lines.append(f'- {omitted} {more}remote agent(s), offline and on other projects.')
 
     lines.append('')
-    lines.append('Use FleetStatus, FleetSend, and FleetHistory tools to interact with remote agents.')
+    lines.append(
+        'FleetStatus, FleetSend, and FleetHistory reach remote agents; if they are not '
+        'among your tools, enable them with ToolCatalog.'
+    )
     return '\n'.join(lines)
 
 
 def _build_tools(tools: list[dict] | None = None) -> str:
-    """Layer 8: Available tools + guidelines."""
-    tool_defs = ALL_TOOL_DEFS if tools is None else tools
-    tool_list = '\n'.join(f"- {t['name']}: {t['description'][:80]}" for t in tool_defs)
+    """Layer 8: tool-use guidelines.
 
-    return f"""Available tools:
-{tool_list}
-
-Guidelines:
+    The tools are not listed: every provider sends their full definitions
+    natively, so a text list only repeated them (~230 tokens per call) and
+    changed whenever ToolCatalog enabled a tool. ``tools`` is kept for
+    callers' signatures.
+    """
+    return """Guidelines:
 - Use Bash for short-lived shell commands like ls, grep, find, git status, pytest, or bounded smoke tests.
 - Do NOT use Bash for GUI apps, monitors, servers, dev watchers, nohup flows, or background jobs. Use RunProcess for those.
 - After starting a managed process, use ProcessStatus / ProcessLogs / StopProcess to inspect and control it.
@@ -493,11 +517,7 @@ Guidelines:
 - When summarizing your actions, output plain text directly
 - Be concise in your responses
 - Show file paths clearly when working with files
-- When you need the full file, continue with offset until complete
-- For x.com workflows, prefer the X tool over generic Browser/Web when possible.
-- If the user asks to check x.com bookmarks for anything new, use X action=triage_new_bookmarks.
-- If the user asks what new bookmarks have been investigated, use X action=list_investigations with new_only=true.
-- If the user asks to deep dive, investigate, or report on a specific bookmarked item, use X action=deep_dive_bookmark or X action=get_investigation depending on whether they want new research or the stored report."""
+- When you need the full file, continue with offset until complete"""
 
 
 def _build_context_files(project: str) -> str:
@@ -561,7 +581,7 @@ def build_system_prompt(
         state_dir: Path to .charon_state/
         agent: Agent dict (id, name, role, goal, project, etc.)
         task: Current task dict
-        tools: Tool definitions (defaults to ALL_TOOL_DEFS)
+        tools: Tool definitions (unused by the prompt text; providers send them natively)
         contract: Shade contract dict (for shade agents only)
         custom_prompt: Override prompt (skips all layers except date/cwd)
     """
@@ -623,7 +643,7 @@ def build_system_prompt(
 
     # Layer 7b: Fleet status (skip for shades)
     if not is_shade:
-        block = _build_fleet_context()
+        block = _build_fleet_context(project)
         if block:
             parts.append(block)
 

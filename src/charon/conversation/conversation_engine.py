@@ -28,7 +28,7 @@ from charon.providers import (
     Message, ModelInfo, Provider, ToolCall, Usage, get_provider,
 )
 from charon.tools import ALL_TOOL_DEFS, ToolContext, ToolResult, execute_tool
-from charon.tools.tool_catalog import CORE_TOOL_NAMES
+from charon.tools.tool_catalog import CORE_TOOL_NAMES, FOLLOWUP_TOOL_NAMES, PROCESS_FOLLOWUP_TOOL_NAMES
 from charon.memory.execution_memory import record_tool_event
 from charon.conversation.task_policy import LoopGuard, TASK_GUIDANCE, NON_INTERACTIVE_GUIDANCE
 from charon.infra import config
@@ -68,6 +68,7 @@ _DOMAIN_TOOL_NAMES = {
     'fleet': {'FleetStatus', 'FleetSend', 'FleetHistory', 'FleetOnboard'},
     'skills': {'Skills'},
     'code': {'ExecuteCode'},
+    'process': set(PROCESS_FOLLOWUP_TOOL_NAMES),
 }
 
 _DOMAIN_INTENT_PATTERNS = {
@@ -87,9 +88,29 @@ _DOMAIN_INTENT_PATTERNS = {
     'fleet': re.compile(r'\b(fleet|remote agent|onboard node)\b', re.I),
     'skills': re.compile(r'\b(skill|plugin|capability pack)\b', re.I),
     'code': re.compile(r'\b(execute code|python calculation|data analysis)\b', re.I),
+    # Deliberately broad: a false positive costs ~200 tokens, a miss costs a
+    # ToolCatalog round trip.
+    'process': re.compile(
+        r'\b(process(?:es)?|pid|server|servers|daemon|watcher|background|logs?|'
+        r'running|kill|stop|restart)\b', re.I,
+    ),
 }
 
 # Lossless context management (graceful fallback if unavailable)
+
+
+def _mentions_tool_name(text: str, name: str) -> bool:
+    """Whether ``text`` names the tool as a word of its own.
+
+    A plain substring test loaded the 667-token X tool for any message with
+    an "x" in it ("fix", "explain", "txt"), and each mid-session load also
+    invalidates the whole cached prompt prefix. Short names must match
+    case-sensitively, so "X" loads only on an explicit "X"; x.com requests
+    are covered by the research intent pattern.
+    """
+    flags = 0 if len(name) < 3 else re.IGNORECASE
+    pattern = rf'(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])'
+    return re.search(pattern, text, flags) is not None
 
 
 def _iso_to_epoch(iso_str: str) -> float:
@@ -222,13 +243,10 @@ def build_system_prompt(
         prompt += f'\nCurrent working directory: {cwd}'
         return prompt
 
-    tool_defs = tools or ALL_TOOL_DEFS
-    tool_list = '\n'.join(f"- {t['name']}: {t['description'][:80]}" for t in tool_defs)
-
+    # The tools themselves are not listed here: every provider sends their
+    # full definitions natively, so a text list only repeated them (~210
+    # tokens per call) and changed whenever ToolCatalog enabled a tool.
     prompt = f"""You are {agent_name}, an expert coding assistant. You help users by reading files, executing commands, editing code, and writing new files.
-
-Available tools:
-{tool_list}
 
 Guidelines:
 - Use Bash for file operations like ls, grep, find
@@ -240,11 +258,7 @@ Guidelines:
 - Show file paths clearly when working with files
 - When you need the full file, continue with offset until complete
 - Always check that required parameters are provided before making tool calls
-- Use ToolCatalog to discover and enable specialized capabilities that are not currently exposed
-- For x.com workflows, prefer the X tool over generic Browser/Web when possible.
-- If the user asks to check x.com bookmarks for anything new, use X action=triage_new_bookmarks.
-- If the user asks what new bookmarks have been investigated, use X action=list_investigations with new_only=true.
-- If the user asks to deep dive, investigate, or report on a specific bookmarked item, use X action=deep_dive_bookmark or X action=get_investigation depending on whether they want new research or the stored report."""
+- Use ToolCatalog to discover and enable specialized capabilities that are not currently exposed"""
 
     if project_context:
         prompt += f'\n\n# Project Context\n\n{project_context}'
@@ -275,12 +289,41 @@ def estimate_tokens(messages: list[Message]) -> int:
     return total_chars // 4
 
 
-def should_compact(messages: list[Message], context_window: int, threshold: float = 0.7) -> bool:
-    """Check if conversation needs compaction."""
+def prefix_overhead_tokens(system_prompt: str, tools: list[dict] | None) -> int:
+    """Estimate of the fixed part of every request: system prompt and tool schemas.
+
+    Same ~4 chars/token rule as estimate_tokens. Measured on the benchmark
+    and TUI paths this is roughly 2,100 to 3,400 tokens per request.
+    """
+    chars = len(system_prompt or '')
+    if tools:
+        chars += len(json.dumps(tools, separators=(',', ':')))
+    return chars // 4
+
+
+def should_compact(
+    messages: list[Message],
+    context_window: int,
+    threshold: float = 0.7,
+    overhead_tokens: int = 0,
+) -> bool:
+    """Check if conversation needs compaction.
+
+    The request is the messages plus the fixed prefix (``overhead_tokens``:
+    system prompt and tool schemas), so both count against the threshold.
+    Counting only the messages let a small-window model overflow before
+    compaction fired: on an 8,192-token window the trigger was 5,734 tokens
+    of messages, sent with ~2,100 more of prefix. Compaction can only shrink
+    the messages, so it is not triggered while they are a small share of the
+    window, which keeps a prefix bigger than the threshold from compacting
+    on every turn.
+    """
     if context_window <= 0:
         return False
-    estimated = estimate_tokens(messages)
-    return estimated > (context_window * threshold)
+    messages_tokens = estimate_tokens(messages)
+    if messages_tokens <= context_window * 0.1:
+        return False
+    return messages_tokens + max(0, overhead_tokens) > context_window * threshold
 
 
 def _extract_file_ops(messages: list[Message]) -> tuple[list[str], list[str], list[str]]:
@@ -548,6 +591,11 @@ class ConversationEngine:
         self._tool_lock = threading.RLock()
         if config.adaptive_tools():
             initial_names = set(CORE_TOOL_NAMES)
+            # Tool-loading rule (charon.tools.tool_catalog): on a caching
+            # provider, token-only deferrals are loaded now so the tool list,
+            # which leads the cached prefix, does not change mid-session.
+            if getattr(self.provider, 'caches_prompt_prefix', False):
+                initial_names.update(FOLLOWUP_TOOL_NAMES)
             domain_text = ' '.join((
                 self.operation_domain,
                 self.operation_role,
@@ -652,12 +700,23 @@ class ConversationEngine:
                 names.update(_DOMAIN_TOOL_NAMES[domain])
 
         # Dynamic tools can opt into intent activation through their name.
-        lowered = text.lower()
         for tool in self._available_tools:
             name = str(tool.get('name') or '')
-            if name and name.lower() in lowered:
+            if name and _mentions_tool_name(text, name):
                 names.add(name)
         return self._enable_tools(sorted(names))
+
+    def _enable_process_followups(self) -> list[str]:
+        """Expose ProcessStatus/Logs/Stop once a managed process exists.
+
+        Same boundary as intent activation: only while ToolCatalog is exposed,
+        so an explicit restricted tool set stays restricted.
+        """
+        if not config.adaptive_tools():
+            return []
+        if not any(tool.get('name') == 'ToolCatalog' for tool in self.tools):
+            return []
+        return self._enable_tools(list(PROCESS_FOLLOWUP_TOOL_NAMES))
 
     def abort(self):
         """Signal the engine to stop after current operation."""
@@ -1420,7 +1479,8 @@ class ConversationEngine:
                     except Exception as e:
                         yield _evt('compaction_error', error=str(e))
                 elif should_compact(
-                    self.messages, self.model.context_window, self.compact_threshold
+                    self.messages, self.model.context_window, self.compact_threshold,
+                    overhead_tokens=prefix_overhead_tokens(self._get_system_prompt(), self.tools),
                 ):
                     yield _evt('compaction_start')
                     try:
@@ -1564,6 +1624,8 @@ class ConversationEngine:
                 usage=Usage(
                     input_tokens=usage_data.get('input_tokens', 0),
                     output_tokens=usage_data.get('output_tokens', 0),
+                    cache_read_tokens=usage_data.get('cache_read_tokens', 0),
+                    cache_write_tokens=usage_data.get('cache_write_tokens', 0),
                     total_tokens=usage_data.get('total_tokens', 0),
                 ),
                 timestamp=time.time(),
@@ -1637,6 +1699,11 @@ class ConversationEngine:
 
                 # Persist completed outputs in provider order, independent of
                 # which shared tool happened to finish first.
+                if any(
+                    o.call.name == 'RunProcess' and o.result is not None and not o.result.is_error
+                    for o in outcomes
+                ):
+                    self._enable_process_followups()
                 for outcome in outcomes:
                     result = outcome.result
                     if result is None:

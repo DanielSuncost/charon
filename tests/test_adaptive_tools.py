@@ -68,3 +68,87 @@ def test_adaptive_tools_can_be_disabled(tmp_path, monkeypatch):
     asyncio.run(engine.submit_and_collect('hello'))
 
     assert len(provider.tool_names[0]) == len(engine._available_tools)
+
+
+class RunProcessThenStopProvider:
+    """Calls RunProcess on the first request, then records the next payload."""
+
+    def __init__(self):
+        self.tool_names = []
+
+    async def stream(self, **kwargs):
+        from charon.providers import ToolCall
+
+        self.tool_names.append([tool['name'] for tool in kwargs.get('tools') or []])
+        if len(self.tool_names) == 1:
+            yield StreamDelta(
+                type='tool_call',
+                tool_call=ToolCall(id='call-1', name='RunProcess', arguments={'command': 'true'}),
+            )
+            stop = 'tool_use'
+        else:
+            stop = 'end_turn'
+        yield StreamDelta(type='done', text=json.dumps({'usage': {}, 'stop_reason': stop}))
+
+
+def test_process_followups_are_deferred_until_a_process_runs(tmp_path, monkeypatch):
+    from charon import tools
+    from charon.tools import ToolResult
+
+    monkeypatch.delenv('CHARON_ADAPTIVE_TOOLS', raising=False)
+    monkeypatch.setenv('CHARON_SKIP_APPROVAL', '1')
+    monkeypatch.setitem(
+        tools.TOOL_EXECUTORS, 'RunProcess', lambda params, ctx: ToolResult(content='started proc-1'),
+    )
+    provider = RunProcessThenStopProvider()
+    engine = ConversationEngine(provider, MODEL, project_root=tmp_path, interactive=False)
+
+    asyncio.run(engine.submit_and_collect('Fix the parser bug'))
+
+    followups = {'ProcessStatus', 'ProcessLogs', 'StopProcess'}
+    assert 'RunProcess' in provider.tool_names[0]
+    assert not followups & set(provider.tool_names[0])
+    assert followups <= set(provider.tool_names[1])
+
+
+def test_process_intent_enables_followups_before_request(tmp_path):
+    provider = CapturingProvider()
+    engine = ConversationEngine(provider, MODEL, project_root=tmp_path)
+
+    asyncio.run(engine.submit_and_collect('Is the dev server still running?'))
+
+    assert {'ProcessStatus', 'ProcessLogs', 'StopProcess'} <= set(provider.tool_names[0])
+
+
+def test_tool_names_activate_only_as_whole_words(tmp_path):
+    provider = CapturingProvider()
+    engine = ConversationEngine(provider, MODEL, project_root=tmp_path)
+
+    asyncio.run(engine.submit_and_collect('fix the txt parser and explain the next step'))
+    assert 'X' not in provider.tool_names[0]
+
+    asyncio.run(engine.submit_and_collect('use the X tool to check my bookmarks'))
+    assert 'X' in provider.tool_names[-1]
+
+
+class CachingCapturingProvider(CapturingProvider):
+    caches_prompt_prefix = True
+
+
+def test_caching_provider_loads_followups_up_front_and_keeps_the_list_fixed(tmp_path, monkeypatch):
+    from charon import tools
+    from charon.tools import ToolResult
+
+    monkeypatch.setenv('CHARON_SKIP_APPROVAL', '1')
+    monkeypatch.setitem(
+        tools.TOOL_EXECUTORS, 'RunProcess', lambda params, ctx: ToolResult(content='started proc-1'),
+    )
+    provider = CachingCapturingProvider()
+    engine = ConversationEngine(provider, MODEL, project_root=tmp_path, interactive=False)
+
+    asyncio.run(engine.submit_and_collect('Fix the parser bug'))
+    first = list(provider.tool_names[0])
+    assert {'ProcessStatus', 'ProcessLogs', 'StopProcess'} <= set(first)
+    # A process-related message changes nothing: the list was already complete.
+    asyncio.run(engine.submit_and_collect('Is the dev server still running?'))
+    assert provider.tool_names[-1] == first

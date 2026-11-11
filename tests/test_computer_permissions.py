@@ -87,3 +87,95 @@ def test_kill_switch_starts_tripped_and_will_not_arm_unproven():
         # Nothing is posted while the switch is not armed.
         r = h.call('killswitch_selftest', seconds=1)
         assert r['completed'] == 0 and r['interrupted']
+
+
+@pytest.mark.skipif(not BUILT, reason='Charon Desktop helper not built')
+def test_kernel_refuses_without_asking_and_audits():
+    with hp.DesktopHelper() as h:
+        for target in ('com.apple.keychainaccess', 'com.apple.Terminal', 'ai.charon.desktop'):
+            r = h.request_grant('desktop.input.text', target, 5)
+            assert r['ok'] is False and 'never-allowed' in r['error']
+        assert h.request_grant('desktop.run.shell', 'com.apple.Notes', 5)['ok'] is False
+        assert h.narrow_grant('g-0', 1)['ok'] is False
+        assert h.grants() == []
+        v = h.verify_audit()
+        assert v['audit']['ok'] is True, v
+
+
+@pytest.mark.skipif(not BUILT, reason='Charon Desktop helper not built')
+def test_capture_is_refused_without_a_grant_and_audited():
+    with hp.DesktopHelper() as h:
+        # No grant exists in a fresh helper: default deny, whatever is on screen.
+        r = h.call('capture', target='com.apple.Notes', terms={})
+        assert r['ok'] is False and 'capture' not in r
+        # Never-allowed targets and unknown apps are refused too.
+        for target in ('com.apple.keychainaccess', 'ai.charon.desktop', 'com.apple.Terminal'):
+            r = h.call('grant_request', **{'class': 'desktop.observe.screen', 'target': target, 'minutes': 5,
+                                           'reason': '', 'terms': {'destination': 'l', 'destination_kind': 'local-loopback'}})
+            assert r['ok'] is False and 'never-allowed' in r['error']
+            assert h.call('capture', target=target, terms={})['ok'] is False
+        assert h.call('capture', target='no.such.app', terms={})['ok'] is False
+        assert h.verify_audit()['audit']['ok'] is True
+
+
+@pytest.mark.skipif(not BUILT, reason='Charon Desktop helper not built')
+def test_helper_refuses_capture_grants_without_a_local_destination():
+    with hp.DesktopHelper() as h:
+        # Raw calls, as a caller that bypassed the Python policy would make.
+        r = h.call('grant_request', **{'class': 'desktop.observe.screen', 'target': 'com.apple.Notes', 'minutes': 5,
+                                       'reason': '', 'terms': {}})
+        assert r['ok'] is False and 'where it will be sent' in r['error']
+        r = h.call('grant_request', **{'class': 'desktop.observe.screen', 'target': 'com.apple.Notes', 'minutes': 5,
+                                       'reason': '', 'terms': {'destination': 'openai @ https://api.openai.com/v1',
+                                                               'destination_kind': 'cloud'}})
+        assert r['ok'] is False and 'only go to a local model' in r['error']
+        r = h.call('capture', target='com.apple.Notes', terms={'destination': 'x', 'destination_kind': 'cloud'})
+        assert r['ok'] is False
+
+
+@pytest.mark.skipif(not BUILT, reason='Charon Desktop helper not built')
+def test_pointer_needs_a_held_screenshot_and_a_grant():
+    with hp.DesktopHelper() as h:
+        r = h.click('com.apple.Notes', 'c-000000000000', 10, 10)
+        assert r['ok'] is False and 'no held screenshot' in r['error']
+        r = h.scroll('com.apple.Notes', 'c-000000000000', 10, 10, dy=3)
+        assert r['ok'] is False
+        assert h.click('com.apple.Notes', 'c-0', 1, 1, button='middle')['ok'] is False
+        assert h.click('com.apple.Notes', 'c-0', 1, 1, count=9)['ok'] is False
+        assert h.scroll('com.apple.Notes', 'c-0', 1, 1, dy=500)['ok'] is False
+        for target in ('com.apple.Terminal', 'ai.charon.desktop'):
+            r = h.request_grant('desktop.input.pointer', target, 5)
+            assert r['ok'] is False and 'never-allowed' in r['error']
+        assert h.verify_audit()['audit']['ok'] is True
+
+
+@pytest.mark.skipif(not BUILT, reason='Charon Desktop helper not built')
+def test_keyboard_refuses_unsafe_text_unknown_shortcuts_and_unseen_fields():
+    with hp.DesktopHelper() as h:
+        for text in ('send this\n', 'a\tb', 'x\r', ''):
+            r = h.type_text('com.apple.Notes', 'c-0', 1, 1, text)
+            assert r['ok'] is False and ('control' in r['error'] or 'nothing' in r['error'])
+        assert 'at most 500' in h.type_text('com.apple.Notes', 'c-0', 1, 1, 'a' * 501)['error']
+        r = h.type_text('com.apple.Notes', 'c-0', 1, 1, 'hello')
+        assert r['ok'] is False and 'no held screenshot' in r['error']
+        for name in ('return', 'enter', 'cmd+v', 'paste', 'cmd+q', 'space'):
+            r = h.press_shortcut('com.apple.Notes', 'c-0', 1, 1, name)
+            assert r['ok'] is False and 'not an allowed shortcut' in r['error']
+        r = h.press_shortcut('com.apple.Notes', 'c-0', 1, 1, 'down')
+        assert r['ok'] is False and 'no held screenshot' in r['error']
+        for cls in ('desktop.input.text', 'desktop.input.shortcut'):
+            for target in ('com.apple.Terminal', 'com.apple.keychainaccess', 'ai.charon.desktop'):
+                assert h.request_grant(cls, target, 5)['ok'] is False
+        audit = h.verify_audit()
+        assert audit['audit']['ok'] is True
+    import pathlib
+    text = pathlib.Path(audit['path']).read_text()
+    assert 'send this' not in text and 'hello' not in text, 'typed text must never reach the audit'
+
+
+@pytest.mark.skipif(not BUILT, reason='Charon Desktop helper not built')
+def test_destructive_actions_cannot_be_granted_until_a_verb_exists():
+    with hp.DesktopHelper() as h:
+        r = h.request_grant('desktop.input.destructive', 'com.apple.Notes', 5)
+        assert r['ok'] is False and 'not available yet' in r['error']
+        assert h.grants() == []

@@ -8,6 +8,7 @@ import json
 import os
 from typing import Any, AsyncIterator
 
+from charon.computer.destination import outgoing_capture_refusal
 from charon.providers import Message, ModelInfo, StreamDelta, ToolCall
 from charon.providers.image_content import has_image_block, to_chat_completions_parts
 
@@ -35,6 +36,11 @@ class OpenAICompatProvider:
         thinking_level: str = 'off',
         max_tokens: int = 16384,
     ) -> AsyncIterator[StreamDelta]:
+        # Desktop screenshots go only to the local model they were taken
+        # for (charon.computer.destination); checked before any request.
+        if refusal := outgoing_capture_refusal(messages, self, model, system_prompt):
+            yield StreamDelta(type='error', error=refusal)
+            return
         if not HAS_OPENAI:
             yield StreamDelta(type='error', error='openai package not installed. Run: pip install openai')
             return

@@ -46,7 +46,14 @@ X_TOOL_DEF = {
     'description': (
         'Access x.com with a persistent logged-in browser profile and bridge interesting posts into Charon workflows. '
         'Can open login, fetch posts/bookmarks, keep a local investigation index, save research outputs, query past bookmark investigations, '
-        'enqueue investigations, capture ideas, and schedule recurring bookmark reviews.'
+        'enqueue investigations, capture ideas, and schedule recurring bookmark reviews. '
+        # Usage guidance lives here, not in the system prompt, so it is sent
+        # only while this tool is loaded.
+        'Prefer this tool over generic Browser/Web for x.com workflows. '
+        'To check bookmarks for anything new: action=triage_new_bookmarks. '
+        'To see which new bookmarks have been investigated: action=list_investigations with new_only=true. '
+        'To deep dive, investigate, or report on a specific bookmark: action=deep_dive_bookmark for new research, '
+        'or action=get_investigation for the stored report.'
     ),
     'input_schema': {
         'type': 'object',

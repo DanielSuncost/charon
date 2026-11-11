@@ -106,8 +106,21 @@ _PRICING: dict[str, tuple[float, float]] = {
     # cannot express — long-context astra calls are under-estimated 2x.
     "gpt-6-astra": (10.00, 50.00),
     "o3": (2.00, 8.00), "o4": (2.00, 8.00),
-    "claude-opus": (15.00, 75.00), "claude-sonnet": (3.00, 15.00),
-    "claude-haiku": (0.80, 4.00), "claude-fable": (3.00, 15.00),
+    # Anthropic, list prices as of 2026-10-06 (input, output per MTok).
+    # NEEDS REFRESHING from Anthropic's pricing page when models or prices
+    # change. Model ids are matched with "." normalised to "-".
+    "claude-opus-5-5": (4.00, 20.00), "claude-opus-5": (5.00, 25.00),
+    "claude-opus-4-8": (5.00, 25.00), "claude-opus-4-7": (5.00, 25.00),
+    "claude-opus-4-6": (5.00, 25.00),
+    "claude-sonnet-5-5": (2.00, 10.00), "claude-sonnet-5": (2.00, 10.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    # Haiku 5.5 is tiered by prompt size; see _LONG_PROMPT_PRICING.
+    "claude-haiku-5-5": (0.10, 0.50), "claude-haiku-4-5": (1.00, 5.00),
+    "claude-fable-5-1": (10.00, 50.00), "claude-fable-5": (10.00, 50.00),
+    # Family fallbacks for ids not listed above: the highest current rate in
+    # each family, so an unknown model is over- rather than under-estimated.
+    "claude-opus": (5.00, 25.00), "claude-sonnet": (3.00, 15.00),
+    "claude-haiku": (1.00, 5.00), "claude-fable": (10.00, 50.00),
     "gemini": (1.25, 5.00), "llama": (0.0, 0.0), "qwen": (0.0, 0.0),
     "bge": (0.0, 0.0),
     # DeepSeek peak rates, cache-miss input (api-docs.deepseek.com pricing,
@@ -118,10 +131,64 @@ _PRICING: dict[str, tuple[float, float]] = {
 }
 
 
-def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+# Prompt-cache price multipliers on the base input rate.
+# Anthropic: reads ~0.1x (0.05x on Claude Opus 5.5); writes 1.25x for the
+# 5-minute TTL Charon uses, 2x for the 1-hour TTL. DeepSeek bills cache hits
+# at ~2% with no write premium. Other providers' read rates are not encoded
+# here, so their reads stay at the full rate (an over-estimate, as before).
+_CACHE_READ_MULTIPLIER: dict[str, float] = {
+    # 2026-10-06: Opus 5.5 $0.20 of $4 input, Sonnet 5.5 $0.20 of $2,
+    # Fable 5 / 5.1 $0.25 of $10; other Claude models ~0.1x.
+    "claude": 0.10, "claude-opus-5-5": 0.05, "claude-sonnet-5-5": 0.10,
+    "claude-fable-5": 0.025,
+    "deepseek": 0.02,
+}
+
+# Models priced by prompt size: (threshold in prompt tokens, rates above it).
+# The threshold applies per request, so callers must price each request on
+# its own rather than a sum of several.
+_LONG_PROMPT_PRICING: dict[str, tuple[int, tuple[float, float]]] = {
+    "claude-haiku-5-5": (100_000, (0.50, 2.50)),
+}
+_CACHE_WRITE_MULTIPLIER = {"5m": 1.25, "1h": 2.0}
+
+
+def _longest_prefix(key: str, table) -> str:
+    best = ""
+    for pfx in table:
+        if key.startswith(pfx) and len(pfx) > len(best):
+            best = pfx
+    return best
+
+
+def estimate_cost_usd(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    cache_ttl: str = "5m",
+) -> float:
     """Central cost estimate. Matches an exact tier key, else the longest model-id
-    prefix, else falls back to the 'fast' tier. Returns USD."""
+    prefix, else falls back to the 'fast' tier. Returns USD.
+
+    Price one request at a time: prompt-size tiers (Haiku 5.5) apply per
+    request. ``input_tokens`` is the whole prompt, Charon's convention, including any
+    ``cache_read_tokens`` and ``cache_write_tokens``. Those are priced at the
+    cache rates above; pricing every input token at the full rate overstated
+    a cached run's cost by up to ~10x and could stop a run with budget left.
+    """
     key = (model or "").strip().lower()
+    if key.startswith("claude"):
+        key = key.replace(".", "-")
+    read = max(0, int(cache_read_tokens or 0))
+    write = max(0, int(cache_write_tokens or 0))
+    uncached = max(0, int(input_tokens or 0) - read - write)
+    is_claude = key.startswith("claude")
+    read_mult = _CACHE_READ_MULTIPLIER.get(_longest_prefix(key, _CACHE_READ_MULTIPLIER), 1.0)
+    write_mult = _CACHE_WRITE_MULTIPLIER.get(cache_ttl, 1.25) if is_claude else 1.0
+    effective_input = uncached + read * read_mult + write * write_mult
     rates = _PRICING.get(key)
     if rates is None:
         # longest prefix match against known families
@@ -130,8 +197,11 @@ def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> floa
             if key.startswith(pfx) and len(pfx) > len(best):
                 best = pfx
         rates = _PRICING.get(best, _PRICING["fast"])
+    long_prompt = _LONG_PROMPT_PRICING.get(_longest_prefix(key, _LONG_PROMPT_PRICING))
+    if long_prompt and int(input_tokens or 0) > long_prompt[0]:
+        rates = long_prompt[1]
     in_rate, out_rate = rates
-    return round((input_tokens / 1_000_000.0) * in_rate
+    return round((effective_input / 1_000_000.0) * in_rate
                  + (output_tokens / 1_000_000.0) * out_rate, 6)
 
 

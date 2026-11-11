@@ -922,6 +922,9 @@ class WorkCommandsMixin:
                 lines = persistent_agent.access_lines(common.STATE_DIR, request=rest == 'access request')
                 common.emit({'type': 'status', 'message': 'Desktop access\n' + '\n'.join(lines), 'request_id': request_id})
                 return
+            if rest == 'audit':
+                common.emit({'type': 'status', 'message': '\n'.join(persistent_agent.audit_lines()), 'request_id': request_id})
+                return
             if rest in ('off', 'stop'):
                 persistent_agent.set_enabled(common.STATE_DIR, False)
                 result = persistent_agent.request_stop(common.STATE_DIR)
@@ -931,7 +934,7 @@ class WorkCommandsMixin:
                     common.emit({'type': 'status', 'message': f'Persistent agent OFF ({result["note"]}).', 'request_id': request_id})
                 common.emit({'type': 'refresh', 'payload': self._get_refresh_payload(), 'request_id': request_id})
                 return
-            common.emit({'type': 'error', 'error': 'Usage: /persistent on | off | status | access [request]', 'request_id': request_id})
+            common.emit({'type': 'error', 'error': 'Usage: /persistent on | off | status | access [request] | audit', 'request_id': request_id})
         except Exception as e:
             common.emit({'type': 'error', 'error': f'Persistent agent command failed: {e}', 'request_id': request_id})
         return

@@ -198,8 +198,15 @@ struct SequenceResult {
 }
 
 /// Runs a sequence, checking the switch before each event and while
-/// waiting. On interruption restores the front app and pointer.
-func runSequence(_ steps: [Step]) -> SequenceResult {
+/// waiting. On a trip restores the front app and pointer.
+///
+/// ``check`` runs immediately before every single posted event (not once
+/// per sequence): the verb passes the kernel's re-check of its guards and
+/// grant plus its own target checks, so focus moving to another app, a
+/// password field taking focus or the grant ending stops the sequence
+/// before the next event. A stop by ``check`` is not a trip: nothing human
+/// happened, so the switch stays armed and nothing is restored.
+func runSequence(_ steps: [Step], check: (() -> String?)? = nil) -> SequenceResult {
     let ks = KillSwitch.shared
     if ks.tripped { return SequenceResult(completed: 0, total: steps.count, interrupted: ks.reason, restored: false) }
     let frontApp = frontmostApplication()
@@ -210,6 +217,10 @@ func runSequence(_ steps: [Step]) -> SequenceResult {
         if ks.tripped { break }
         switch step {
         case .post(let event):
+            if let why = check?() {
+                return SequenceResult(completed: done, total: steps.count, interrupted: "stopped: \(why)", restored: false)
+            }
+            if ks.tripped { continue }   // tripped during the check: the loop head stops
             event.setIntegerValueField(.eventSourceUserData, value: ks.tag)
             event.post(tap: .cghidEventTap)
         case .wait(let seconds):

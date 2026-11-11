@@ -86,6 +86,12 @@ class Provider(Protocol):
     # content to the model as images. Absent means images would not survive.
     supports_image_input: bool
 
+    # Optional. True when requests reuse a cached prompt prefix (Anthropic
+    # cache_control, Codex prompt_cache_key). Absent means False. The engine
+    # uses it to choose between a stable tool list and deferred tools; see
+    # charon.tools.tool_catalog.
+    caches_prompt_prefix: bool
+
     async def stream(
         self,
         messages: list[Message],

@@ -282,3 +282,31 @@ class TestAssembler:
         assert result.stats['raw'] == 1
         assert result.stats['summaries'] == 1
         assert result.stats['total'] == 2
+
+
+class TestChunkedEviction:
+    def test_prefix_is_stable_across_turns_once_over_budget(self, db):
+        """Near-full session: the first kept message must not move every turn."""
+        assembler = ContextAssembler(fresh_tail_count=3, evict_chunk_tokens=1000)
+        firsts = []
+        for i in range(40):
+            ContextStore.persist_message(
+                db, 'agent-1', Message(role='user', content=f'msg-{i} ' + 'x' * 400))
+            result = assembler.assemble(db, 'agent-1', token_budget=1500)
+            assert result.estimated_tokens <= 1500 or len(result.messages) <= 3
+            firsts.append(result.messages[0].content)
+        over_budget = firsts[10:]
+        changes = sum(1 for a, b in zip(over_budget, over_budget[1:], strict=False) if a != b)
+        # ~100 tokens per message; the 1,000-token chunk is capped to half the
+        # 1,200 tokens left for older history, so the start moves about once
+        # per six turns. Without chunking it moved on 26 of these 29 turns.
+        assert changes <= len(over_budget) // 4
+
+    def test_newest_history_is_still_kept(self, db):
+        for i in range(30):
+            ContextStore.persist_message(
+                db, 'agent-1', Message(role='user', content=f'msg-{i} ' + 'x' * 400))
+        result = ContextAssembler(fresh_tail_count=3, evict_chunk_tokens=1000).assemble(
+            db, 'agent-1', token_budget=1500)
+        assert 'msg-29' in result.messages[-1].content
+        assert len(result.messages) >= 3

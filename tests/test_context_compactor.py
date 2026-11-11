@@ -382,3 +382,31 @@ class TestCondensation:
                 condensed = [s for s in summaries if s.kind == 'condensed']
                 assert condensed[0].depth >= 1
                 assert len(condensed[0].parent_summary_ids) >= 2
+
+
+class TestHysteresis:
+    def test_compacts_below_the_trigger_and_does_not_retrigger_next_turn(self, db, model):
+        """Each compaction rewrites the cached prompt prefix; stopping just
+        under the trigger let the next turn's growth retrigger it."""
+        config = CompactionConfig(
+            context_threshold=0.6, hysteresis=0.2, fresh_tail_count=4,
+            leaf_chunk_tokens=400, leaf_min_fanout=3, condensed_min_fanout=2,
+            leaf_target_tokens=50, condensed_target_tokens=80, summarizer_timeout=5.0,
+        )
+        compactor = ContextCompactor(config)
+        provider = FakeProvider('Short summary.')
+        budget = 4000
+        _populate_messages(db, 'agent-h', 60, chars_per=200)  # ~3,000+ tokens > 0.6 * 4000
+        before = ContextStore.get_context_token_count(db, 'agent-h')
+        assert before > 0.6 * budget
+
+        result = asyncio.run(compactor.evaluate_and_compact(
+            db, 'agent-h', token_budget=budget, provider=provider, model=model))
+        assert result.action_taken
+        assert result.tokens_after <= (0.6 - 0.2) * budget
+
+        # A turn of growth lands inside the band: no second rewrite.
+        _populate_messages(db, 'agent-h', 2, chars_per=200)
+        again = asyncio.run(compactor.evaluate_and_compact(
+            db, 'agent-h', token_budget=budget, provider=provider, model=model))
+        assert not again.action_taken

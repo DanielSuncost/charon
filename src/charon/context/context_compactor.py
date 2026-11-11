@@ -35,6 +35,11 @@ except Exception:  # diagnostics is best-effort and must never block import
 class CompactionConfig:
     """Tunable compaction parameters."""
     context_threshold: float = 0.75     # fraction of budget that triggers compaction
+    # Once triggered, compact down to (threshold - hysteresis) of the budget,
+    # not just under the trigger. Every compaction rewrites the prompt prefix
+    # (a full cache rewrite), so stopping just under the trigger let the next
+    # few turns of growth retrigger it.
+    hysteresis: float = 0.15
     fresh_tail_count: int = 20          # recent messages protected from compaction
     leaf_chunk_tokens: int = 20_000     # max source tokens per leaf chunk
     leaf_min_fanout: int = 6            # min messages for a leaf pass
@@ -453,7 +458,8 @@ class ContextCompactor:
     ) -> CompactionResult:
         """Phase 1: leaf passes.  Phase 2: condensation passes."""
         tokens_before = ContextStore.get_context_token_count(db, agent_id)
-        threshold = int(self.config.context_threshold * token_budget)
+        # Stop target: below the trigger by the hysteresis band (see config).
+        threshold = int(max(0.0, self.config.context_threshold - self.config.hysteresis) * token_budget)
         action_taken = False
         condensed = False
         created_id = None

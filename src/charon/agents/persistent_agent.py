@@ -442,6 +442,26 @@ def access_lines(state_dir: Path, *, request: bool = False) -> list[str]:
     return list(result.get('message') or [])
 
 
+def audit_lines() -> list[str]:
+    """Verify the desktop helper's keyed audit chain. Only the helper holds
+    the key, so the check runs there."""
+    from charon.computer.helper import DesktopHelper, HelperError
+    try:
+        with DesktopHelper() as h:
+            reply = h.verify_audit()
+    except HelperError as exc:
+        return [f'Desktop audit: cannot check ({exc})']
+    a = reply.get('audit') or {}
+    path = reply.get('path') or ''
+    if a.get('ok'):
+        lines = [f'Desktop audit: intact · {a.get("entries")} entries · {path}']
+        if a.get('note'):
+            lines.append(f'Note: {a["note"]}')
+        return lines
+    return [f'Desktop audit: BROKEN — {a.get("problem")}', f'  {path}',
+            'An entry was edited, removed or added without the helper\'s key, or the file was cut short.']
+
+
 def band_row(state_dir: Path, now: float | None = None) -> dict | None:
     """A row in the shape the chat's team band renders, or None when there
     is nothing to show (off and no process)."""

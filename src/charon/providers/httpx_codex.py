@@ -19,6 +19,7 @@ from typing import Any, AsyncIterator
 import httpx
 
 from charon.infra import config
+from charon.computer.destination import outgoing_capture_refusal
 from charon.providers import Message, ModelInfo, StreamDelta, ToolCall
 from charon.providers.http_client import AsyncClientPool
 from charon.providers.http_errors import exception_error, http_error
@@ -277,6 +278,10 @@ class HttpxCodexProvider:
 
     # Image blocks go out as Responses API input_image items (image_content.py).
     supports_image_input = True
+
+    # Requests reuse a cached prompt prefix: see the tool-loading rule in
+    # charon.tools.tool_catalog.
+    caches_prompt_prefix = True
 
     def __init__(self, api_key: str, refresh_token: str | None = None,
                  auth_store_path: str | None = None, timeout: float = 300.0):
@@ -626,6 +631,11 @@ class HttpxCodexProvider:
         thinking_level: str = 'off',
         max_tokens: int = 16384,
     ) -> AsyncIterator[StreamDelta]:
+        # Desktop screenshots go only to the local model they were taken
+        # for (charon.computer.destination); checked before any request.
+        if refusal := outgoing_capture_refusal(messages, self, model, system_prompt):
+            yield StreamDelta(type='error', error=refusal)
+            return
         if not self._api_key:
             yield StreamDelta(type='error', error='No Codex API key configured')
             return

@@ -7,8 +7,39 @@ from typing import Any
 
 CORE_TOOL_NAMES = frozenset({
     'Read', 'Bash', 'Edit', 'Write', 'Git', 'Http', 'RunProcess',
-    'ProcessStatus', 'ProcessLogs', 'StopProcess', 'Clarify', 'ToolCatalog',
+    'Clarify', 'ToolCatalog',
 })
+
+# Tool-loading rule: prefix stability versus deferral.
+#
+# A provider that caches the prompt prefix (``caches_prompt_prefix``) renders
+# tools first, so any change to the tool list mid-session rewrites the whole
+# cached prefix: about 1.15x the current context in extra cost (a 1.25x write
+# where a 0.1x read would have been). An extra loaded tool costs only ~0.1x
+# its size per call once cached. A provider without caching pays every tool
+# in full on every call and, on a small local window, in context space.
+#
+# So, by provider:
+#   - caching provider:   tools deferred only to save tokens are loaded from
+#                         the start, and the list stays fixed.
+#   - no caching:         those tools are deferred until evidence they are
+#                         needed.
+#
+# This covers every tool deferred only for tokens (FOLLOWUP_TOOL_NAMES). It
+# does not cover the domain tools behind intent patterns and ToolCatalog:
+# loading all of them up front is the 58-tool registry, ~12,300 schema
+# tokens of mostly irrelevant tools that also crowd the model's tool choice.
+# Those loads stay intent-driven on every provider and, on a caching
+# provider, each one costs a single prefix rewrite, cheapest early.
+
+# Managed-process follow-ups. Useless until a process exists; deferred on
+# non-caching providers until RunProcess runs or a message talks about
+# processes, servers or logs (which covers processes left by an earlier
+# session).
+PROCESS_FOLLOWUP_TOOL_NAMES = ('ProcessStatus', 'ProcessLogs', 'StopProcess')
+
+# Every tool deferred only to save tokens, governed by the rule above.
+FOLLOWUP_TOOL_NAMES = frozenset(PROCESS_FOLLOWUP_TOOL_NAMES)
 
 
 TOOL_CATALOG_DEF = {
@@ -102,4 +133,4 @@ def execute_tool_catalog(params: dict, ctx: Any):
     return ToolResult(content='Error: action must be search, enable, or list', is_error=True)
 
 
-__all__ = ['CORE_TOOL_NAMES', 'TOOL_CATALOG_DEF', 'execute_tool_catalog']
+__all__ = ['CORE_TOOL_NAMES', 'FOLLOWUP_TOOL_NAMES', 'PROCESS_FOLLOWUP_TOOL_NAMES', 'TOOL_CATALOG_DEF', 'execute_tool_catalog']

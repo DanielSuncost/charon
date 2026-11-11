@@ -37,6 +37,10 @@ PROTOCOL = 1
 # Liveness bound for one request/reply on the pipe. The helper answers
 # these instantly; this is not a cap on any unit of agent work.
 REPLY_TIMEOUT_SECONDS = 10.0
+# Verbs that wait for the user to answer the helper's dialog. The helper
+# itself denies after 120 s unanswered; this bound only has to outlast it.
+PROMPTING_VERBS = {'grant_request'}
+PROMPT_REPLY_TIMEOUT_SECONDS = 150.0
 BUILD_HINT = 'CHARON_DESKTOP_SIGN_IDENTITY="<Developer ID>" apps/desktop-helper/build.sh'
 
 
@@ -86,6 +90,15 @@ def verify(app: Path) -> dict:
     elif want_team and info['team'] != want_team:
         info['error'] = f'the helper is signed by team {info["team"]}, not the required {want_team}'
     return info
+
+
+def _destination_terms(destination) -> dict:
+    """The terms a capture states. Only a minted, local Destination has any;
+    everything else raises CaptureRefused before the helper is asked."""
+    from charon.computer.destination import CaptureRefused, Destination
+    if not isinstance(destination, Destination):
+        raise CaptureRefused('a capture needs a destination from destination_for(provider, model)')
+    return destination.terms()
 
 
 class DesktopHelper:
@@ -150,7 +163,8 @@ class DesktopHelper:
             except OSError as exc:
                 raise HelperError(f'the helper exited: {exc}') from exc
             while True:
-                line = self._readline()
+                line = self._readline(PROMPT_REPLY_TIMEOUT_SECONDS if cmd in PROMPTING_VERBS
+                                      else REPLY_TIMEOUT_SECONDS)
                 try:
                     reply = json.loads(line)
                 except ValueError as exc:
@@ -166,9 +180,9 @@ class DesktopHelper:
             raise HelperError('the helper replied out of order')
         return reply
 
-    def _readline(self) -> str:
+    def _readline(self, timeout: float = REPLY_TIMEOUT_SECONDS) -> str:
         while b'\n' not in self._buf:
-            ready, _, _ = select.select([self.sock], [], [], REPLY_TIMEOUT_SECONDS)
+            ready, _, _ = select.select([self.sock], [], [], timeout)
             if not ready:
                 raise HelperError('the helper did not answer')
             chunk = self.sock.recv(65536)
@@ -177,6 +191,75 @@ class DesktopHelper:
             self._buf += chunk
         line, _, self._buf = self._buf.partition(b'\n')
         return line.decode('utf-8', 'replace').strip()
+
+    # ── Grants: the caller may ask, narrow and revoke; only the user grants.
+
+    def request_grant(self, action_class: str, target_bundle_id: str, minutes: float, reason: str = '',
+                      destination=None) -> dict:
+        """Ask the user, in the helper's own dialog, for a time-boxed grant.
+        Returns the reply; ``ok`` is False unless the user clicked Allow."""
+        terms = {}
+        if destination is not None or action_class == 'desktop.observe.screen':
+            terms = _destination_terms(destination)
+        return self.call('grant_request', **{'class': action_class, 'target': target_bundle_id,
+                                             'minutes': minutes, 'reason': reason, 'terms': terms})
+
+    def grants(self) -> list[dict]:
+        return list(self.call('grants_list').get('grants') or [])
+
+    def narrow_grant(self, grant_id: str, minutes: float) -> dict:
+        return self.call('grant_narrow', grant=grant_id, minutes=minutes)
+
+    def revoke_grant(self, grant_id: str) -> dict:
+        return self.call('grant_revoke', grant=grant_id)
+
+    def revoke_all(self) -> dict:
+        return self.call('grants_revoke_all')
+
+    def capture(self, target_bundle_id: str, destination) -> dict:
+        """A redacted screenshot of the target app's own windows, for a
+        request to ``destination`` (from ``destination.destination_for``),
+        which must be local: otherwise the helper is not asked. On success
+        ``reply['capture']`` is a ``SealedCapture``; only
+        ``destination.image_block`` releases its pixels. Nothing is written
+        to disk."""
+        from charon.computer.destination import seal
+        reply = self.call('capture', target=target_bundle_id, terms=_destination_terms(destination))
+        cap = reply.get('capture')
+        if reply.get('ok') and isinstance(cap, dict):
+            reply['capture'] = seal(cap, target_bundle_id, destination)
+        return reply
+
+    def click(self, target_bundle_id: str, capture_id: str, x: float, y: float,
+              button: str = 'left', count: int = 1) -> dict:
+        """Click at pixel (x, y) of a screenshot the helper still holds. The
+        helper maps it to the screen and re-checks before every event."""
+        return self.call('pointer_click', target=target_bundle_id, capture=capture_id,
+                         x=float(x), y=float(y), button=button, count=count)
+
+    def scroll(self, target_bundle_id: str, capture_id: str, x: float, y: float, dy: int, dx: int = 0) -> dict:
+        return self.call('pointer_scroll', target=target_bundle_id, capture=capture_id,
+                         x=float(x), y=float(y), dx=dx, dy=dy)
+
+    def type_text(self, target_bundle_id: str, capture_id: str, x: float, y: float, text: str) -> dict:
+        """Type ``text`` into the focused text field, which must contain pixel
+        (x, y) of a held screenshot. No control characters (no Return, no
+        Tab); at most 500 characters. The audit records only the length.
+
+        Known: characters go out as Unicode strings on a placeholder key, so
+        an app that reads key codes instead receives repeated placeholder
+        letters ("hello" -> "aaaaa"). A correctness limit, not the helper
+        typing something else; see apps/desktop-helper/README.md."""
+        return self.call('type_text', target=target_bundle_id, capture=capture_id, x=float(x), y=float(y), text=text)
+
+    def press_shortcut(self, target_bundle_id: str, capture_id: str, x: float, y: float, shortcut: str) -> dict:
+        """Press one shortcut from the helper's fixed allowlist (arrows, tab,
+        escape, home/end, page up/down, backspace, select_all, undo, find)."""
+        return self.call('press_shortcut', target=target_bundle_id, capture=capture_id,
+                         x=float(x), y=float(y), shortcut=shortcut)
+
+    def verify_audit(self) -> dict:
+        return self.call('audit_verify')
 
     def close(self) -> None:
         proc, self.proc = self.proc, None

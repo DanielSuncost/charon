@@ -297,7 +297,8 @@ def test_full_prompt_persistent_agent(tmp_path):
     assert 'snake_case' in prompt
     assert 'bare except' in prompt
     assert 'Fixed auth bug' in prompt
-    assert 'Available tools' in prompt
+    assert 'Guidelines:' in prompt
+    assert 'Available tools' not in prompt
     assert 'Current date' in prompt
 
 
@@ -349,7 +350,8 @@ def test_full_prompt_minimal():
     prompt = build_system_prompt(state_dir=Path('/nonexistent'), agent=agent, task=task)
 
     assert 'fresh-agent' in prompt
-    assert 'Available tools' in prompt
+    assert 'Guidelines:' in prompt
+    assert 'Available tools' not in prompt
     assert 'Current date' in prompt
     # No memory sections when empty
     assert 'USER PROFILE' not in prompt
