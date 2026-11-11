@@ -49,7 +49,8 @@ enum Desktop {
                     destructive: false, maxPerMinute: 60),
         ActionClass(id: destructive, family: family,
                     summary: "do things that may not be undoable (quit, close, delete, send)",
-                    destructive: true, maxPerMinute: 20),
+                    destructive: true, maxPerMinute: 20,
+                    unavailable: "destructive actions are not available yet: Charon Desktop has no verb for them, so there is nothing to grant"),
     ]
 
     static let inputClasses: Set<String> = [pointer, text, shortcut, destructive]

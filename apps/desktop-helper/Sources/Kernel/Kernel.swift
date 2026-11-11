@@ -106,6 +106,11 @@ final class Kernel {
                                   "caller": requester.audit])
             return .failure(.init("unknown action class \(classId)"))
         }
+        if let why = cls.unavailable {
+            log("grant_refused", ["class": classId, "target": target.id, "reason": why, "terms": terms,
+                                  "caller": requester.audit])
+            return .failure(.init(why))
+        }
         let probe = ActionRequest(classId: classId, target: target, args: [:], terms: terms)
         if let why = refusal(cls, probe, atGrant: true) {
             log("grant_refused", ["class": classId, "target": target.id, "reason": why, "terms": terms,
@@ -223,6 +228,7 @@ final class Kernel {
         guard let cls = actionClass(request.classId) else {
             return deny(request, "unknown action class \(request.classId)", requester)
         }
+        if let why = cls.unavailable { return deny(request, why, requester) }
         if let why = refusal(cls, request) {
             return deny(request, "never allowed: \(why)", requester)
         }

@@ -1,6 +1,12 @@
 // Keyboard input: desktop.input.text (type characters) and
 // desktop.input.shortcut (a fixed allowlist, KeyboardCore.swift).
 //
+// READ THIS FIRST (correctness, not security): text is sent as a Unicode
+// string on placeholder virtual key 0. Apps that read the key code rather
+// than the string receive the placeholder, so "hello" can arrive as
+// "aaaaa". That looks like the helper typing the wrong thing; it is not.
+// See README.md. Untested until the grants land.
+//
 // Like the pointer, every keyboard action names a pixel of a screenshot
 // the helper still holds, and the focused element must belong to the
 // target app and contain that point: the agent types into the field it

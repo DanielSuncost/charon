@@ -26,6 +26,10 @@ struct ActionClass {
     /// One plain line the grant dialog always shows: what this class does
     /// not protect against, so the user approves knowing it.
     var caveat: String? = nil
+    /// Set while the class has no verb: grants and actions are refused with
+    /// this reason and the user is never asked. A grantable capability that
+    /// does nothing would train the user to approve a dialog for nothing.
+    var unavailable: String? = nil
 }
 
 /// What an action acts on. For the desktop family the id is the target

@@ -244,7 +244,12 @@ class DesktopHelper:
     def type_text(self, target_bundle_id: str, capture_id: str, x: float, y: float, text: str) -> dict:
         """Type ``text`` into the focused text field, which must contain pixel
         (x, y) of a held screenshot. No control characters (no Return, no
-        Tab); at most 500 characters. The audit records only the length."""
+        Tab); at most 500 characters. The audit records only the length.
+
+        Known: characters go out as Unicode strings on a placeholder key, so
+        an app that reads key codes instead receives repeated placeholder
+        letters ("hello" -> "aaaaa"). A correctness limit, not the helper
+        typing something else; see apps/desktop-helper/README.md."""
         return self.call('type_text', target=target_bundle_id, capture=capture_id, x=float(x), y=float(y), text=text)
 
     def press_shortcut(self, target_bundle_id: str, capture_id: str, x: float, y: float, shortcut: str) -> dict:

@@ -222,6 +222,21 @@ let auditText = try! String(contentsOf: k6.audit.path, encoding: .utf8)
 check(auditText.contains("127.0.0.1:1234") && auditText.contains("api.anthropic.com"),
       "the audit records stated destinations, allowed and denied")
 
+// ── A class with no verb cannot be granted
+let up = ScriptedPrompter(), us = MemoryStore()
+let k7 = makeKernel(us, up, file: "unavailable.jsonl")
+k7.register(family: "desktop", classes: [
+    ActionClass(id: "desktop.input.destructive2", family: "desktop", summary: "quit", destructive: true, maxPerMinute: 5,
+                unavailable: "not available yet"),
+], guards: [])
+up.answers = [.allow]
+let upAsked = up.asked
+check((try? k7.requestGrant(classId: "desktop.input.destructive2", target: notes, seconds: 300, reason: "",
+                            requester: me).get()) == nil, "an unavailable class cannot be granted")
+check(up.asked == upAsked, "the user is not asked about an unavailable class")
+check(!allowed(k7.authorize(ActionRequest(classId: "desktop.input.destructive2", target: notes, args: [:]), requester: me)),
+      "an unavailable class cannot act")
+
 // ── Capture core: coordinate mapping, redaction, retention
 let mapped = pixelRects([CGRect(x: 110, y: 220, width: 50, height: 10)], origin: CGPoint(x: 100, y: 200),
                         scale: 2, imageSize: CGSize(width: 400, height: 400), pad: 0)

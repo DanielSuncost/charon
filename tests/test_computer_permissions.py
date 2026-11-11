@@ -171,3 +171,11 @@ def test_keyboard_refuses_unsafe_text_unknown_shortcuts_and_unseen_fields():
     import pathlib
     text = pathlib.Path(audit['path']).read_text()
     assert 'send this' not in text and 'hello' not in text, 'typed text must never reach the audit'
+
+
+@pytest.mark.skipif(not BUILT, reason='Charon Desktop helper not built')
+def test_destructive_actions_cannot_be_granted_until_a_verb_exists():
+    with hp.DesktopHelper() as h:
+        r = h.request_grant('desktop.input.destructive', 'com.apple.Notes', 5)
+        assert r['ok'] is False and 'not available yet' in r['error']
+        assert h.grants() == []
