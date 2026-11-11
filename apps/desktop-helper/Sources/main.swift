@@ -206,6 +206,17 @@ func requester(_ caller: CallerIdentity) -> Requester {
                      audit: caller.json)
 }
 
+/// Caller-stated terms: string values only, bounded in count and length.
+func stringTerms(_ raw: Any?) -> [String: String] {
+    guard let d = raw as? [String: Any] else { return [:] }
+    var out: [String: String] = [:]
+    for (k, v) in d.prefix(8) {
+        guard let s = v as? String else { continue }
+        out[String(k.prefix(40))] = String(s.prefix(200))
+    }
+    return out
+}
+
 func handleKernel(_ cmd: String, _ req: [String: Any], id: Any, caller: CallerIdentity) -> [String: Any] {
     guard let k = kernel else {
         return ["id": id, "ok": false, "error": "audit unavailable, so nothing can be granted: \(kernelError)"]
@@ -221,7 +232,8 @@ func handleKernel(_ cmd: String, _ req: [String: Any], id: Any, caller: CallerId
             return ["id": id, "ok": false, "error": "no installed app with bundle id \(bundle)"]
         }
         switch k.requestGrant(classId: classId, target: target, seconds: minutes * 60,
-                              reason: req["reason"] as? String ?? "", requester: who) {
+                              reason: req["reason"] as? String ?? "", terms: stringTerms(req["terms"]),
+                              requester: who) {
         case .success(let g): return ["id": id, "ok": true, "grant": g.json(now: Date())]
         case .failure(let e): return ["id": id, "ok": false, "error": e.reason]
         }
@@ -248,7 +260,7 @@ func handleKernel(_ cmd: String, _ req: [String: Any], id: Any, caller: CallerId
                                     "caller": caller.json])
             return ["id": id, "ok": false, "error": "no installed app with bundle id \(bundle)"]
         }
-        switch captureVerb(kernel: k, target: target, requester: who) {
+        switch captureVerb(kernel: k, target: target, terms: stringTerms(req["terms"]), requester: who) {
         case .success(let c):
             statusMenu?.update(k.liveGrants())
             return ["id": id, "ok": true, "capture": c]

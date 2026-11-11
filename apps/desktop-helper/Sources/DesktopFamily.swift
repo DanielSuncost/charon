@@ -15,7 +15,12 @@
 //   that is a refusal too.
 // * A frontmost app that cannot be identified, or that is not the target
 //   the action was granted for.
-// * Input while the kill switch is not armed.
+// * Input or capture while the kill switch is not armed. Armed means the
+//   user was idle for ``minimumIdleSeconds`` and has not touched keyboard or
+//   mouse since: one definition of idle, shared by input and capture.
+// * Capture without a stated local destination (DestinationGuard). The
+//   destination is the requester's claim; the guard makes the claim
+//   explicit and on record, it cannot make it true.
 // Capture is refused under the same conditions as input, so the screen
 // is never recorded while a secure field has focus.
 
@@ -33,8 +38,9 @@ enum Desktop {
     static let destructive = "desktop.input.destructive"
 
     static let classes: [ActionClass] = [
-        ActionClass(id: observeScreen, family: family, summary: "see the screen (screenshots stay on this Mac)",
-                    destructive: false, maxPerMinute: 30),
+        ActionClass(id: observeScreen, family: family, summary: "see this app's windows (screenshots)",
+                    destructive: false, maxPerMinute: 30,
+                    caveat: "Only password fields are hidden. Anything else on screen in this app, such as codes, card numbers or messages, will be in the screenshots."),
         ActionClass(id: pointer, family: family, summary: "move the pointer, click and scroll",
                     destructive: false, maxPerMinute: 120),
         ActionClass(id: text, family: family, summary: "type text (never into password fields)",
@@ -47,6 +53,10 @@ enum Desktop {
     ]
 
     static let inputClasses: Set<String> = [pointer, text, shortcut, destructive]
+    /// Classes that run only while the kill switch is armed (user idle).
+    static let armedClasses: Set<String> = inputClasses.union([observeScreen])
+    /// The only destination kind a capture may state.
+    static let localDestination = "local-loopback"
 
     /// Bundle identifiers the agent may never act in or capture.
     static let blocklist: [String: String] = [
@@ -80,7 +90,8 @@ enum Desktop {
 
     static func register(with kernel: Kernel) {
         kernel.register(family: family, classes: classes, guards: [
-            BlocklistGuard(), KillSwitchGuard(), SecureInputGuard(), FrontAppGuard(), SecureFieldGuard(),
+            BlocklistGuard(), DestinationGuard(), KillSwitchGuard(), SecureInputGuard(), FrontAppGuard(),
+            SecureFieldGuard(),
         ])
     }
 
@@ -102,8 +113,26 @@ struct BlocklistGuard: NeverApprovable {
 struct KillSwitchGuard: NeverApprovable {
     var appliesAtGrant: Bool { false }
     func refusal(for r: ActionRequest) -> String? {
-        guard Desktop.inputClasses.contains(r.classId), KillSwitch.shared.tripped else { return nil }
+        guard Desktop.armedClasses.contains(r.classId), KillSwitch.shared.tripped else { return nil }
         return "kill switch not armed (\(KillSwitch.shared.reason))"
+    }
+}
+
+/// A capture must state that it goes to a local model. This is a recorded
+/// claim, not a boundary: once the caller holds the image the helper cannot
+/// see where it goes. The caller (charon.computer.destination) decides the
+/// claim from the endpoint its request will actually reach.
+struct DestinationGuard: NeverApprovable {
+    var appliesAtGrant: Bool { true }
+    func refusal(for r: ActionRequest) -> String? {
+        guard r.classId == Desktop.observeScreen else { return nil }
+        guard (r.terms["destination"] ?? "").isEmpty == false else {
+            return "a screenshot request must state where it will be sent"
+        }
+        guard r.terms["destination_kind"] == Desktop.localDestination else {
+            return "screenshots may only go to a local model (stated: \(r.terms["destination_kind"] ?? "none"))"
+        }
+        return nil
     }
 }
 

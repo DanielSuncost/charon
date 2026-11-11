@@ -186,11 +186,12 @@ class DesktopHelper:
 
     # ── Grants: the caller may ask, narrow and revoke; only the user grants.
 
-    def request_grant(self, action_class: str, target_bundle_id: str, minutes: float, reason: str = '') -> dict:
+    def request_grant(self, action_class: str, target_bundle_id: str, minutes: float, reason: str = '',
+                      terms: dict | None = None) -> dict:
         """Ask the user, in the helper's own dialog, for a time-boxed grant.
         Returns the reply; ``ok`` is False unless the user clicked Allow."""
         return self.call('grant_request', **{'class': action_class, 'target': target_bundle_id,
-                                             'minutes': minutes, 'reason': reason})
+                                             'minutes': minutes, 'reason': reason, 'terms': terms or {}})
 
     def grants(self) -> list[dict]:
         return list(self.call('grants_list').get('grants') or [])
@@ -204,12 +205,14 @@ class DesktopHelper:
     def revoke_all(self) -> dict:
         return self.call('grants_revoke_all')
 
-    def capture(self, target_bundle_id: str) -> dict:
+    def capture(self, target_bundle_id: str, terms: dict | None = None) -> dict:
         """A redacted screenshot of the target app's own windows, if a live
-        ``desktop.observe.screen`` grant covers it and every guard passes.
-        On success ``reply['capture']['png']`` holds the PNG bytes. They are
-        returned in memory only; this module never writes them to disk."""
-        reply = self.call('capture', target=target_bundle_id)
+        ``desktop.observe.screen`` grant with the same stated ``terms`` covers
+        it and every guard passes. Use ``destination.capture_for``, which
+        states the destination; the helper refuses a capture without one.
+        On success ``reply['capture']['png']`` holds the PNG bytes, in memory
+        only; this module never writes them to disk."""
+        reply = self.call('capture', target=target_bundle_id, terms=terms or {})
         cap = reply.get('capture')
         if reply.get('ok') and cap:
             cap['png'] = base64.b64decode(cap.pop('png_base64'))

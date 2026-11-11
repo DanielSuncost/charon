@@ -19,6 +19,11 @@
 //   helper checks that no app was activated in between. If anything moved,
 //   the image is discarded unseen.
 //
+// * Capture runs only while the kill switch is armed (user idle), and must
+//   state a local destination, which the dialog shows and the audit keeps.
+//   Where the image really goes once the caller has it is beyond this
+//   process: that destination is a claim on record, not a boundary.
+//
 // The redacted PNG goes to the authenticated caller and into the helper's
 // in-memory retention (CaptureCore.swift). The audit records its hash and
 // size, never the pixels.
@@ -189,8 +194,9 @@ func shootApp(pid: pid_t) throws -> Shot {
 
 /// Authorise, shoot, re-check, redact, hold, deliver. Any failure after
 /// the shot discards the image; nothing unredacted leaves this function.
-func captureVerb(kernel: Kernel, target: Target, requester: Requester) -> Result<[String: Any], CaptureError> {
-    let request = ActionRequest(classId: Desktop.observeScreen, target: target, args: [:])
+func captureVerb(kernel: Kernel, target: Target, terms: [String: String],
+                 requester: Requester) -> Result<[String: Any], CaptureError> {
+    let request = ActionRequest(classId: Desktop.observeScreen, target: target, args: [:], terms: terms)
     let focusBefore = FocusWatch.shared.generation
     let seq: Int, grantId: String
     switch kernel.authorize(request, requester: requester) {
@@ -226,7 +232,7 @@ func captureVerb(kernel: Kernel, target: Target, requester: Requester) -> Result
     captureRetention.add(HeldCapture(id: id, at: Date(), target: target.id, png: png, sha256: digest))
     kernel.recordOutcome(seq: seq, outcome: "captured", fields: [
         "capture": id, "sha256": digest, "width": clean.width, "height": clean.height, "bytes": png.count,
-        "windows": shot.windows, "redacted_fields": rects.count])
+        "windows": shot.windows, "redacted_fields": rects.count, "stated_destination": terms])
     return .success([
         "id": id, "png_base64": png.base64EncodedString(), "sha256": digest,
         "width": clean.width, "height": clean.height,

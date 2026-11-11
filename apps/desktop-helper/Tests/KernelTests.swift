@@ -25,8 +25,10 @@ final class MemoryStore: AuditKeyStore {
 final class ScriptedPrompter: Prompter {
     var answers: [PromptAnswer] = []
     var asked = 0
+    var last: Prompt?
     func ask(_ prompt: Prompt) -> PromptAnswer {
         asked += 1
+        last = prompt
         return answers.isEmpty ? .deny("timeout") : answers.removeFirst()
     }
 }
@@ -195,6 +197,30 @@ rp.answers = [.allow]
 let g6 = try! k5.requestGrant(classId: "desktop.input.text", target: notes, seconds: 60, reason: "", requester: me).get()
 clock = clock.addingTimeInterval(61)
 check(k5.stillAllowed(typing(notes), grantId: g6.id) != nil, "recheck fails once the grant expires")
+
+// ── Stated terms and caveats
+let tp = ScriptedPrompter(), ts = MemoryStore()
+let k6 = makeKernel(ts, tp, file: "terms.jsonl")
+k6.register(family: "desktop", classes: [
+    ActionClass(id: "desktop.observe.screen", family: "desktop", summary: "see", destructive: false, maxPerMinute: 30,
+                caveat: "Only password fields are hidden."),
+], guards: [])
+let local = ["destination": "local qwen @ http://127.0.0.1:1234/v1", "destination_kind": "local-loopback"]
+tp.answers = [.allow]
+let g7 = try! k6.requestGrant(classId: "desktop.observe.screen", target: notes, seconds: 300, reason: "",
+                              terms: local, requester: me).get()
+let shown = tp.last?.lines.joined(separator: "\n") ?? ""
+check(shown.contains("Only password fields are hidden."), "the class caveat is in the grant dialog")
+check(shown.contains("not checked") && shown.contains("127.0.0.1:1234"), "stated terms are in the dialog, marked unchecked")
+func look(_ t: [String: String]) -> ActionRequest { ActionRequest(classId: "desktop.observe.screen", target: notes, args: [:], terms: t) }
+check(allowed(k6.authorize(look(local), requester: me)), "an action stating the grant's terms is allowed")
+var cloud = local; cloud["destination"] = "anthropic @ https://api.anthropic.com"
+check(!allowed(k6.authorize(look(cloud), requester: me)), "an action stating other terms is denied")
+check(!allowed(k6.authorize(look([:]), requester: me)), "an action stating no terms is denied")
+check(k6.stillAllowed(look(cloud), grantId: g7.id) != nil, "recheck fails when the terms differ")
+let auditText = try! String(contentsOf: k6.audit.path, encoding: .utf8)
+check(auditText.contains("127.0.0.1:1234") && auditText.contains("api.anthropic.com"),
+      "the audit records stated destinations, allowed and denied")
 
 // ── Capture core: coordinate mapping, redaction, retention
 let mapped = pixelRects([CGRect(x: 110, y: 220, width: 50, height: 10)], origin: CGPoint(x: 100, y: 200),

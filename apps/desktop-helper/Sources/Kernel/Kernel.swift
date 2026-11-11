@@ -35,12 +35,13 @@ struct Grant {
     let target: Target
     let grantedAt: Date
     var expiresAt: Date
+    var terms: [String: String] = [:]
 
     func json(now: Date) -> [String: Any] {
         ["id": id, "class": classId, "target": target.id, "target_label": target.label,
          "granted_at": ISO8601DateFormatter().string(from: grantedAt),
          "expires_at": ISO8601DateFormatter().string(from: expiresAt),
-         "seconds_left": max(0, Int(expiresAt.timeIntervalSince(now)))]
+         "seconds_left": max(0, Int(expiresAt.timeIntervalSince(now))), "terms": terms]
     }
 }
 
@@ -99,22 +100,24 @@ final class Kernel {
 
     /// Ask the user for a grant. Returns the grant, or the denial reason.
     func requestGrant(classId: String, target: Target, seconds: Double, reason: String,
-                      requester: Requester) -> Result<Grant, KernelDenial> {
+                      terms: [String: String] = [:], requester: Requester) -> Result<Grant, KernelDenial> {
         guard let cls = actionClass(classId) else {
             log("grant_refused", ["class": classId, "target": target.id, "reason": "unknown action class",
                                   "caller": requester.audit])
             return .failure(.init("unknown action class \(classId)"))
         }
-        let probe = ActionRequest(classId: classId, target: target, args: [:])
+        let probe = ActionRequest(classId: classId, target: target, args: [:], terms: terms)
         if let why = refusal(cls, probe, atGrant: true) {
-            log("grant_refused", ["class": classId, "target": target.id, "reason": why, "caller": requester.audit])
+            log("grant_refused", ["class": classId, "target": target.id, "reason": why, "terms": terms,
+                                  "caller": requester.audit])
             return .failure(.init(why))
         }
         let duration = min(max(seconds.isFinite ? seconds : 0, Kernel.minGrantSeconds), Kernel.maxGrantSeconds)
         let minutes = Int((duration / 60).rounded())
         do {
             try audit.append("grant_requested", ["class": classId, "target": target.id, "seconds": Int(duration),
-                                                 "reason": String(reason.prefix(300)), "caller": requester.audit])
+                                                 "reason": String(reason.prefix(300)), "terms": terms,
+                                                 "caller": requester.audit])
         } catch { return .failure(.init("\(error)")) }
         var lines = [
             "\(requester.description) asks to:",
@@ -122,7 +125,12 @@ final class Kernel {
             "in: \(target.label) (\(target.id))",
             "for: \(minutes) minute\(minutes == 1 ? "" : "s"), then it expires.",
         ]
+        if let caveat = cls.caveat { lines.append(caveat) }
         if cls.destructive { lines.append("Each destructive action will still ask you separately.") }
+        if !terms.isEmpty {
+            lines.append("Stated by the requester (not checked by Charon Desktop):")
+            for k in terms.keys.sorted() { lines.append("  \(k): \(String(terms[k]!.prefix(120)))") }
+        }
         if !reason.isEmpty { lines.append("Agent's stated reason (unverified): \"\(String(reason.prefix(200)))\"") }
         let answer = prompter.ask(Prompt(title: "Allow Charon to act on your Mac?", lines: lines,
                                          allowLabel: "Allow for \(minutes) min"))
@@ -134,7 +142,7 @@ final class Kernel {
         }
         let t = now()
         let grant = Grant(id: randomId(), classId: classId, target: target, grantedAt: t,
-                          expiresAt: t.addingTimeInterval(duration))
+                          expiresAt: t.addingTimeInterval(duration), terms: terms)
         do {
             try audit.append("grant_issued", ["grant": grant.json(now: t), "by": "user"])
         } catch { return .failure(.init("\(error)")) }
@@ -220,12 +228,14 @@ final class Kernel {
         }
         let t = now()
         lock.lock()
-        let grant = grants.values.first { $0.classId == cls.id && $0.target == request.target && $0.expiresAt > t }
+        let grant = grants.values.first {
+            $0.classId == cls.id && $0.target == request.target && $0.terms == request.terms && $0.expiresAt > t
+        }
         var window = (recent[cls.id] ?? []).filter { t.timeIntervalSince($0) < 60 }
         let limited = window.count >= cls.maxPerMinute
         lock.unlock()
         guard let g = grant else {
-            return deny(request, "no live grant for \(cls.id) in \(request.target.id)", requester)
+            return deny(request, "no live grant for \(cls.id) in \(request.target.id) under these terms", requester)
         }
         if limited {
             return deny(request, "rate limit: \(cls.maxPerMinute) per minute for \(cls.id)", requester)
@@ -245,7 +255,8 @@ final class Kernel {
         }
         do {
             let seq = try audit.append("action_authorized", [
-                "class": cls.id, "target": request.target.id, "args": request.args, "grant": g.id,
+                "class": cls.id, "target": request.target.id, "args": request.args, "terms": request.terms,
+                "grant": g.id,
                 "per_action_approval": cls.destructive, "caller": requester.audit])
             lock.lock()
             window.append(t)
@@ -269,7 +280,8 @@ final class Kernel {
         guard let cls = actionClass(request.classId) else { return "unknown action class \(request.classId)" }
         if let why = refusal(cls, request) { return why }
         lock.lock(); let g = grants[grantId]; lock.unlock()
-        guard let grant = g, grant.classId == cls.id, grant.target == request.target, grant.expiresAt > now() else {
+        guard let grant = g, grant.classId == cls.id, grant.target == request.target, grant.terms == request.terms,
+              grant.expiresAt > now() else {
             return "the grant ended while acting"
         }
         return nil
@@ -289,7 +301,8 @@ final class Kernel {
     }
 
     private func deny(_ r: ActionRequest, _ why: String, _ requester: Requester) -> Decision {
-        log("action_denied", ["class": r.classId, "target": r.target.id, "args": r.args, "reason": why,
+        log("action_denied", ["class": r.classId, "target": r.target.id, "args": r.args, "terms": r.terms,
+                              "reason": why,
                               "caller": requester.audit])
         return .deny(why)
     }

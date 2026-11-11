@@ -115,3 +115,14 @@ def test_capture_is_refused_without_a_grant_and_audited():
             assert h.capture(target)['ok'] is False
         assert h.capture('no.such.app')['ok'] is False
         assert h.verify_audit()['audit']['ok'] is True
+
+
+@pytest.mark.skipif(not BUILT, reason='Charon Desktop helper not built')
+def test_helper_refuses_capture_grants_without_a_local_destination():
+    with hp.DesktopHelper() as h:
+        r = h.request_grant('desktop.observe.screen', 'com.apple.Notes', 5)
+        assert r['ok'] is False and 'where it will be sent' in r['error']
+        r = h.request_grant('desktop.observe.screen', 'com.apple.Notes', 5,
+                            terms={'destination': 'openai @ https://api.openai.com/v1', 'destination_kind': 'cloud'})
+        assert r['ok'] is False and 'only go to a local model' in r['error']
+        assert h.capture('com.apple.Notes', terms={'destination': 'x', 'destination_kind': 'cloud'})['ok'] is False

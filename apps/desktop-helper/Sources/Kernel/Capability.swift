@@ -23,6 +23,9 @@ struct ActionClass {
     let destructive: Bool
     /// Hard cap on authorised actions of this class per rolling minute.
     let maxPerMinute: Int
+    /// One plain line the grant dialog always shows: what this class does
+    /// not protect against, so the user approves knowing it.
+    var caveat: String? = nil
 }
 
 /// What an action acts on. For the desktop family the id is the target
@@ -39,6 +42,11 @@ struct ActionRequest {
     let classId: String
     let target: Target
     let args: [String: Any]
+    /// Conditions the caller states and the grant was approved under
+    /// (e.g. where a capture will be sent). Shown to the user, written to
+    /// the audit, and an action must state exactly the grant's terms. The
+    /// kernel cannot check that they are true: they are claims on record.
+    var terms: [String: String] = [:]
 }
 
 /// A refusal no approval can override (a focused password field, a
