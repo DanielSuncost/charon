@@ -99,6 +99,20 @@ _DOMAIN_INTENT_PATTERNS = {
 # Lossless context management (graceful fallback if unavailable)
 
 
+def _mentions_tool_name(text: str, name: str) -> bool:
+    """Whether ``text`` names the tool as a word of its own.
+
+    A plain substring test loaded the 667-token X tool for any message with
+    an "x" in it ("fix", "explain", "txt"), and each mid-session load also
+    invalidates the whole cached prompt prefix. Short names must match
+    case-sensitively, so "X" loads only on an explicit "X"; x.com requests
+    are covered by the research intent pattern.
+    """
+    flags = 0 if len(name) < 3 else re.IGNORECASE
+    pattern = rf'(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])'
+    return re.search(pattern, text, flags) is not None
+
+
 def _iso_to_epoch(iso_str: str) -> float:
     """Convert an ISO-8601 timestamp to epoch seconds (best-effort)."""
     if not iso_str:
@@ -652,10 +666,9 @@ class ConversationEngine:
                 names.update(_DOMAIN_TOOL_NAMES[domain])
 
         # Dynamic tools can opt into intent activation through their name.
-        lowered = text.lower()
         for tool in self._available_tools:
             name = str(tool.get('name') or '')
-            if name and name.lower() in lowered:
+            if name and _mentions_tool_name(text, name):
                 names.add(name)
         return self._enable_tools(sorted(names))
 

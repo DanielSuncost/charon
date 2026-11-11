@@ -118,3 +118,14 @@ def test_process_intent_enables_followups_before_request(tmp_path):
     asyncio.run(engine.submit_and_collect('Is the dev server still running?'))
 
     assert {'ProcessStatus', 'ProcessLogs', 'StopProcess'} <= set(provider.tool_names[0])
+
+
+def test_tool_names_activate_only_as_whole_words(tmp_path):
+    provider = CapturingProvider()
+    engine = ConversationEngine(provider, MODEL, project_root=tmp_path)
+
+    asyncio.run(engine.submit_and_collect('fix the txt parser and explain the next step'))
+    assert 'X' not in provider.tool_names[0]
+
+    asyncio.run(engine.submit_and_collect('use the X tool to check my bookmarks'))
+    assert 'X' in provider.tool_names[-1]
