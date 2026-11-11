@@ -2238,7 +2238,7 @@ impl ChatState {
                     ("claude-sonnet-4-5", "Sonnet 4.5"),
                     ("claude-opus-4-5", "Opus 4.5"),
                     ("claude-opus-4-1", "Opus 4.1"),
-                    ("claude-sonnet-4-20250514", "Sonnet 4.0"),
+                    ("claude-sonnet-5-5", "Sonnet 5.5"),
                     ("claude-opus-4-20250514", "Opus 4.0"),
                     ("claude-haiku-4-5", "Haiku 4.5 — fastest"),
                     ("claude-3-7-sonnet-20250219", "Sonnet 3.7"),

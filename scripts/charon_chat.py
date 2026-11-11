@@ -43,11 +43,49 @@ RESET = '\033[0m'
 RED = '\033[31m'
 
 
-DEFAULT_MODELS = {
-    'anthropic': ('claude-sonnet-4-20250514', 200000),
-    'openai': ('gpt-4o', 128000),
-    'local': ('qwen3-30b-a3b', 65536),
-}
+# The local provider's last-resort model id: the same literal the provider
+# bridge falls back to (provider_bridge._detect_model_fallback). A local
+# server answers with whatever model it has loaded, so this only names it.
+LOCAL_FALLBACK_MODEL = 'qwen3-30b-a3b'
+
+# Catalog keys for providers whose names differ from charon_chat's.
+_CATALOG_KEYS = {'local': 'lmstudio'}
+
+
+def default_model(provider_name: str, state_dir: Path) -> str:
+    """The model to use when --model is not given, resolved from configuration.
+
+    No cloud model id is hardcoded here: ids go stale (claude-sonnet-4-20250514
+    was retired on 2026-06-15 and requests to it fail outright).
+
+    1. The model configured for this provider (onboarding / session config).
+    2. Local only: CHARON_LOCAL_MODEL.
+    3. The provider's first listed model in the catalog: the discovered
+       listing if cached, else the built-in list (model_catalog.STATIC_MODELS),
+       which is what the TUI's model picker highlights.
+    4. Local only: LOCAL_FALLBACK_MODEL.
+
+    Returns '' when nothing is known, e.g. the OpenAI API with no cached
+    listing; the caller then asks for --model rather than guessing.
+    """
+    from charon.providers.provider_bridge import resolve_provider_config, suggested_model
+
+    try:
+        configured = resolve_provider_config(state_dir)
+    except Exception:
+        configured = {}
+    if configured.get('provider_name') == provider_name:
+        model_id = str(configured.get('model_id') or '').strip()
+        if model_id:
+            return model_id
+    if provider_name == 'local':
+        env = charon_config.local_model()
+        if env:
+            return env.split('/', 1)[1] if '/' in env else env
+    listed = suggested_model(state_dir, _CATALOG_KEYS.get(provider_name, provider_name))
+    if listed:
+        return listed
+    return LOCAL_FALLBACK_MODEL if provider_name == 'local' else ''
 
 # Providers resolved through provider_bridge (onboarding config + OAuth)
 # rather than get_provider(). 'auto' means the configured default route.
@@ -283,9 +321,15 @@ def main():
     else:
         if provider_name == 'openrouter' and not args.model:
             parser.error('--provider openrouter requires --model')
-        model_defaults = DEFAULT_MODELS.get(provider_name, ('gpt-4o', 128000))
-        model_id = args.model or model_defaults[0]
-        context_window = args.context_window or model_defaults[1]
+        from charon.providers.provider_bridge import CONTEXT_WINDOWS, DEFAULT_CONTEXT_WINDOW
+
+        model_id = args.model or default_model(provider_name, state)
+        if not model_id:
+            parser.error(
+                f'--provider {provider_name} requires --model: no model is configured for it '
+                'and the model catalog lists none'
+            )
+        context_window = args.context_window or CONTEXT_WINDOWS.get(model_id, DEFAULT_CONTEXT_WINDOW)
 
         model = ModelInfo(
             provider=provider_name,

@@ -59,7 +59,14 @@ def clear_session_provider_config(state_dir: Path, session_id: str) -> None:
 
 # Known model context windows (conservative defaults)
 CONTEXT_WINDOWS = {
-    # Anthropic — all Claude models support 200k context
+    # Anthropic — all Claude models support 200k context. The current ids
+    # from model_catalog.STATIC_MODELS were missing, so this exact-match
+    # lookup gave them DEFAULT_CONTEXT_WINDOW (65536), under a third of it.
+    'claude-opus-5-5': 200000,
+    'claude-sonnet-5-5': 200000,
+    'claude-haiku-5-5': 200000,
+    'claude-fable-5-1': 200000,
+    'claude-haiku-4-5': 200000,
     'claude-sonnet-4-6': 200000,
     'claude-opus-4-6': 200000,
     'claude-sonnet-4-5': 200000,
