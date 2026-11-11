@@ -311,6 +311,10 @@ class ContextAssembler:
             chunk = self.evict_chunk_tokens
             if chunk is None:
                 chunk = max(2048, token_budget // 10)
+            # A chunk wider than the room left for older history would keep
+            # snapping past the protected tail and be clamped back to it,
+            # moving the cut every turn again; keep it to half that room.
+            chunk = min(chunk, remaining // 2)
             selected_start = _chunked_eviction_start(
                 [r.tokens for r in resolved], selected_start, tail_start, chunk)
 

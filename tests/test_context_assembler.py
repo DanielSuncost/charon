@@ -297,9 +297,10 @@ class TestChunkedEviction:
             firsts.append(result.messages[0].content)
         over_budget = firsts[10:]
         changes = sum(1 for a, b in zip(over_budget, over_budget[1:], strict=False) if a != b)
-        # ~100 tokens per message and a 1,000-token chunk: the start moves
-        # about once per ten turns, not every turn.
-        assert changes <= len(over_budget) // 8
+        # ~100 tokens per message; the 1,000-token chunk is capped to half the
+        # 1,200 tokens left for older history, so the start moves about once
+        # per six turns. Without chunking it moved on 26 of these 29 turns.
+        assert changes <= len(over_budget) // 4
 
     def test_newest_history_is_still_kept(self, db):
         for i in range(30):

@@ -153,6 +153,49 @@ def test_usage_reports_the_whole_prompt_with_the_cache_split(tmp_path, wire):
     assert usage_from_anthropic({})['input_tokens'] == 0
 
 
+def test_incidental_x_does_not_change_the_tool_list(tmp_path, wire):
+    """"fix", "explain", "txt" once loaded the X tool and rewrote the whole prefix."""
+    bodies, replies = wire
+    replies += [_text_reply('one'), _text_reply('two')]
+    engine = _engine(tmp_path)
+    asyncio.run(engine.submit_and_collect('hello'))
+    asyncio.run(engine.submit_and_collect('fix the txt export and explain the next step'))
+    assert [t['name'] for t in bodies[1]['tools']] == [t['name'] for t in bodies[0]['tools']]
+    assert 'X' not in {t['name'] for t in bodies[1]['tools']}
+
+
+def test_near_full_session_keeps_the_prefix_for_several_turns(tmp_path, wire):
+    """Over budget, history is evicted in chunks, not one message per turn."""
+    bodies, replies = wire
+    turns = 40
+    replies += [_text_reply(f'ack {i}') for i in range(turns)]
+    small = ModelInfo(provider='anthropic', model_id='claude-haiku-5-5', context_window=4000)
+    engine = ConversationEngine(
+        HttpxAnthropicProvider(api_key='sk-ant-api-test'), small, project_root=tmp_path,
+        agent_id='cache-test-agent', state_dir=tmp_path / 'state', interactive=False,
+        thinking_level='off', auto_compact=False,  # isolate eviction from compaction
+    )
+    assert engine._lossless_enabled
+    # A 4-message protected tail keeps this small window proportioned like a
+    # real one, where the 20-message tail is a small share of 200k tokens.
+    from charon.context.context_assembler import ContextAssembler
+    engine._ctx_assembler = ContextAssembler(fresh_tail_count=4)
+    for i in range(turns):
+        asyncio.run(engine.submit_and_collect(f'note {i}: ' + 'lorem ipsum ' * 80))
+
+    first_messages = [b['messages'][0] for b in bodies]
+    assert first_messages[0] != first_messages[-1], 'the session never went over budget'
+    moves = sum(1 for a, b in zip(first_messages, first_messages[1:], strict=False) if a != b)
+    print(f'near-full: prefix moved on {moves} of {turns - 1} turns')
+    assert moves <= turns // 8, f'prefix moved on {moves} of {turns - 1} turns'
+    # Between moves, each request extends the previous one byte for byte.
+    for earlier, later in zip(bodies, bodies[1:], strict=False):
+        if later['messages'][0] == earlier['messages'][0]:
+            assert later['messages'][:len(earlier['messages'])] == earlier['messages']
+        assert later['system'] == earlier['system']
+        assert later['tools'] == earlier['tools']
+
+
 LIVE_KEY = os.environ.get('ANTHROPIC_API_KEY', '')
 
 
