@@ -98,6 +98,9 @@ def main() -> None:
     ap.add_argument('--arch', action='append', choices=ARCHES,
                     help='repeatable; default both')
     ap.add_argument('--python', default='3.12')
+    ap.add_argument('--ref', default='HEAD',
+                    help='commit/branch to snapshot (e.g. master). The bootstrap is always '
+                         'taken from this checkout, so a ref without scripts/container works.')
     args = ap.parse_args()
     arches = args.arch or list(ARCHES)
     out: Path = args.out.resolve()
@@ -105,16 +108,19 @@ def main() -> None:
         sys.exit(f'build_bundle: {out} exists and is not empty; pick a fresh directory')
     out.mkdir(parents=True, exist_ok=True)
 
-    commit = run('git', 'rev-parse', 'HEAD', cwd=REPO).strip()
-    dirty = bool(run('git', 'status', '--porcelain', '--untracked-files=no', cwd=REPO).strip())
+    commit = run('git', 'rev-parse', '--verify', f'{args.ref}^{{commit}}', cwd=REPO).strip()
+    dirty = args.ref == 'HEAD' and bool(
+        run('git', 'status', '--porcelain', '--untracked-files=no', cwd=REPO).strip())
     if dirty:
         print('build_bundle: WARNING working tree has uncommitted changes; '
               'the bundle contains HEAD only', file=sys.stderr)
 
-    print(f'source: git archive {commit[:12]}')
+    print(f'source: git archive {args.ref} = {commit[:12]}')
     src = out / 'src'
     src.mkdir()
-    archive = subprocess.run(['git', 'archive', 'HEAD'], cwd=REPO, check=True,
+    # Archive the resolved commit, not the ref name, so a ref that moves
+    # mid-build cannot split MANIFEST and src/ across two commits.
+    archive = subprocess.run(['git', 'archive', commit], cwd=REPO, check=True,
                              capture_output=True).stdout
     tar_path = out / '.src.tar'
     tar_path.write_bytes(archive)
@@ -127,7 +133,7 @@ def main() -> None:
     run('uv', 'build', '--wheel', '--quiet', '--out-dir', str(any_dir), str(src))
     charon_whl = next(any_dir.glob('charon-*.whl'))
 
-    manifest: list[str] = [f'charon_commit={commit}', f'source_dirty={dirty}',
+    manifest: list[str] = [f'charon_commit={commit}', f'source_ref={args.ref}', f'source_dirty={dirty}',
                            f'built_at={time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}']
     for arch in arches:
         version, url = python_url(arch, args.python)
