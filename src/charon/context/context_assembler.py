@@ -218,6 +218,7 @@ class ContextAssembler:
         agent_id: str,
         *,
         token_budget: int,
+        result_cap: int | None = None,
     ) -> AssembleResult:
         """Build messages for the model, fitting within token_budget.
 
@@ -226,6 +227,10 @@ class ContextAssembler:
         3. Split into evictable prefix + protected fresh tail
         4. Drop oldest evictable items until under budget
         5. Generate recall guidance when summaries are present
+
+        ``result_cap`` is the size, in tokens, to which the caller clips any
+        single tool result before sending. Results are costed at that size
+        so one oversized result does not evict everything around it.
         """
         items = ContextStore.get_context_window(db, agent_id)
         if not items:
@@ -240,6 +245,8 @@ class ContextAssembler:
 
         for item in items:
             r = self._resolve_item(db, item)
+            if r and result_cap and r.is_message and r.message.role == 'tool_result':
+                r.tokens = min(r.tokens, result_cap)
             if r:
                 resolved.append(r)
                 if not r.is_message:
@@ -255,8 +262,15 @@ class ContextAssembler:
         fresh_tail = resolved[tail_start:]
         evictable = resolved[:tail_start]
 
-        # Compute fresh tail cost (always included)
+        # The fresh tail is protected from eviction only while it fits. A
+        # tail larger than the whole budget gives up its oldest items; the
+        # newest item is always kept.
         tail_tokens = sum(r.tokens for r in fresh_tail)
+        while tail_tokens > token_budget and len(fresh_tail) > 1:
+            tail_tokens -= fresh_tail[0].tokens
+            fresh_tail = fresh_tail[1:]
+            tail_start += 1
+            evictable = resolved[:tail_start]
 
         # Fill remaining budget from evictable, dropping oldest
         remaining = max(0, token_budget - tail_tokens)

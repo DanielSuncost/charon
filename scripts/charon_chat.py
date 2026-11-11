@@ -203,6 +203,15 @@ async def one_shot(engine: ConversationEngine, query: str) -> int:
                 print(flush=True)
         elif event.type == 'budget_stop':
             budget_stopped = True
+        elif event.type == 'context_overflow_recovery':
+            print(
+                f'[recovery] prompt refused as too large; planning window '
+                f'{event.data.get("previous_window")} -> {event.data.get("window")}',
+                file=sys.stderr, flush=True,
+            )
+        elif event.type == 'completion_recovery':
+            print(f'[recovery] {event.data.get("kind")} completion; asked the model to continue',
+                  file=sys.stderr, flush=True)
         elif event.type == 'error':
             saw_error = True
             print(f'[error] {event.data.get("error", "unknown error")}', file=sys.stderr, flush=True)

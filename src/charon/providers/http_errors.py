@@ -8,6 +8,7 @@ from typing import Mapping
 import httpx
 
 from charon.providers import StreamDelta
+from charon.providers.context_overflow import detect_context_overflow
 
 
 RETRYABLE_STATUS_CODES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
@@ -39,12 +40,14 @@ def http_error(
     headers: Mapping[str, str] | None = None,
     prefix: str = 'HTTP',
 ) -> StreamDelta:
+    overflow = detect_context_overflow(message, status_code)
     return StreamDelta(
         type='error',
         error=f'{prefix} {status_code}: {message}',
         status_code=status_code,
-        error_code='http_error',
-        retryable=status_code in RETRYABLE_STATUS_CODES,
+        error_code='context_overflow' if overflow else 'http_error',
+        # A refused prompt is refused again unchanged; the engine shrinks it.
+        retryable=not overflow and status_code in RETRYABLE_STATUS_CODES,
         retry_after_seconds=parse_retry_after(headers),
     )
 

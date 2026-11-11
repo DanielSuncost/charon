@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from dataclasses import dataclass
 from typing import Any, AsyncIterator
 from charon.infra import config
 
@@ -94,14 +95,39 @@ except Exception:  # diagnostics is best-effort and must never block import
         return None
 
 
-def _try_lenient_json_repair(raw: str) -> dict | None:
-    """Best-effort recovery for the single most common local-model tool-call
-    failure: the completion got cut off (max_tokens, or the model just
-    trailed off) mid-argument, so the JSON is truncated rather than wrong
-    in some other way. Closes an unterminated string and pads the missing
-    closing brackets/braces, in order, then retries the parse — never
-    invents field values, only closes what's already open. Returns None
-    (never raises) if the patched text still isn't a valid JSON object."""
+# finish_reason values meaning the completion hit an output limit.
+_LENGTH_FINISH_REASONS = frozenset({'length', 'max_tokens', 'max_output_tokens'})
+
+ARGUMENTS_CUT_OFF = (
+    'the arguments of this call were cut off before they were complete, so '
+    'the call did not run. Send the call again in full; if it carries a '
+    'large file, write the file in several smaller calls'
+)
+ARGUMENTS_INVALID = (
+    'the arguments of this call were not valid JSON, so the call did not '
+    'run. Send the call again with a single valid JSON object as arguments'
+)
+
+
+@dataclass(frozen=True)
+class _LenientRepair:
+    arguments: dict
+    closed_string: bool    # a string value was still open: its tail is missing
+    closed_brackets: bool  # only closing brackets/braces were missing
+
+
+def _try_lenient_json_repair(raw: str) -> _LenientRepair | None:
+    """Close what a cut-off JSON object left open and report what was closed.
+
+    Closes an unterminated string and pads the missing closing brackets and
+    braces, in order, then retries the parse. It never invents field values.
+    Returns None (never raises) if the patched text still is not a JSON
+    object.
+
+    The caller decides whether the result may be used: a repair that had to
+    close a string recovered a value whose end never arrived, which is not
+    the value the model meant to send.
+    """
     text = raw.strip()
     if not text:
         return None
@@ -129,7 +155,13 @@ def _try_lenient_json_repair(raw: str) -> dict | None:
         result = json.loads(patched)
     except json.JSONDecodeError:
         return None
-    return result if isinstance(result, dict) else None
+    if not isinstance(result, dict):
+        return None
+    return _LenientRepair(
+        arguments=result,
+        closed_string=in_string,
+        closed_brackets=bool(openers),
+    )
 
 
 async def _repair_arguments_via_constrained_decoding(
@@ -177,30 +209,54 @@ async def _repair_arguments_via_constrained_decoding(
 async def _finalize_tool_call_arguments(
     raw_arguments: str, tool_name: str, schema: dict | None,
     *, client: httpx.AsyncClient, base_url: str, headers: dict, model_id: str,
-) -> dict:
-    """json.loads, then lenient truncation repair, then a grammar-
-    constrained retry against the same server — in that order, each only
-    attempted if the previous one failed. Never raises; {} is still the
-    final fallback, exactly like before this existed."""
+    truncated: bool = False,
+) -> tuple[dict, str]:
+    """Turn streamed argument text into ``(arguments, invalid_reason)``.
+
+    ``invalid_reason`` is empty when the arguments can be trusted. Otherwise
+    the arguments are {} and the call must not be executed.
+
+    Order, each step only if the previous one failed:
+
+    1. ``json.loads``.
+    2. Mechanical repair, accepted only when it closed brackets and nothing
+       else, and only when the completion was not cut off at an output
+       limit. Closing a string means a value lost its tail; after a length
+       stop even balanced-looking text may be missing whole fields. Running
+       a write with half its content would report success for a broken file.
+    3. A schema-constrained re-ask of the same server, for text that is
+       complete but malformed. Never used for cut-off arguments: the model
+       would have to invent the part that never arrived.
+
+    Never raises.
+    """
     if not raw_arguments:
-        return {}
+        return {}, ''
     try:
-        return json.loads(raw_arguments)
+        parsed = json.loads(raw_arguments)
     except json.JSONDecodeError:
-        pass
-    repaired = _try_lenient_json_repair(raw_arguments)
+        parsed = None
+    else:
+        if isinstance(parsed, dict):
+            return parsed, ''
+    repaired = _try_lenient_json_repair(raw_arguments) if parsed is None else None
+    cut_off = truncated or (repaired is not None and repaired.closed_string)
+    if cut_off:
+        _diag('httpx_openai', 'tool-call arguments cut off; call will not run',
+              tool_name=tool_name, truncated=truncated, raw_arguments=raw_arguments[:500])
+        return {}, ARGUMENTS_CUT_OFF
     if repaired is not None:
-        _diag('httpx_openai', 'tool-call arguments recovered via truncation repair', tool_name=tool_name)
-        return repaired
+        _diag('httpx_openai', 'tool-call arguments recovered by closing brackets', tool_name=tool_name)
+        return repaired.arguments, ''
     if schema:
         constrained = await _repair_arguments_via_constrained_decoding(
             client, base_url, headers, model_id, tool_name, schema, raw_arguments,
         )
         if constrained is not None:
             _diag('httpx_openai', 'tool-call arguments recovered via constrained-decoding retry', tool_name=tool_name)
-            return constrained
-    _diag('httpx_openai', 'tool-call arguments unrecoverable; falling back to {}', tool_name=tool_name, raw_arguments=raw_arguments[:500])
-    return {}
+            return constrained, ''
+    _diag('httpx_openai', 'tool-call arguments unrecoverable; call will not run', tool_name=tool_name, raw_arguments=raw_arguments[:500])
+    return {}, ARGUMENTS_INVALID
 
 
 class HttpxOpenAIProvider:
@@ -343,6 +399,16 @@ class HttpxOpenAIProvider:
                                 metadata = error.get('metadata') or {}
                                 detail = metadata.get('raw', '') if isinstance(metadata, dict) else ''
                                 error_text = str(error.get('message') or error_text)
+                                # llama.cpp reports its window and its own
+                                # count of the prompt as fields beside the
+                                # message; keep them for overflow recovery.
+                                sizes = ', '.join(
+                                    f'{key}={error[key]}'
+                                    for key in ('n_ctx', 'n_prompt_tokens')
+                                    if isinstance(error.get(key), int)
+                                )
+                                if sizes:
+                                    error_text += f' ({sizes})'
                                 if detail:
                                     error_text += '\nUpstream: ' + (detail if isinstance(detail, str) else json.dumps(detail))
                         except Exception:
@@ -451,9 +517,10 @@ class HttpxOpenAIProvider:
 
                     # Emit completed tool calls
                     for tc_data in current_tool_calls.values():
-                        args = await _finalize_tool_call_arguments(
+                        args, invalid_reason = await _finalize_tool_call_arguments(
                             tc_data['arguments'], tc_data['name'], tool_schemas.get(tc_data['name']),
                             client=client, base_url=self._base_url, headers=headers, model_id=model.model_id,
+                            truncated=finish_reason in _LENGTH_FINISH_REASONS,
                         )
                         yield StreamDelta(
                             type='tool_call',
@@ -461,6 +528,7 @@ class HttpxOpenAIProvider:
                                 id=tc_data['id'] or f'call_{uuid.uuid4().hex[:24]}',
                                 name=tc_data['name'],
                                 arguments=args,
+                                invalid_reason=invalid_reason,
                             ),
                         )
 

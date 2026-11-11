@@ -25,6 +25,10 @@ class ToolCall:
     id: str
     name: str
     arguments: dict[str, Any] = field(default_factory=dict)
+    # Set by a provider when the arguments it received could not be trusted
+    # (cut off, or not valid JSON). Such a call must not be executed; the
+    # reason is returned to the model as the call's result.
+    invalid_reason: str = ''
 
 
 @dataclass

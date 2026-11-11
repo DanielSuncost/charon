@@ -277,6 +277,7 @@ class HttpxAnthropicProvider:
                     tool_input_json = ''
                     input_tokens = 0
                     output_tokens = 0
+                    stop_reason = 'end_turn'
 
                     async for raw_line in response.aiter_lines():
                         line = raw_line.strip()
@@ -318,16 +319,29 @@ class HttpxAnthropicProvider:
 
                         elif event_type == 'content_block_stop':
                             if current_tool:
+                                invalid_reason = ''
                                 try:
                                     args = json.loads(tool_input_json) if tool_input_json else {}
                                 except json.JSONDecodeError:
+                                    args = None
+                                if not isinstance(args, dict):
+                                    # Input that does not parse was cut off
+                                    # (max_tokens) or malformed. Running the
+                                    # tool with {} would hide that.
                                     args = {}
+                                    invalid_reason = (
+                                        'the arguments of this call were incomplete or not valid '
+                                        'JSON, so the call did not run. Send the call again in full; '
+                                        'if it carries a large file, write the file in several '
+                                        'smaller calls'
+                                    )
                                 yield StreamDelta(
                                     type='tool_call',
                                     tool_call=ToolCall(
                                         id=current_tool['id'],
                                         name=current_tool['name'],
                                         arguments=args,
+                                        invalid_reason=invalid_reason,
                                     ),
                                 )
                                 current_tool = None
@@ -336,6 +350,7 @@ class HttpxAnthropicProvider:
                         elif event_type == 'message_delta':
                             usage = event.get('usage', {})
                             output_tokens = usage.get('output_tokens', 0)
+                            stop_reason = (event.get('delta') or {}).get('stop_reason') or stop_reason
 
                     yield StreamDelta(type='done', text=json.dumps({
                         'usage': {
@@ -343,7 +358,7 @@ class HttpxAnthropicProvider:
                             'output_tokens': output_tokens,
                             'total_tokens': input_tokens + output_tokens,
                         },
-                        'stop_reason': 'end_turn',
+                        'stop_reason': stop_reason,
                     }))
 
         except httpx.ConnectError as e:

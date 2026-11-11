@@ -125,7 +125,7 @@ class TestAssembler:
         assert result.system_prompt_addition is None  # no summaries
 
     def test_fresh_tail_always_included(self, db):
-        """Even when over budget, fresh tail is never dropped."""
+        """A fresh tail that fits is kept even when nothing older does."""
         for _ in range(10):
             ContextStore.persist_message(
                 db, 'agent-1',
@@ -249,8 +249,10 @@ class TestAssembler:
             db, 'agent-1', Message(role='user', content='continue'),
         )
 
+        # Room for the two-item tail (the last result and the user message)
+        # and nothing older.
         assembler = ContextAssembler(fresh_tail_count=2)
-        result = assembler.assemble(db, 'agent-1', token_budget=1)
+        result = assembler.assemble(db, 'agent-1', token_budget=110)
 
         assert result.messages[0].role == 'assistant'
         assert [tc.id for tc in result.messages[0].tool_calls] == [
@@ -261,6 +263,61 @@ class TestAssembler:
             for message in result.messages[1:4]
         ] == ['tc-0', 'tc-1', 'tc-2']
         assert result.messages[-1].role == 'user'
+
+    def test_tail_larger_than_budget_gives_up_its_oldest_items(self, db):
+        for index in range(4):
+            ContextStore.persist_message(
+                db, 'agent-1',
+                Message(role='user', content=f'message-{index} ' + 'x' * 400),
+            )
+
+        # Each message costs about 100 tokens; the four-item tail does not
+        # fit in 250, so the two oldest are dropped.
+        assembler = ContextAssembler(fresh_tail_count=4)
+        result = assembler.assemble(db, 'agent-1', token_budget=250)
+
+        assert [m.content.split()[0] for m in result.messages] == [
+            'message-2', 'message-3',
+        ]
+        assert result.estimated_tokens <= 250
+
+    def test_newest_item_survives_any_budget(self, db):
+        ContextStore.persist_message(
+            db, 'agent-1', Message(role='user', content='first ' + 'x' * 400))
+        ContextStore.persist_message(
+            db, 'agent-1', Message(role='user', content='latest ' + 'x' * 400))
+
+        assembler = ContextAssembler(fresh_tail_count=2)
+        result = assembler.assemble(db, 'agent-1', token_budget=1)
+
+        assert [m.content.split()[0] for m in result.messages] == ['latest']
+
+    def test_oversized_result_is_costed_at_the_clipped_size(self, db):
+        ContextStore.persist_message(
+            db, 'agent-1', Message(role='user', content='run the build'))
+        ContextStore.persist_message(
+            db, 'agent-1',
+            Message(role='assistant', content='', tool_calls=[
+                ToolCall(id='tc-1', name='Bash', arguments={'command': 'make'}),
+            ]),
+        )
+        ContextStore.persist_message(
+            db, 'agent-1',
+            Message(role='tool_result', content='x' * 40000,
+                    tool_call_id='tc-1', tool_name='Bash'),
+        )
+
+        assembler = ContextAssembler(fresh_tail_count=20)
+        # The stored result is about 10000 tokens. Costed as stored it would
+        # push the user's request out of a 1000-token budget.
+        whole = assembler.assemble(db, 'agent-1', token_budget=1000)
+        capped = assembler.assemble(
+            db, 'agent-1', token_budget=1000, result_cap=500)
+
+        assert [m.role for m in whole.messages] == ['assistant', 'tool_result']
+        assert [m.role for m in capped.messages] == [
+            'user', 'assistant', 'tool_result',
+        ]
 
     def test_stats_reported(self, db):
         ContextStore.persist_message(

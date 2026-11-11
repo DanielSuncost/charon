@@ -199,7 +199,8 @@ async def generate_structured(
     raw_text = await _request_structured_completion(
         client, base_url, headers, model_id, schema_name, schema, prompt, system_prompt,
     )
-    candidate = await _finalize_tool_call_arguments(
+    # Untrusted output comes back as {}, which the schema check below rejects.
+    candidate, _ = await _finalize_tool_call_arguments(
         raw_text, schema_name, schema, client=client, base_url=base_url, headers=headers, model_id=model_id,
     )
     errors = schema_validation_errors(candidate, schema)

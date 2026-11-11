@@ -38,6 +38,19 @@ from charon.conversation.tool_scheduler import (
     execution_batches,
     synthetic_tool_result,
 )
+from charon.context.context_budget import (
+    MIN_HISTORY_BUDGET,
+    MIN_PLAUSIBLE_WINDOW,
+    SAFETY_MARGIN_TOKENS,
+    ContextBudget,
+    clip_oversized_results,
+    clip_text,
+    learned_context_window,
+    plan_budget,
+    record_context_window,
+    shrink_window,
+)
+from charon.providers.context_overflow import ContextOverflow, detect_context_overflow
 
 try:
     from charon.infra.diagnostics import record as _diag
@@ -361,16 +374,41 @@ What the user wants to accomplish.
 Keep each section concise. Preserve exact file paths, function names, and error messages."""
 
 
+# Output cap of the summarizer call made by compact_messages.
+_SUMMARY_MAX_TOKENS = 2048
+# How much of the opening request survives when the summarizer fails.
+_FALLBACK_REQUEST_CHARS = 2000
+
+
+def _fallback_summary(summarized: list[Message]) -> str:
+    """Summary used when the summarizer call fails.
+
+    Without a summary the only record of what was asked would be gone, so
+    the opening request of the summarized span is carried over verbatim.
+    """
+    text = f'[Previous conversation with {len(summarized)} messages summarized]'
+    for msg in summarized:
+        if msg.role == 'user' and isinstance(msg.content, str) and msg.content.strip():
+            request = clip_text(msg.content.strip(), _FALLBACK_REQUEST_CHARS, tail_share=0.3)
+            return f'{text}\n\n## Opening request\n{request}'
+    return text
+
+
 async def compact_messages(
     messages: list[Message],
     provider: Provider,
     model: ModelInfo,
     system_prompt: str,
+    *,
+    max_input_tokens: int | None = None,
 ) -> tuple[list[Message], str]:
     """Compact conversation by summarizing older messages with file tracking.
 
     Extracts file operations from tool calls (like pi-agent) and generates
     a structured summary with Goal/Progress/Decisions/Next Steps.
+
+    ``max_input_tokens`` bounds the transcript handed to the summarizer so
+    the summarizer request itself fits the window it is trying to relieve.
 
     Returns (new_messages, summary).
     """
@@ -395,7 +433,11 @@ async def compact_messages(
             content = content[:500]  # truncate tool results
         conversation_text.append(f'[{role}] {content}')
 
-    prompt = COMPACTION_PROMPT + '\n\n' + '\n'.join(conversation_text)
+    transcript = '\n'.join(conversation_text)
+    if max_input_tokens:
+        room = max_input_tokens * 4 - len(COMPACTION_PROMPT)
+        transcript = clip_text(transcript, max(2000, room), tail_share=0.6)
+    prompt = COMPACTION_PROMPT + '\n\n' + transcript
 
     # Generate structured summary via LLM
     summary_parts = []
@@ -404,18 +446,19 @@ async def compact_messages(
             messages=[Message(role='user', content=prompt)],
             model=model,
             system_prompt='You are a conversation summarizer. Output only the structured summary.',
-            max_tokens=2048,
+            max_tokens=_SUMMARY_MAX_TOKENS,
         ):
             if delta.type == 'text':
                 summary_parts.append(delta.text)
             elif delta.type == 'error':
-                summary_parts = [f'[Previous conversation with {len(to_summarize)} messages summarized]']
+                _diag('conversation_engine', 'compaction LLM summarization failed; using placeholder summary', error=delta.error)
+                summary_parts = []
                 break
     except Exception as e:
         _diag('conversation_engine', 'compaction LLM summarization failed; using placeholder summary', error=e)
-        summary_parts = [f'[Previous conversation with {len(to_summarize)} messages summarized]']
+        summary_parts = []
 
-    summary = ''.join(summary_parts)
+    summary = ''.join(summary_parts).strip() or _fallback_summary(to_summarize)
 
     # Append file operations to the summary
     if file_ops_text:
@@ -436,6 +479,38 @@ async def compact_messages(
     ] + to_keep
 
     return compacted, summary
+
+
+# ============================================================================
+# Completion recovery
+# Contract: docs/contracts/context-budget-and-recovery.md
+# ============================================================================
+
+# stop_reason values meaning the completion hit an output limit.
+_LENGTH_STOP_REASONS = frozenset({'length', 'max_tokens', 'max_output_tokens'})
+# Refused-prompt recoveries per submission.
+_MAX_OVERFLOW_RECOVERIES = 2
+# Consecutive cut-off completions answered with a continue notice.
+_MAX_TRUNCATION_RETRIES = 2
+# Consecutive empty completions answered with a retry notice.
+_MAX_EMPTY_RETRIES = 1
+
+_TRUNCATED_NOTICE = (
+    '[charon] Your last reply was cut off at the output limit, so its end is '
+    'missing. Continue from exactly where it stopped without repeating what '
+    'you already wrote. If you were about to write a large file, write it in '
+    'several smaller tool calls.'
+)
+_TRUNCATED_EMPTY_NOTICE = (
+    '[charon] Your last completion hit the output limit before it produced '
+    'any answer or tool call, so nothing happened. Reason more briefly, then '
+    'act: call a tool or give your answer.'
+)
+_EMPTY_NOTICE = (
+    '[charon] Your last completion was empty: no text and no tool call, so '
+    'nothing happened. Continue the task: call a tool, or reply with your '
+    'answer if the work is done.'
+)
 
 
 # ============================================================================
@@ -843,17 +918,19 @@ class ConversationEngine:
         Also updates the system prompt with recall guidance when summaries
         are present.
         """
+        budget = self._context_budget()
         if not (self._lossless_enabled and self._ctx_db and self._ctx_assembler
                 and self.agent_id):
             repaired = self._repair_orphaned_tool_calls(self.messages)
             if repaired != self.messages:
                 self.messages = repaired  # persist the fix
-            return repaired
+            return self._clip_for_request(repaired, budget)
 
         try:
             result = self._ctx_assembler.assemble(
                 self._ctx_db, self.agent_id,
-                token_budget=self.model.context_window,
+                token_budget=budget.history if budget else self.model.context_window,
+                result_cap=budget.result_cap if budget else None,
             )
             # Inject recall guidance into system prompt if summaries present
             if result.system_prompt_addition:
@@ -865,10 +942,98 @@ class ConversationEngine:
                 self._recall_guidance = None
 
             msgs = result.messages if result.messages else self.messages
-            return self._repair_orphaned_tool_calls(msgs)
+            return self._clip_for_request(
+                self._repair_orphaned_tool_calls(msgs), budget)
         except Exception as e:
             _diag('conversation_engine', 'lossless context assembly failed; falling back to in-memory messages', error=e)
-            return self._repair_orphaned_tool_calls(self.messages)
+            return self._clip_for_request(
+                self._repair_orphaned_tool_calls(self.messages), budget)
+
+    # ── Context budget ───────────────────────────────────────────────
+
+    def _context_window(self) -> int:
+        """Window to plan against: the model's, or a smaller learned one.
+
+        0 means unknown; no budgeting is done then.
+        """
+        window = int(self.model.context_window or 0)
+        learned = learned_context_window(self.provider_name, self.model.model_id)
+        if learned and (window <= 0 or learned < window):
+            return learned
+        return max(0, window)
+
+    def _context_budget(self, system_prompt: str | None = None) -> ContextBudget | None:
+        window = self._context_window()
+        if window <= 0:
+            return None
+        return plan_budget(
+            window,
+            system_prompt=self._get_system_prompt() if system_prompt is None else system_prompt,
+            tools=self.tools,
+            max_tokens=self.max_tokens,
+        )
+
+    @staticmethod
+    def _clip_for_request(messages: list[Message], budget: ContextBudget | None) -> list[Message]:
+        return clip_oversized_results(messages, budget) if budget else messages
+
+    def _needs_legacy_compaction(self, budget: ContextBudget | None) -> bool:
+        if budget is None:
+            return False
+        shown = clip_oversized_results(self.messages, budget)
+        return estimate_tokens(shown) > budget.compaction_trigger(self.compact_threshold)
+
+    def _summarizer_input_budget(self) -> int | None:
+        window = self._context_window()
+        if window <= 0:
+            return None
+        return max(MIN_HISTORY_BUDGET, window - _SUMMARY_MAX_TOKENS - 2 * SAFETY_MARGIN_TOKENS)
+
+    async def _recover_from_overflow(self, overflow: ContextOverflow) -> dict[str, Any] | None:
+        """Shrink the planning window and the history after a refused prompt.
+
+        Returns what changed, or None when nothing smaller can be planned.
+        The refused request ran no tools, so the caller simply sends the
+        same step again.
+        """
+        previous = self._context_window()
+        if previous > 0:
+            window = shrink_window(previous, overflow.window)
+        elif overflow.window and overflow.window >= MIN_PLAUSIBLE_WINDOW:
+            window = overflow.window
+        else:
+            return None
+        if previous > 0 and window >= previous:
+            return None
+        record_context_window(self.provider_name, self.model.model_id, window)
+        budget = self._context_budget()
+        compacted = False
+        if self.auto_compact and budget is not None:
+            try:
+                if self._lossless_enabled and self._ctx_db and self._ctx_compactor:
+                    result = await self._ctx_compactor.evaluate_and_compact(
+                        self._ctx_db, self.agent_id,
+                        token_budget=budget.compactor_budget(self.compact_threshold),
+                        provider=self.provider,
+                        model=self.model,
+                        force=True,
+                    )
+                    compacted = bool(result.action_taken)
+                else:
+                    self.messages, summary = await compact_messages(
+                        self.messages, self.provider, self.model, self.system_prompt,
+                        max_input_tokens=self._summarizer_input_budget(),
+                    )
+                    compacted = bool(summary)
+            except Exception as e:
+                _diag('conversation_engine', 'compaction after context overflow failed; retrying with the smaller window only', error=e)
+        return {
+            'previous_window': previous,
+            'window': window,
+            'reported_window': overflow.window,
+            'reported_prompt_tokens': overflow.prompt_tokens,
+            'compacted': compacted,
+        }
 
     def _get_system_prompt(self) -> str:
         """Get system prompt with optional recall guidance appended."""
@@ -1059,6 +1224,7 @@ class ConversationEngine:
         messages: list[Message],
         system_prompt: str,
         can_interrupt,
+        max_tokens: int | None = None,
     ) -> AsyncIterator[Any]:
         """Pump a provider stream through a queue so abort/steer is prompt.
 
@@ -1076,7 +1242,7 @@ class ConversationEngine:
                     system_prompt=system_prompt,
                     tools=self.tools if self.tools else None,
                     thinking_level=self.thinking_level,
-                    max_tokens=self.max_tokens,
+                    max_tokens=self.max_tokens if max_tokens is None else max_tokens,
                 ):
                     await queue.put(('delta', delta))
             except asyncio.CancelledError:
@@ -1400,16 +1566,23 @@ class ConversationEngine:
 
         # Agent loop: stream LLM → execute tools → repeat
         turn = 0
+        overflow_recoveries = 0
+        truncation_retries = 0
+        empty_retries = 0
         while turn < self.max_turns and not self._aborted:
             turn += 1
 
             # Check compaction (lossless or legacy)
+            budget = self._context_budget()
             if self.auto_compact:
                 if self._lossless_enabled and self._ctx_db and self._ctx_compactor:
                     try:
                         compact_result = await self._ctx_compactor.evaluate_and_compact(
                             self._ctx_db, self.agent_id,
-                            token_budget=self.model.context_window,
+                            token_budget=(
+                                budget.compactor_budget(self.compact_threshold)
+                                if budget else self.model.context_window
+                            ),
                             provider=self.provider,
                             model=self.model,
                         )
@@ -1419,13 +1592,12 @@ class ConversationEngine:
                                        message_count=len(self.messages))
                     except Exception as e:
                         yield _evt('compaction_error', error=str(e))
-                elif should_compact(
-                    self.messages, self.model.context_window, self.compact_threshold
-                ):
+                elif self._needs_legacy_compaction(budget):
                     yield _evt('compaction_start')
                     try:
                         self.messages, summary = await compact_messages(
                             self.messages, self.provider, self.model, self.system_prompt,
+                            max_input_tokens=self._summarizer_input_budget(),
                         )
                         yield _evt('compaction_end', summary=summary, message_count=len(self.messages))
                     except Exception as e:
@@ -1436,6 +1608,12 @@ class ConversationEngine:
             # Assemble context (lossless or legacy)
             context_messages = self._assemble_context()
             active_system_prompt = self._get_system_prompt()
+            request_budget = self._context_budget(active_system_prompt)
+            request_max_tokens = (
+                request_budget.request_max_tokens(
+                    estimate_tokens(context_messages), self.max_tokens)
+                if request_budget else self.max_tokens
+            )
 
             # Stream LLM response
             assistant_text = []
@@ -1445,12 +1623,18 @@ class ConversationEngine:
             stop_reason = 'end_turn'
             usage_data = {}
             error_delta = None
+            # A refused prompt is held back instead of reported: if the
+            # history can be shrunk, the step is sent again and the caller
+            # never sees an error.
+            overflow: ContextOverflow | None = None
+            may_recover_overflow = overflow_recoveries < _MAX_OVERFLOW_RECOVERIES
 
             try:
                 async for delta in self._stream_provider_interruptibly(
                     messages=context_messages,
                     system_prompt=active_system_prompt,
                     can_interrupt=lambda calls=tool_calls: not calls,
+                    max_tokens=request_max_tokens,
                 ):
                     if self._aborted:
                         break
@@ -1478,7 +1662,11 @@ class ConversationEngine:
                         error_msg = delta.error
                         error_delta = delta
                         stop_reason = 'error'
-                        yield _evt('error', error=delta.error, turn=turn)
+                        if may_recover_overflow:
+                            overflow = detect_context_overflow(
+                                delta.error, getattr(delta, 'status_code', None))
+                        if overflow is None:
+                            yield _evt('error', error=delta.error, turn=turn)
 
                     # A user should be able to interrupt a long prose/reasoning
                     # stream, not only a tool chain. Once a complete tool call
@@ -1494,7 +1682,21 @@ class ConversationEngine:
             except Exception as e:
                 error_msg = str(e)
                 stop_reason = 'error'
-                yield _evt('error', error=str(e), turn=turn)
+                overflow = detect_context_overflow(str(e)) if may_recover_overflow else None
+                if overflow is None:
+                    yield _evt('error', error=str(e), turn=turn)
+
+            if overflow is not None:
+                recovery = None
+                if not assistant_text and not tool_calls and not self._aborted:
+                    recovery = await self._recover_from_overflow(overflow)
+                if recovery:
+                    overflow_recoveries += 1
+                    self._turn_retry_count = 0
+                    yield _evt('context_overflow_recovery', turn=turn, **recovery)
+                    turn -= 1  # the refused request was not a step
+                    continue
+                yield _evt('error', error=error_msg, turn=turn)
 
             # Auto-retry on transient errors (like pi-agent)
             # Only if no text was streamed yet (clean retry)
@@ -1556,6 +1758,23 @@ class ConversationEngine:
                 yield _evt('error', error=notice, turn=turn)
                 full_text = f'{notice}\n\n{full_text}' if full_text else notice
 
+            # A completion that was cut off at the output limit, or that
+            # carried nothing at all, is not the model deciding to stop.
+            produced_nothing = not full_text and not tool_calls
+            completion_recovery = ''
+            if not error_msg and not self._aborted and stop_reason != 'steer':
+                length_stop = stop_reason in _LENGTH_STOP_REASONS
+                if not length_stop:
+                    truncation_retries = 0
+                if not produced_nothing:
+                    empty_retries = 0
+                if not tool_calls and not self._steering_queue:
+                    if length_stop:
+                        if truncation_retries < _MAX_TRUNCATION_RETRIES:
+                            completion_recovery = 'truncated'
+                    elif produced_nothing and empty_retries < _MAX_EMPTY_RETRIES:
+                        completion_recovery = 'empty'
+
             assistant_msg = Message(
                 role='assistant',
                 content=full_text,
@@ -1570,8 +1789,12 @@ class ConversationEngine:
             )
             if error_msg:
                 assistant_msg.content = full_text or f'Error: {error_msg}'
-            self.messages.append(assistant_msg)
-            self._persist_message(assistant_msg)
+            # A completion with nothing in it that is about to be retried is
+            # left out of the transcript; a partial reply is kept so the
+            # model can continue it.
+            if not (completion_recovery and produced_nothing):
+                self.messages.append(assistant_msg)
+                self._persist_message(assistant_msg)
 
             yield _evt('message_end', role='assistant', content=full_text,
                        tool_call_count=len(tool_calls), stop_reason=stop_reason,
@@ -1581,6 +1804,22 @@ class ConversationEngine:
             if stop_reason == 'error' or self._aborted:
                 yield _evt('turn_end', turn=turn, stop_reason=stop_reason)
                 break
+
+            if completion_recovery:
+                if completion_recovery == 'truncated':
+                    truncation_retries += 1
+                    notice = _TRUNCATED_EMPTY_NOTICE if produced_nothing else _TRUNCATED_NOTICE
+                else:
+                    empty_retries += 1
+                    notice = _EMPTY_NOTICE
+                notice_msg = Message(role='user', content=notice, timestamp=time.time())
+                self.messages.append(notice_msg)
+                self._persist_message(notice_msg)
+                yield _evt('completion_recovery', kind=completion_recovery, turn=turn,
+                           output_tokens=usage_data.get('output_tokens', 0))
+                yield _evt('turn_end', turn=turn, stop_reason=(
+                    stop_reason if completion_recovery == 'truncated' else 'empty_completion'))
+                continue
 
             # If no tool calls, agent wants to stop — check follow-up queue
             if not tool_calls:
@@ -1614,8 +1853,10 @@ class ConversationEngine:
 
             # Execute tool calls. Shared/read-only calls run concurrently while
             # exclusive calls form ordering barriers.
+            # A call whose arguments the provider could not trust is never
+            # executed; its reason becomes its result below.
             batches, limited_calls = execution_batches(
-                tool_calls,
+                [call for call in tool_calls if not call.invalid_reason],
                 limit=self.max_tool_calls_per_turn,
             )
             completed_ids: set[str] = set()
@@ -1679,7 +1920,9 @@ class ConversationEngine:
                 call for call in tool_calls if call.id not in completed_ids
             ]
             for tc in skipped_calls:
-                if tc.id in limited_ids:
+                if tc.invalid_reason:
+                    reason = tc.invalid_reason
+                elif tc.id in limited_ids:
                     reason = (
                         f'tool-call limit {self.max_tool_calls_per_turn} reached'
                     )
