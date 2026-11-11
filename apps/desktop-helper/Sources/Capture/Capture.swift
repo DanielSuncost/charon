@@ -229,7 +229,8 @@ func captureVerb(kernel: Kernel, target: Target, terms: [String: String],
     }
     let digest = sha256Hex(png)
     let id = "c-" + String(digest.prefix(12))
-    captureRetention.add(HeldCapture(id: id, at: Date(), target: target.id, png: png, sha256: digest))
+    captureRetention.add(HeldCapture(id: id, at: Date(), target: target.id, png: png, sha256: digest,
+                                     origin: shot.origin, scale: shot.scale, width: clean.width, height: clean.height))
     kernel.recordOutcome(seq: seq, outcome: "captured", fields: [
         "capture": id, "sha256": digest, "width": clean.width, "height": clean.height, "bytes": png.count,
         "windows": shot.windows, "redacted_fields": rects.count, "stated_destination": terms])

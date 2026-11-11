@@ -177,7 +177,7 @@ func handle(_ req: [String: Any], caller: CallerIdentity) -> [String: Any] {
         return ["id": id, "ok": true, "completed": r.completed, "total": r.total,
                 "interrupted": r.interrupted ?? NSNull(), "restored": r.restored]
     case "grant_request", "grants_list", "grant_narrow", "grant_revoke", "grants_revoke_all", "audit_verify",
-         "capture":
+         "capture", "pointer_click", "pointer_scroll":
         return handleKernel(cmd, req, id: id, caller: caller)
     case "request_access":
         let grant = req["grant"] as? String ?? ""
@@ -264,6 +264,35 @@ func handleKernel(_ cmd: String, _ req: [String: Any], id: Any, caller: CallerId
         case .success(let c):
             statusMenu?.update(k.liveGrants())
             return ["id": id, "ok": true, "capture": c]
+        case .failure(let e): return ["id": id, "ok": false, "error": e.description]
+        }
+    case "pointer_click", "pointer_scroll":
+        let bundle = req["target"] as? String ?? ""
+        guard let target = Desktop.target(bundleId: bundle) else {
+            k.log("action_denied", ["class": Desktop.pointer, "target": bundle, "reason": "no installed app",
+                                    "caller": caller.json])
+            return ["id": id, "ok": false, "error": "no installed app with bundle id \(bundle)"]
+        }
+        let action: PointerAction
+        if cmd == "pointer_click" {
+            let count = (req["count"] as? Int) ?? 1
+            guard (1...3).contains(count) else { return ["id": id, "ok": false, "error": "count must be 1 to 3"] }
+            switch req["button"] as? String ?? "left" {
+            case "left": action = .click(button: .left, count: count)
+            case "right": action = .click(button: .right, count: count)
+            default: return ["id": id, "ok": false, "error": "button must be left or right"]
+            }
+        } else {
+            let dx = (req["dx"] as? Int) ?? 0, dy = (req["dy"] as? Int) ?? 0
+            guard abs(dx) <= 20, abs(dy) <= 20, dx != 0 || dy != 0 else {
+                return ["id": id, "ok": false, "error": "scroll by 1 to 20 lines"]
+            }
+            action = .scroll(dx: Int32(dx), dy: Int32(dy))
+        }
+        switch pointerVerb(kernel: k, target: target, captureId: req["capture"] as? String ?? "",
+                           x: (req["x"] as? Double) ?? .nan, y: (req["y"] as? Double) ?? .nan,
+                           action: action, requester: who) {
+        case .success(let r): return ["id": id, "ok": true, "result": r]
         case .failure(let e): return ["id": id, "ok": false, "error": e.description]
         }
     default:

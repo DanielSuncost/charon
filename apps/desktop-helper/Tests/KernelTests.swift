@@ -263,6 +263,16 @@ check(held.current().isEmpty, "everything is gone after \(Int(heldCaptureSeconds
 held.add(HeldCapture(id: "n", at: capClock, target: "t", png: png, sha256: "x"))
 check(held.clear() == 1 && held.current().isEmpty, "clear deletes what is held")
 
+let geo = HeldCapture(id: "g", at: capClock, target: "t", png: png, sha256: "x",
+                      origin: CGPoint(x: 100, y: 50), scale: 2, width: 400, height: 300)
+check(globalPoint(x: 40, y: 20, in: geo) == CGPoint(x: 120, y: 60), "a capture pixel maps back to its screen point")
+check(globalPoint(x: 400, y: 0, in: geo) == nil && globalPoint(x: -1, y: 0, in: geo) == nil
+      && globalPoint(x: .nan, y: 0, in: geo) == nil, "pixels outside the capture map to nothing")
+held.add(geo)
+check(held.find("g") != nil && held.find("nope") == nil, "a held capture can be found by id")
+capClock = capClock.addingTimeInterval(heldCaptureSeconds)
+check(held.find("g") == nil, "an expired capture can no longer be acted on")
+
 try? FileManager.default.removeItem(at: dir)
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

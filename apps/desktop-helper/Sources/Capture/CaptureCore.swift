@@ -31,6 +31,12 @@ struct HeldCapture {
     let target: String
     let png: Data
     let sha256: String
+    /// Where the image sat on screen, so a pointer action can name a pixel
+    /// of what the agent was shown rather than a raw screen position.
+    var origin: CGPoint = .zero
+    var scale: CGFloat = 1
+    var width: Int = 0
+    var height: Int = 0
 }
 
 final class CaptureRetention {
@@ -51,6 +57,10 @@ final class CaptureRetention {
         lock.lock(); defer { lock.unlock() }
         prune()
         return held
+    }
+
+    func find(_ id: String) -> HeldCapture? {
+        current().first { $0.id == id }
     }
 
     func clear() -> Int {
@@ -97,6 +107,15 @@ func redact(_ image: CGImage, _ rects: [CGRect]) -> CGImage? {
         ctx.fill(CGRect(x: r.minX, y: CGFloat(h) - r.maxY, width: r.width, height: r.height))
     }
     return ctx.makeImage()
+}
+
+/// A pixel of a held capture as a global screen point, or nil if the
+/// pixel is outside the image.
+func globalPoint(x: Double, y: Double, in c: HeldCapture) -> CGPoint? {
+    guard x.isFinite, y.isFinite, x >= 0, y >= 0, x < Double(c.width), y < Double(c.height), c.scale > 0 else {
+        return nil
+    }
+    return CGPoint(x: c.origin.x + CGFloat(x) / c.scale, y: c.origin.y + CGFloat(y) / c.scale)
 }
 
 func encodePNG(_ image: CGImage) -> Data? {

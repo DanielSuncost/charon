@@ -218,6 +218,17 @@ class DesktopHelper:
             cap['png'] = base64.b64decode(cap.pop('png_base64'))
         return reply
 
+    def click(self, target_bundle_id: str, capture_id: str, x: float, y: float,
+              button: str = 'left', count: int = 1) -> dict:
+        """Click at pixel (x, y) of a screenshot the helper still holds. The
+        helper maps it to the screen and re-checks before every event."""
+        return self.call('pointer_click', target=target_bundle_id, capture=capture_id,
+                         x=float(x), y=float(y), button=button, count=count)
+
+    def scroll(self, target_bundle_id: str, capture_id: str, x: float, y: float, dy: int, dx: int = 0) -> dict:
+        return self.call('pointer_scroll', target=target_bundle_id, capture=capture_id,
+                         x=float(x), y=float(y), dx=dx, dy=dy)
+
     def verify_audit(self) -> dict:
         return self.call('audit_verify')
 

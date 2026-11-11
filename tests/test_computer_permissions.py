@@ -126,3 +126,19 @@ def test_helper_refuses_capture_grants_without_a_local_destination():
                             terms={'destination': 'openai @ https://api.openai.com/v1', 'destination_kind': 'cloud'})
         assert r['ok'] is False and 'only go to a local model' in r['error']
         assert h.capture('com.apple.Notes', terms={'destination': 'x', 'destination_kind': 'cloud'})['ok'] is False
+
+
+@pytest.mark.skipif(not BUILT, reason='Charon Desktop helper not built')
+def test_pointer_needs_a_held_screenshot_and_a_grant():
+    with hp.DesktopHelper() as h:
+        r = h.click('com.apple.Notes', 'c-000000000000', 10, 10)
+        assert r['ok'] is False and 'no held screenshot' in r['error']
+        r = h.scroll('com.apple.Notes', 'c-000000000000', 10, 10, dy=3)
+        assert r['ok'] is False
+        assert h.click('com.apple.Notes', 'c-0', 1, 1, button='middle')['ok'] is False
+        assert h.click('com.apple.Notes', 'c-0', 1, 1, count=9)['ok'] is False
+        assert h.scroll('com.apple.Notes', 'c-0', 1, 1, dy=500)['ok'] is False
+        for target in ('com.apple.Terminal', 'ai.charon.desktop'):
+            r = h.request_grant('desktop.input.pointer', target, 5)
+            assert r['ok'] is False and 'never-allowed' in r['error']
+        assert h.verify_audit()['audit']['ok'] is True
