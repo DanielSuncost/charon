@@ -591,10 +591,11 @@ class ConversationEngine:
         self._tool_lock = threading.RLock()
         if config.adaptive_tools():
             initial_names = set(CORE_TOOL_NAMES)
-            # Tool-loading rule (charon.tools.tool_catalog): on a caching
-            # provider, token-only deferrals are loaded now so the tool list,
-            # which leads the cached prefix, does not change mid-session.
-            if getattr(self.provider, 'caches_prompt_prefix', False):
+            # Tool-loading rule (charon.tools.tool_catalog): wherever the
+            # provider reuses a repeated prefix (the default), token-only
+            # deferrals are loaded now so the tool list, which leads that
+            # prefix, does not change mid-session.
+            if getattr(self.provider, 'reuses_prompt_prefix', True):
                 initial_names.update(FOLLOWUP_TOOL_NAMES)
             domain_text = ' '.join((
                 self.operation_domain,

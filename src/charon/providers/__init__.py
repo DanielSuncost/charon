@@ -86,11 +86,21 @@ class Provider(Protocol):
     # content to the model as images. Absent means images would not survive.
     supports_image_input: bool
 
-    # Optional. True when requests reuse a cached prompt prefix (Anthropic
-    # cache_control, Codex prompt_cache_key). Absent means False. The engine
-    # uses it to choose between a stable tool list and deferred tools; see
+    # Optional. Whether the serving side reuses a repeated prompt prefix
+    # across calls, by any mechanism: explicit cache_control (Anthropic),
+    # automatic prompt caching (OpenAI, Codex prompt_cache_key, DeepSeek's
+    # prompt_cache_hit_tokens) or a local server's KV cache (llama.cpp /
+    # LM Studio: a 16k-token prompt took 137.1 s to first token cold and
+    # 1.3 s with one turn appended, measured 2026-11-11). Absent means True,
+    # because almost every provider does this. Set False only for a provider
+    # shown to re-read every prompt from scratch. The engine uses it to choose
+    # between a stable tool list and deferred tools; see
     # charon.tools.tool_catalog.
-    caches_prompt_prefix: bool
+    #
+    # This is not "accepts explicit cache markers". Adding cache_control
+    # breakpoints is each provider's own request-building concern
+    # (httpx_anthropic.apply_prompt_caching) and needs no flag here.
+    reuses_prompt_prefix: bool
 
     async def stream(
         self,

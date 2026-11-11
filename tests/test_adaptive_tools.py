@@ -71,7 +71,11 @@ def test_adaptive_tools_can_be_disabled(tmp_path, monkeypatch):
 
 
 class RunProcessThenStopProvider:
-    """Calls RunProcess on the first request, then records the next payload."""
+    """Calls RunProcess on the first request, then records the next payload.
+
+    Opts out of prefix reuse: deferral only applies to such a provider."""
+
+    reuses_prompt_prefix = False
 
     def __init__(self):
         self.tool_names = []
@@ -91,7 +95,7 @@ class RunProcessThenStopProvider:
         yield StreamDelta(type='done', text=json.dumps({'usage': {}, 'stop_reason': stop}))
 
 
-def test_process_followups_are_deferred_until_a_process_runs(tmp_path, monkeypatch):
+def test_process_followups_are_deferred_on_a_provider_without_prefix_reuse(tmp_path, monkeypatch):
     from charon import tools
     from charon.tools import ToolResult
 
@@ -111,8 +115,12 @@ def test_process_followups_are_deferred_until_a_process_runs(tmp_path, monkeypat
     assert followups <= set(provider.tool_names[1])
 
 
+class NoPrefixReuseCapturingProvider(CapturingProvider):
+    reuses_prompt_prefix = False
+
+
 def test_process_intent_enables_followups_before_request(tmp_path):
-    provider = CapturingProvider()
+    provider = NoPrefixReuseCapturingProvider()
     engine = ConversationEngine(provider, MODEL, project_root=tmp_path)
 
     asyncio.run(engine.submit_and_collect('Is the dev server still running?'))
@@ -131,11 +139,9 @@ def test_tool_names_activate_only_as_whole_words(tmp_path):
     assert 'X' in provider.tool_names[-1]
 
 
-class CachingCapturingProvider(CapturingProvider):
-    caches_prompt_prefix = True
-
-
-def test_caching_provider_loads_followups_up_front_and_keeps_the_list_fixed(tmp_path, monkeypatch):
+def test_default_provider_loads_followups_up_front_and_keeps_the_list_fixed(tmp_path, monkeypatch):
+    # No reuses_prompt_prefix attribute, like the OpenAI-compatible and local
+    # providers: prefix reuse is the default, so the tool list never changes.
     from charon import tools
     from charon.tools import ToolResult
 
@@ -143,7 +149,7 @@ def test_caching_provider_loads_followups_up_front_and_keeps_the_list_fixed(tmp_
     monkeypatch.setitem(
         tools.TOOL_EXECUTORS, 'RunProcess', lambda params, ctx: ToolResult(content='started proc-1'),
     )
-    provider = CachingCapturingProvider()
+    provider = CapturingProvider()
     engine = ConversationEngine(provider, MODEL, project_root=tmp_path, interactive=False)
 
     asyncio.run(engine.submit_and_collect('Fix the parser bug'))
@@ -152,3 +158,12 @@ def test_caching_provider_loads_followups_up_front_and_keeps_the_list_fixed(tmp_
     # A process-related message changes nothing: the list was already complete.
     asyncio.run(engine.submit_and_collect('Is the dev server still running?'))
     assert provider.tool_names[-1] == first
+
+
+def test_openai_compatible_provider_keeps_prefix_reuse_on():
+    # LM Studio / llama.cpp reuse a repeated prefix (137.1 s cold vs 1.3 s
+    # appended, 2026-11-11); this provider must not opt out of the stable
+    # tool list.
+    from charon.providers.httpx_openai import HttpxOpenAIProvider
+
+    assert getattr(HttpxOpenAIProvider, 'reuses_prompt_prefix', True) is True
