@@ -512,6 +512,7 @@ class ConversationEngine:
         runtime_role: str = '',
         parent_agent_id: str = '',
         interactive: bool | None = None,
+        time_budget_seconds: int | None = None,
         max_turns: int = 50,
         max_tool_calls_per_turn: int = 25,
         max_tokens: int = 32768,
@@ -541,6 +542,11 @@ class ConversationEngine:
         self.topology_depth: int = 0  # depth in the delegation tree (0 = root agent)
         self.topology_budget: dict[str, Any] | None = None  # set for shades: governs further spawning
         self.interactive = not config.non_interactive() if interactive is None else interactive
+        # Per-submission wall-clock cap, independent of interactivity: None
+        # takes the default for this interactivity (see config); an explicit
+        # value is the runtime's own default, still overridden by
+        # CHARON_TASK_TIME_BUDGET_SECONDS.
+        self._time_budget_default = time_budget_seconds
         self._guard_reason = ""
         self._loop_guard = None
         self.max_turns = max_turns
@@ -934,7 +940,7 @@ class ConversationEngine:
         base = self.system_prompt + '\n\n' + TASK_GUIDANCE
         if not self.interactive:
             base += '\n' + NON_INTERACTIVE_GUIDANCE
-        budget = config.task_time_budget_seconds(self.interactive)
+        budget = config.task_time_budget_seconds(self.interactive, self._time_budget_default)
         if budget:
             base += f'\nTask time budget: {budget} seconds per submission. Preserve partial work before it expires.'
         guidance = getattr(self, '_recall_guidance', None)
@@ -1316,7 +1322,7 @@ class ConversationEngine:
         # Stop only a wedged submission: no progress for the idle window, or
         # (unattended runs) the wall-clock cap. Loops that do make "progress"
         # are LoopGuard's job.
-        wall = config.task_time_budget_seconds(self.interactive)
+        wall = config.task_time_budget_seconds(self.interactive, self._time_budget_default)
         idle = config.task_idle_timeout_seconds()
         progress = {'at': time.monotonic(), 'tools': 0}
 

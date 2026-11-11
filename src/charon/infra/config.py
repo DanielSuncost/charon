@@ -428,16 +428,20 @@ def stagnant_tool_calls() -> int:
 UNATTENDED_TASK_TIME_BUDGET_SECONDS = 1800
 
 
-def task_time_budget_seconds(interactive: bool = False) -> int:
+def task_time_budget_seconds(interactive: bool = False, default: int | None = None) -> int:
     """Wall-clock cap on one submission in seconds; 0 means none.
 
-    CHARON_TASK_TIME_BUDGET_SECONDS sets it for every session. Unset,
-    unattended runs get 1800s, since nobody is there to stop a runaway loop,
-    and interactive sessions get no cap: the user can interrupt, and the
-    no-progress guard stops a turn that is genuinely wedged.
+    CHARON_TASK_TIME_BUDGET_SECONDS sets it for every session. Unset, a
+    caller's own ``default`` applies (a runtime that bounds its passes some
+    other way), else unattended runs get 1800s, since nobody is there to
+    stop a runaway loop, and interactive sessions get no cap: the user can
+    interrupt, and the no-progress guard stops a turn that is genuinely
+    wedged.
     """
     if os.environ.get('CHARON_TASK_TIME_BUDGET_SECONDS', '').strip():
         return max(0, _get_int('CHARON_TASK_TIME_BUDGET_SECONDS', 0))
+    if default is not None:
+        return max(0, int(default))
     return 0 if interactive else UNATTENDED_TASK_TIME_BUDGET_SECONDS
 
 

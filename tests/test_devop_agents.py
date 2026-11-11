@@ -44,3 +44,41 @@ def test_ios_lanes_come_from_an_ios_project_or_an_explicit_greenfield_request(tm
     assert 'Native Interface' in _titles('Build an iOS app for habit tracking', empty)
     # The project-specific Pomemo lanes are gone.
     assert not any('Speech' in t for t in _titles('Build an iOS app', empty))
+
+
+def _devop_engine(tmp_path, monkeypatch):
+    from charon.context import system_prompt_builder
+    from charon.devop import devop_agents
+    from charon.providers import ModelInfo, StreamDelta, model_registry, worker_provider
+
+    class Provider:
+        async def stream(self, **kwargs):
+            yield StreamDelta(type='done', text='{}')
+
+    model = ModelInfo(provider='mock', model_id='mock', context_window=100_000)
+    monkeypatch.setattr(worker_provider, 'request_worker_provider_for_background_flow', lambda *a, **k: {'ok': True})
+    monkeypatch.setattr(model_registry, 'get_shade_provider_and_model', lambda *a, **k: (Provider(), model, True))
+    monkeypatch.setattr(system_prompt_builder, 'build_system_prompt', lambda **k: 'base prompt')
+    engine, _ = devop_agents.create_devop_engine(
+        tmp_path, tmp_path, agent={'id': 'AG-1', 'name': 'impl'}, role='implementer', operation_id='op-1')
+    return engine
+
+
+def test_devop_engine_withholds_clarify_through_the_interactive_flag(tmp_path, monkeypatch):
+    from charon.conversation.task_policy import NON_INTERACTIVE_GUIDANCE
+
+    monkeypatch.delenv('CHARON_TASK_TIME_BUDGET_SECONDS', raising=False)
+    engine = _devop_engine(tmp_path, monkeypatch)
+    assert engine.interactive is False
+    assert 'Clarify' not in {t['name'] for t in engine.tools}
+    assert 'Clarify' not in {t['name'] for t in engine._available_tools}
+    prompt = engine._get_system_prompt()
+    assert NON_INTERACTIVE_GUIDANCE in prompt
+    # No per-pass wall-clock cap, as before the change.
+    assert 'Task time budget' not in prompt
+
+
+def test_devop_time_budget_still_follows_the_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv('CHARON_TASK_TIME_BUDGET_SECONDS', '900')
+    engine = _devop_engine(tmp_path, monkeypatch)
+    assert 'Task time budget: 900 seconds' in engine._get_system_prompt()

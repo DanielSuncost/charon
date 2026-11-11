@@ -251,12 +251,16 @@ def create_devop_engine(
         runtime_role='background_agent',
         parent_agent_id=agent.get('parent_agent_id', ''),
         max_tokens=16384,
+        # A background process with nobody to answer: the interactive flag is
+        # the control for that. It withholds Clarify (from the tools and from
+        # ToolCatalog), rejects direct Clarify calls, adds the non-interactive
+        # guidance and disables browser-visibility prompts.
+        interactive=False,
+        # Passes are bounded by the operation controller and the idle and
+        # no-progress guards, so no per-pass wall-clock cap, as before.
+        # CHARON_TASK_TIME_BUDGET_SECONDS still overrides this.
+        time_budget_seconds=0,
     )
-    # Devop roles run in a background process with nobody to answer a
-    # clarifying question. Withhold Clarify by tool list, not via the
-    # interactive flag, which would also impose a wall-clock cap per pass.
-    engine._available_tools = [t for t in engine._available_tools if t.get('name') != 'Clarify']
-    engine.tools = [t for t in engine.tools if t.get('name') != 'Clarify']
     return engine, model
 
 

@@ -112,7 +112,7 @@ def test_stagnation_tracks_repeated_observations_not_argument_variations():
 
 def test_deadline_cancels_waiting_provider_and_records_incomplete(tmp_path, monkeypatch):
     from charon.infra import config
-    monkeypatch.setattr(config, 'task_time_budget_seconds', lambda interactive=False: 0.02)
+    monkeypatch.setattr(config, 'task_time_budget_seconds', lambda interactive=False, default=None: 0.02)
 
     class Waiting(Provider):
         closed = False
@@ -136,7 +136,7 @@ def test_deadline_cancels_waiting_provider_and_records_incomplete(tmp_path, monk
 def test_deadline_signals_running_tool_and_keeps_protocol_valid(tmp_path, monkeypatch):
     from charon.conversation import conversation_engine as module
     from charon.infra import config
-    monkeypatch.setattr(config, 'task_time_budget_seconds', lambda interactive=False: 0.02)
+    monkeypatch.setattr(config, 'task_time_budget_seconds', lambda interactive=False, default=None: 0.02)
 
     def slow(name, args, ctx):
         assert ctx.cancel_event.wait(timeout=2)
