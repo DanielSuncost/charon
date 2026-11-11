@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -112,6 +113,10 @@ class HttpxAnthropicProvider:
         self._clients = AsyncClientPool(timeout=self._timeout)
         self.last_request_metrics: dict[str, Any] = {}
         self._reported_inactive_cache = False
+        # Cleared after a 400 that rejects the request-level cache marker (a
+        # possibility on the OAuth path); later requests then cache tools and
+        # system only, through the block-level breakpoints.
+        self._request_level_cache = True
 
     async def aclose(self) -> None:
         await self._clients.aclose()
@@ -231,6 +236,29 @@ class HttpxAnthropicProvider:
         except Exception as e:
             _diag('httpx_anthropic', 'OAuth token refresh raised', error=e)
 
+    async def _send_with_cache_fallback(self, client, body: dict[str, Any], headers: dict[str, str]):
+        """Send the request; if a 400 names cache_control, retry once without
+        the request-level marker, keeping the block-level breakpoints.
+
+        Whether the request-level marker is accepted on the OAuth path is not
+        verifiable from the code. A rejection would fail every request
+        loudly, so it is handled here instead of being carried as a risk.
+        """
+        request = client.build_request('POST', ANTHROPIC_API_URL, json=body, headers=headers)
+        response = await client.send(request, stream=True)
+        if response.status_code != 400 or 'cache_control' not in body:
+            return response
+        raw = await response.aread()
+        if b'cache_control' not in raw:
+            return response  # an unrelated 400: reported by the caller as before
+        self._request_level_cache = False
+        body.pop('cache_control', None)
+        _diag('httpx_anthropic', 'request-level cache_control rejected; retrying with '
+              'block-level breakpoints only (tools and system stay cached)',
+              status=400, body=raw.decode('utf-8', 'replace')[:200])
+        request = client.build_request('POST', ANTHROPIC_API_URL, json=body, headers=headers)
+        return await client.send(request, stream=True)
+
     async def stream(
         self,
         messages: list[Message],
@@ -273,6 +301,8 @@ class HttpxAnthropicProvider:
             body['tools'] = tools
 
         apply_prompt_caching(body)
+        if not self._request_level_cache:
+            body.pop('cache_control', None)
 
         if thinking_level != 'off' and model.supports_thinking:
             budget = {'minimal': 1024, 'low': 4096, 'medium': 10000, 'high': 32000, 'xhigh': 100000, 'max': 100000, 'ultra': 100000}.get(thinking_level, 10000)
@@ -303,7 +333,8 @@ class HttpxAnthropicProvider:
                 'transport': 'http',
             }
             if client is not None:
-                async with client.stream('POST', ANTHROPIC_API_URL, json=body, headers=headers) as response:
+                response = await self._send_with_cache_fallback(client, body, headers)
+                async with _closing(response):
                     if response.status_code != 200:
                         error_body = await response.aread()
                         error_text = error_body.decode('utf-8', errors='replace')
@@ -437,6 +468,14 @@ class HttpxAnthropicProvider:
             yield delta
         except Exception as e:
             yield exception_error(e, prefix='Anthropic')
+
+
+@asynccontextmanager
+async def _closing(response):
+    try:
+        yield response
+    finally:
+        await response.aclose()
 
 
 def _convert_messages(messages: list[Message]) -> list[dict]:

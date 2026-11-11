@@ -229,3 +229,48 @@ def test_live_second_identical_request_reads_the_cache(tmp_path):
     print('live usage', json.dumps({'first': first, 'second': second}))
     assert first['cache_write_tokens'] + first['cache_read_tokens'] > 0, first
     assert second['cache_read_tokens'] > 0, second
+
+
+def test_rejected_request_level_marker_falls_back_to_block_breakpoints(tmp_path, monkeypatch):
+    """A 400 naming cache_control retries once without the request-level marker."""
+    bodies: list[dict] = []
+    replies = [
+        httpx.Response(400, json={'type': 'error', 'error': {
+            'type': 'invalid_request_error', 'message': 'cache_control: Extra inputs are not permitted'}}),
+        _text_reply('first'),
+        _text_reply('second'),
+    ]
+
+    async def send(self, request, *args, **kwargs):
+        bodies.append(json.loads(request.content))
+        reply = replies.pop(0)
+        if isinstance(reply, httpx.Response):
+            return httpx.Response(reply.status_code, content=reply.content, request=request)
+        return httpx.Response(200, content=reply, request=request)
+
+    monkeypatch.setattr(httpx.AsyncClient, 'send', send)
+    engine = _engine(tmp_path)
+    response, _ = asyncio.run(engine.submit_and_collect('hello'))
+    asyncio.run(engine.submit_and_collect('again'))
+
+    assert response == 'first'
+    assert 'cache_control' in bodies[0]
+    # Retry and every later request: no request-level marker, block breakpoints kept.
+    for body in bodies[1:]:
+        assert 'cache_control' not in body
+        assert body['tools'][-1]['cache_control'] == {'type': 'ephemeral'}
+        assert body['system'][-1]['cache_control'] == {'type': 'ephemeral'}
+    assert len(bodies) == 3
+
+
+def test_unrelated_400_is_reported_not_retried(tmp_path, monkeypatch):
+    bodies: list[dict] = []
+
+    async def send(self, request, *args, **kwargs):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(400, json={'error': {'message': 'max_tokens: too large'}}, request=request)
+
+    monkeypatch.setattr(httpx.AsyncClient, 'send', send)
+    _, events = asyncio.run(_engine(tmp_path).submit_and_collect('hello'))
+    assert len(bodies) == 1
+    assert any('max_tokens' in str(e.data) for e in events)
