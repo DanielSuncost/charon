@@ -151,3 +151,23 @@ def test_producers_share_cross_system_timeline(tmp_path, monkeypatch):
                          event_type='phase_completed')
     systems = {row['system'] for row in ot.timeline(tmp_path)}
     assert {'agent', 'shade'} <= systems
+
+
+def test_cost_prices_cache_reads_and_writes_at_cache_rates():
+    from charon.infra.orchestration_trace import estimate_cost_usd
+
+    # claude-sonnet: $3.00/MTok input, $15.00 output.
+    full = estimate_cost_usd('claude-sonnet-5-5', 1_000_000, 0)
+    assert full == 3.0
+    # 900k of the prompt read from cache (0.1x), 100k written (1.25x, 5m TTL).
+    cached = estimate_cost_usd('claude-sonnet-5-5', 1_000_000, 0,
+                               cache_read_tokens=900_000, cache_write_tokens=100_000)
+    assert cached == round(0.9 * 3.0 * 0.10 + 0.1 * 3.0 * 1.25, 6)
+    # The 1-hour TTL writes at 2x.
+    assert estimate_cost_usd('claude-sonnet-5-5', 100_000, 0, cache_write_tokens=100_000,
+                             cache_ttl='1h') == round(0.1 * 3.0 * 2.0, 6)
+    # Opus 5.5 reads at 0.05x.
+    opus = estimate_cost_usd('claude-opus-5-5', 1_000_000, 0, cache_read_tokens=1_000_000)
+    assert opus == round(estimate_cost_usd('claude-opus-5-5', 1_000_000, 0) * 0.05, 6)
+    # Callers that pass no cache split are priced exactly as before.
+    assert estimate_cost_usd('gpt-5.5', 1_000_000, 1_000_000) == 11.25

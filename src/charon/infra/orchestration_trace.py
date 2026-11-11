@@ -118,10 +118,51 @@ _PRICING: dict[str, tuple[float, float]] = {
 }
 
 
-def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+# Prompt-cache price multipliers on the base input rate.
+# Anthropic: reads ~0.1x (0.05x on Claude Opus 5.5); writes 1.25x for the
+# 5-minute TTL Charon uses, 2x for the 1-hour TTL. DeepSeek bills cache hits
+# at ~2% with no write premium. Other providers' read rates are not encoded
+# here, so their reads stay at the full rate (an over-estimate, as before).
+_CACHE_READ_MULTIPLIER: dict[str, float] = {
+    "claude": 0.10, "claude-opus-5-5": 0.05, "claude-opus-5.5": 0.05,
+    "deepseek": 0.02,
+}
+_CACHE_WRITE_MULTIPLIER = {"5m": 1.25, "1h": 2.0}
+
+
+def _longest_prefix(key: str, table) -> str:
+    best = ""
+    for pfx in table:
+        if key.startswith(pfx) and len(pfx) > len(best):
+            best = pfx
+    return best
+
+
+def estimate_cost_usd(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+    cache_ttl: str = "5m",
+) -> float:
     """Central cost estimate. Matches an exact tier key, else the longest model-id
-    prefix, else falls back to the 'fast' tier. Returns USD."""
+    prefix, else falls back to the 'fast' tier. Returns USD.
+
+    ``input_tokens`` is the whole prompt, Charon's convention, including any
+    ``cache_read_tokens`` and ``cache_write_tokens``. Those are priced at the
+    cache rates above; pricing every input token at the full rate overstated
+    a cached run's cost by up to ~10x and could stop a run with budget left.
+    """
     key = (model or "").strip().lower()
+    read = max(0, int(cache_read_tokens or 0))
+    write = max(0, int(cache_write_tokens or 0))
+    uncached = max(0, int(input_tokens or 0) - read - write)
+    is_claude = key.startswith("claude")
+    read_mult = _CACHE_READ_MULTIPLIER.get(_longest_prefix(key, _CACHE_READ_MULTIPLIER), 1.0)
+    write_mult = _CACHE_WRITE_MULTIPLIER.get(cache_ttl, 1.25) if is_claude else 1.0
+    effective_input = uncached + read * read_mult + write * write_mult
     rates = _PRICING.get(key)
     if rates is None:
         # longest prefix match against known families
@@ -131,7 +172,7 @@ def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> floa
                 best = pfx
         rates = _PRICING.get(best, _PRICING["fast"])
     in_rate, out_rate = rates
-    return round((input_tokens / 1_000_000.0) * in_rate
+    return round((effective_input / 1_000_000.0) * in_rate
                  + (output_tokens / 1_000_000.0) * out_rate, 6)
 
 
