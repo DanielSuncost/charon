@@ -201,6 +201,32 @@ def _expand_start_to_tool_exchange(
     return start
 
 
+def _chunked_eviction_start(
+    tokens: list[int], min_start: int, tail_start: int, chunk_tokens: int,
+) -> int:
+    """Snap an eviction boundary forward onto a fixed grid of token offsets.
+
+    ``min_start`` is the smallest start whose suffix fits the budget. Moving
+    it by one or two messages every turn changes the prompt's first message
+    every turn, so a provider's prompt cache can never be read. Instead the
+    boundary may only sit at the first item at or past a multiple of
+    ``chunk_tokens`` of cumulative history, counted from the oldest item.
+    Those offsets never change while items are only appended, so the start
+    stays put, and the prefix byte-identical, until history has grown by a
+    whole chunk. It never moves into the protected tail and never keeps
+    more than ``min_start`` would.
+    """
+    if min_start <= 0 or chunk_tokens <= 0:
+        return min_start
+    offset = sum(tokens[:min_start])
+    target = -(-offset // chunk_tokens) * chunk_tokens  # round up to the grid
+    start, cumulative = min_start, offset
+    while start < tail_start and cumulative < target:
+        cumulative += tokens[start]
+        start += 1
+    return start
+
+
 # ── Assembler ───────────────────────────────────────────────────────
 
 class ContextAssembler:
@@ -209,8 +235,10 @@ class ContextAssembler:
     Stateless — all data comes from db + ContextStore.
     """
 
-    def __init__(self, fresh_tail_count: int = 20):
+    def __init__(self, fresh_tail_count: int = 20, evict_chunk_tokens: int | None = None):
         self.fresh_tail_count = fresh_tail_count
+        # None: 10% of the token budget, at least 2,048 (see assemble()).
+        self.evict_chunk_tokens = evict_chunk_tokens
 
     def assemble(
         self,
@@ -275,6 +303,16 @@ class ContextAssembler:
                     break
             kept.reverse()
             selected_start = tail_start - len(kept)
+            # Evict in chunks so the prompt prefix stays byte-identical for
+            # several turns and a prompt cache can be read. 10% of the budget:
+            # one cache rewrite per ~chunk of growth (about ten typical turns
+            # on a 200k window), at the price of dropping at most that much
+            # older history earlier than strictly needed.
+            chunk = self.evict_chunk_tokens
+            if chunk is None:
+                chunk = max(2048, token_budget // 10)
+            selected_start = _chunked_eviction_start(
+                [r.tokens for r in resolved], selected_start, tail_start, chunk)
 
         # Combine and extract messages
         selected_start = _expand_start_to_tool_exchange(
