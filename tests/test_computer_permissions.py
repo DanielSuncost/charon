@@ -147,3 +147,27 @@ def test_pointer_needs_a_held_screenshot_and_a_grant():
             r = h.request_grant('desktop.input.pointer', target, 5)
             assert r['ok'] is False and 'never-allowed' in r['error']
         assert h.verify_audit()['audit']['ok'] is True
+
+
+@pytest.mark.skipif(not BUILT, reason='Charon Desktop helper not built')
+def test_keyboard_refuses_unsafe_text_unknown_shortcuts_and_unseen_fields():
+    with hp.DesktopHelper() as h:
+        for text in ('send this\n', 'a\tb', 'x\r', ''):
+            r = h.type_text('com.apple.Notes', 'c-0', 1, 1, text)
+            assert r['ok'] is False and ('control' in r['error'] or 'nothing' in r['error'])
+        assert 'at most 500' in h.type_text('com.apple.Notes', 'c-0', 1, 1, 'a' * 501)['error']
+        r = h.type_text('com.apple.Notes', 'c-0', 1, 1, 'hello')
+        assert r['ok'] is False and 'no held screenshot' in r['error']
+        for name in ('return', 'enter', 'cmd+v', 'paste', 'cmd+q', 'space'):
+            r = h.press_shortcut('com.apple.Notes', 'c-0', 1, 1, name)
+            assert r['ok'] is False and 'not an allowed shortcut' in r['error']
+        r = h.press_shortcut('com.apple.Notes', 'c-0', 1, 1, 'down')
+        assert r['ok'] is False and 'no held screenshot' in r['error']
+        for cls in ('desktop.input.text', 'desktop.input.shortcut'):
+            for target in ('com.apple.Terminal', 'com.apple.keychainaccess', 'ai.charon.desktop'):
+                assert h.request_grant(cls, target, 5)['ok'] is False
+        audit = h.verify_audit()
+        assert audit['audit']['ok'] is True
+    import pathlib
+    text = pathlib.Path(audit['path']).read_text()
+    assert 'send this' not in text and 'hello' not in text, 'typed text must never reach the audit'

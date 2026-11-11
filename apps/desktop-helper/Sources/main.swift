@@ -177,7 +177,7 @@ func handle(_ req: [String: Any], caller: CallerIdentity) -> [String: Any] {
         return ["id": id, "ok": true, "completed": r.completed, "total": r.total,
                 "interrupted": r.interrupted ?? NSNull(), "restored": r.restored]
     case "grant_request", "grants_list", "grant_narrow", "grant_revoke", "grants_revoke_all", "audit_verify",
-         "capture", "pointer_click", "pointer_scroll":
+         "capture", "pointer_click", "pointer_scroll", "type_text", "press_shortcut":
         return handleKernel(cmd, req, id: id, caller: caller)
     case "request_access":
         let grant = req["grant"] as? String ?? ""
@@ -292,6 +292,32 @@ func handleKernel(_ cmd: String, _ req: [String: Any], id: Any, caller: CallerId
         switch pointerVerb(kernel: k, target: target, captureId: req["capture"] as? String ?? "",
                            x: (req["x"] as? Double) ?? .nan, y: (req["y"] as? Double) ?? .nan,
                            action: action, requester: who) {
+        case .success(let r): return ["id": id, "ok": true, "result": r]
+        case .failure(let e): return ["id": id, "ok": false, "error": e.description]
+        }
+    case "type_text", "press_shortcut":
+        let bundle = req["target"] as? String ?? ""
+        let action: KeyboardAction
+        if cmd == "type_text" {
+            action = .text(req["text"] as? String ?? "")
+        } else {
+            let name = req["shortcut"] as? String ?? ""
+            guard let sc = shortcuts[name] else {
+                k.log("action_denied", ["class": Desktop.shortcut, "target": bundle, "args": ["name": String(name.prefix(40))],
+                                        "reason": "not an allowed shortcut", "caller": caller.json])
+                return ["id": id, "ok": false,
+                        "error": "not an allowed shortcut: \(name.prefix(40)) (allowed: \(shortcuts.keys.sorted().joined(separator: ", ")))"]
+            }
+            action = .shortcut(sc)
+        }
+        guard let target = Desktop.target(bundleId: bundle) else {
+            k.log("action_denied", ["class": action.classId, "target": bundle, "reason": "no installed app",
+                                    "caller": caller.json])
+            return ["id": id, "ok": false, "error": "no installed app with bundle id \(bundle)"]
+        }
+        switch keyboardVerb(kernel: k, target: target, captureId: req["capture"] as? String ?? "",
+                            x: (req["x"] as? Double) ?? .nan, y: (req["y"] as? Double) ?? .nan,
+                            action: action, requester: who) {
         case .success(let r): return ["id": id, "ok": true, "result": r]
         case .failure(let e): return ["id": id, "ok": false, "error": e.description]
         }

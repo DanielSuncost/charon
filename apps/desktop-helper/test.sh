@@ -7,5 +7,5 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 cp "$here/Tests/KernelTests.swift" "$tmp/main.swift"   # top-level code must live in main.swift
 swiftc -swift-version 5 -o "$tmp/kernel-tests" "$here"/Sources/Kernel/*.swift \
-    "$here"/Sources/Capture/CaptureCore.swift "$tmp/main.swift"
+    "$here"/Sources/Capture/CaptureCore.swift "$here"/Sources/Input/KeyboardCore.swift "$tmp/main.swift"
 "$tmp/kernel-tests"

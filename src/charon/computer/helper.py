@@ -241,6 +241,18 @@ class DesktopHelper:
         return self.call('pointer_scroll', target=target_bundle_id, capture=capture_id,
                          x=float(x), y=float(y), dx=dx, dy=dy)
 
+    def type_text(self, target_bundle_id: str, capture_id: str, x: float, y: float, text: str) -> dict:
+        """Type ``text`` into the focused text field, which must contain pixel
+        (x, y) of a held screenshot. No control characters (no Return, no
+        Tab); at most 500 characters. The audit records only the length."""
+        return self.call('type_text', target=target_bundle_id, capture=capture_id, x=float(x), y=float(y), text=text)
+
+    def press_shortcut(self, target_bundle_id: str, capture_id: str, x: float, y: float, shortcut: str) -> dict:
+        """Press one shortcut from the helper's fixed allowlist (arrows, tab,
+        escape, home/end, page up/down, backspace, select_all, undo, find)."""
+        return self.call('press_shortcut', target=target_bundle_id, capture=capture_id,
+                         x=float(x), y=float(y), shortcut=shortcut)
+
     def verify_audit(self) -> dict:
         return self.call('audit_verify')
 

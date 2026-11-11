@@ -80,15 +80,24 @@ func scanSecureFields(pid: pid_t, budget: Int = 6000, deadline: TimeInterval = 2
     }
     let app = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(app, 0.5)
-    let until = Date().addingTimeInterval(deadline)
-    var stack: [AXUIElement] = []
     var windows: CFTypeRef?
     let wr = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windows)
     if wr == .success, let ws = windows as? [AXUIElement] {
-        stack = ws
+        return scanSecureFields(roots: ws, budget: budget, deadline: deadline)
     } else if wr != .noValue {
         scan.complete = false; scan.problem = "the app's windows cannot be read (\(wr.rawValue))"; return scan
     }
+    return scan
+}
+
+/// The same scan from given roots (e.g. the one window being typed in).
+func scanSecureFields(roots: [AXUIElement], budget: Int = 6000, deadline: TimeInterval = 2.0) -> SecureFieldScan {
+    var scan = SecureFieldScan()
+    guard AXIsProcessTrusted() else {
+        scan.complete = false; scan.problem = "Accessibility is not granted"; return scan
+    }
+    let until = Date().addingTimeInterval(deadline)
+    var stack = roots
     let attrs = [kAXRoleAttribute, kAXSubroleAttribute, kAXPositionAttribute, kAXSizeAttribute,
                  kAXChildrenAttribute] as CFArray
     let secure = kAXSecureTextFieldSubrole as String

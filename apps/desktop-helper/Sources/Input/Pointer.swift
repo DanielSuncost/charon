@@ -17,9 +17,10 @@
 //   popup or another app's window that appeared over it is not clicked).
 // Human input trips the kill switch between any two events.
 //
-// Known gap: if a stop lands between a button's down and up, the up is
-// not posted (posting it would complete a click after the stop). The
-// button then reads as held until the user's own next click releases it.
+// Deliberate, not a bug to fix: if a stop lands between a button's down
+// and up, the up is not posted. Posting it would complete a click after
+// the stop, which is worse than a button that reads as held; the user's
+// own next click releases it.
 
 import AppKit
 import CoreGraphics

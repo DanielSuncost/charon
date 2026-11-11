@@ -273,6 +273,28 @@ check(held.find("g") != nil && held.find("nope") == nil, "a held capture can be 
 capClock = capClock.addingTimeInterval(heldCaptureSeconds)
 check(held.find("g") == nil, "an expired capture can no longer be acted on")
 
+// ── Keyboard core: what may be typed, which shortcuts exist
+check(textRefusal("hello, world 123 é 日本") == nil, "ordinary text may be typed")
+for bad in ["line\nbreak", "cr\r", "tab\there", "nul\u{0}", "esc\u{1B}", "ls\u{2028}", "ps\u{2029}", "pua\u{E000}"] {
+    check(textRefusal(bad) != nil, "refused: \(bad.debugDescription)")
+}
+check(textRefusal("") != nil, "empty text refused")
+check(textRefusal(String(repeating: "a", count: maxTypedCharacters)) == nil
+      && textRefusal(String(repeating: "a", count: maxTypedCharacters + 1)) != nil, "length capped at \(maxTypedCharacters)")
+for absent in ["return", "enter", "space", "paste", "cmd+v", "cut", "copy", "redo", "quit", "cmd+q", "close", "cmd+w", "save"] {
+    check(shortcuts[absent] == nil, "no \(absent) shortcut")
+}
+check(shortcuts.values.allSatisfy { ![0x24, 0x4C, 0x31].contains($0.keyCode) }, "no shortcut uses Return, Enter or Space")
+check(shortcuts.values.allSatisfy { !$0.flags.contains(.maskCommand) || ["select_all", "undo", "find"].contains($0.name) },
+      "Command appears only on select all, undo and find")
+check(shortcuts.values.allSatisfy { !$0.flags.contains(.maskCommand) || $0.letter != nil },
+      "every Command shortcut is checked against the keyboard layout")
+check(shortcuts["backspace"]!.needsTextFocus && shortcuts["select_all"]!.needsTextFocus
+      && !shortcuts["down"]!.needsTextFocus, "editing shortcuts need a text field")
+check(labelSuggestsSecret(["Enter the 6-digit verification code"]) != nil, "a verification code field is refused")
+check(labelSuggestsSecret(["Card number"]) != nil && labelSuggestsSecret(["PIN"]) != nil, "card number and PIN refused")
+check(labelSuggestsSecret(["Spinner", "Pinned notes", "Subject"]) == nil, "short patterns match whole words only")
+
 try? FileManager.default.removeItem(at: dir)
 print(failures == 0 ? "ALL PASSED" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)
