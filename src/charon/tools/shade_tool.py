@@ -461,27 +461,29 @@ def _run_shade(
                 )
                 if budget:
                     turn_tokens = 0
-                    turn_input_tokens = 0
-                    turn_output_tokens = 0
-                    turn_cache_read = 0
-                    turn_cache_write = 0
+                    turn_cost = 0.0
                     for event in events:
                         if event.type == 'message_end':
                             usage = event.data.get('usage') or {}
                             turn_tokens += int(usage.get('total_tokens', 0) or 0)
-                            turn_input_tokens += int(usage.get('input_tokens', 0) or 0)
-                            turn_output_tokens += int(usage.get('output_tokens', 0) or 0)
-                            turn_cache_read += int(usage.get('cache_read_tokens', 0) or 0)
-                            turn_cache_write += int(usage.get('cache_write_tokens', 0) or 0)
+                            # Price each request on its own: prompt-size tiers
+                            # and cache splits are per request.
+                            try:
+                                from charon.infra.orchestration_trace import estimate_cost_usd
+                                turn_cost += estimate_cost_usd(
+                                    model.model_id,
+                                    int(usage.get('input_tokens', 0) or 0),
+                                    int(usage.get('output_tokens', 0) or 0),
+                                    cache_read_tokens=int(usage.get('cache_read_tokens', 0) or 0),
+                                    cache_write_tokens=int(usage.get('cache_write_tokens', 0) or 0),
+                                )
+                            except Exception as exc:
+                                _diag('shade_tool', 'cost estimation failed for one request; cost accounting may undercount', error=exc, contract_id=contract_id)
                     if turn_tokens:
                         from charon.agents.topology_budget import record_usage, record_cost
                         record_usage(state_dir, budget, turn_tokens)
                         try:
-                            from charon.infra.orchestration_trace import estimate_cost_usd
-                            record_cost(state_dir, budget, estimate_cost_usd(
-                                model.model_id, turn_input_tokens, turn_output_tokens,
-                                cache_read_tokens=turn_cache_read, cache_write_tokens=turn_cache_write,
-                            ))
+                            record_cost(state_dir, budget, round(turn_cost, 6))
                         except Exception as exc:
                             _diag('shade_tool', 'cost estimation/recording failed; cost accounting may undercount', error=exc, contract_id=contract_id)
                 summary = response[:500] if response else 'Completed (no output)'
