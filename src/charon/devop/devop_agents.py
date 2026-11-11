@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -78,12 +79,88 @@ def _role_instruction(role: str, operation_id: str, workstream_slug: str = '', u
     )
 
 
-def infer_candidate_workstreams(prompt: str, limit: int = 5) -> list[dict[str, Any]]:
-    text = (prompt or '').strip()
-    lower = text.lower()
-    items: list[dict[str, Any]] = []
+# Workstream lane sets: (title, summary, priority, dependency slugs).
+# Data, not code paths, so a platform is a new entry rather than a branch.
+LANE_SETS: dict[str, list[tuple[str, str, float, list[str]]]] = {
+    'ios': [
+        ('App Logic and Services', 'Models, services and view models, with unit tests. Keep their public API stable for the interface lane.', 0.92, []),
+        ('Native Interface', 'SwiftUI views, navigation and assets, built on the logic lane\'s public API.', 0.88, []),
+        ('Testing and Integration', 'Build the combined app, run unit and UI tests, check the simulator UI, and record what only a physical device can confirm.', 0.86, ['app-logic-and-services', 'native-interface']),
+    ],
+    'web': [
+        ('Frontend UI', 'User-facing interface, flows, forms, and visual shell.', 0.88, []),
+        ('Backend API', 'Server-side endpoints, business logic, and service boundaries.', 0.90, []),
+        ('Data/Auth Layer', 'Persistence, schema, auth/session model, and access control.', 0.83, []),
+        ('Testing & Integration', 'Integration tests, end-to-end checks, and quality gates.', 0.86, ['frontend-ui', 'backend-api']),
+        ('Deployment & Environment', 'Runtime config, deployment path, and operational setup.', 0.62, ['backend-api']),
+    ],
+    'generic': [
+        ('Core Implementation', 'Primary implementation lane derived from the request.', 0.80, []),
+        ('Verification & Testing', 'Validation and regression checks for delivered work.', 0.78, ['core-implementation']),
+        ('Integration & Packaging', 'Assembly, polish, and delivery readiness.', 0.68, ['core-implementation']),
+    ],
+}
 
-    def add(title: str, summary: str, priority: float = 0.7, deps: list[str] | None = None) -> None:
+# Files at the project root (or one level down) that identify its platform.
+_IOS_MARKERS = ('*.xcodeproj', '*.xcworkspace')
+_OTHER_PLATFORM_MARKERS = (
+    'go.mod', 'Cargo.toml', 'pyproject.toml', 'setup.py', 'requirements.txt', 'package.json',
+    'pom.xml', 'build.gradle', 'build.gradle.kts', 'Gemfile', 'composer.json', 'mix.exs',
+    'CMakeLists.txt', 'Makefile', '*.csproj', '*.sln',
+)
+# Whole words only: substring tests matched "scenarios"/"kiosk" as iOS and
+# "approach"/"apply" as a web app.
+_IOS_WORDS = re.compile(r'\b(ios|swiftui|iphone|ipad|xcode)\b', re.I)
+# A web lane set includes a frontend lane, so "backend" or "API" alone (a Go
+# or Rust service) does not select it.
+_WEB_WORDS = re.compile(
+    r'\b(web ?apps?|website|frontend|front-end|react|vue|svelte|next\.js)\b', re.I,
+)
+
+
+def _project_platforms(project_root: Path | None) -> tuple[bool, bool]:
+    """(has iOS markers, has any other platform's markers) for the project."""
+    if project_root is None:
+        return False, False
+    root = Path(project_root)
+    if not root.is_dir():
+        return False, False
+
+    def found(patterns: tuple[str, ...]) -> bool:
+        for pattern in patterns:
+            if any(root.glob(pattern)) or any(root.glob(f'*/{pattern}')):
+                return True
+        return False
+
+    try:
+        return found(_IOS_MARKERS), found(_OTHER_PLATFORM_MARKERS)
+    except OSError:
+        return False, False
+
+
+def _lane_set_for(prompt: str, project_root: Path | None) -> str:
+    """Choose the lane set from the project first, the prompt second.
+
+    iOS lanes need an iOS project (an .xcodeproj or .xcworkspace), or an
+    explicit iOS request in a project with no platform markers at all (a new,
+    empty project). A repo of another platform never gets iOS lanes, whatever
+    the prompt says.
+    """
+    has_ios, has_other = _project_platforms(project_root)
+    if has_ios:
+        return 'ios'
+    if not has_other and _IOS_WORDS.search(prompt or ''):
+        return 'ios'
+    if _WEB_WORDS.search(prompt or ''):
+        return 'web'
+    return 'generic'
+
+
+def infer_candidate_workstreams(
+    prompt: str, limit: int = 5, project_root: Path | None = None,
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for title, summary, priority, deps in LANE_SETS[_lane_set_for(prompt, project_root)]:
         items.append({
             'workstream_id': '',
             'title': title,
@@ -91,23 +168,8 @@ def infer_candidate_workstreams(prompt: str, limit: int = 5) -> list[dict[str, A
             'summary': summary,
             'priority': priority,
             'recommended_action': 'execute_now',
-            'dependency_ids': list(deps or []),
+            'dependency_ids': list(deps),
         })
-
-    if 'ios' in lower or 'swiftui' in lower:
-        add('Speech and Tracking', 'Inspect existing audio/tracking implementation and partial work; implement fast local streaming, phonetic tolerance and regression tests. Own Services and ViewModels only.', 0.95)
-        add('Native Interface', 'Inspect web visual identity and existing SwiftUI work; improve ContentView, Views and UI assets only. Preserve engine public API.', 0.90)
-        add('Testing and Integration', 'After implementation, build combined app, run tests, inspect simulator UI and document physical-device acceptance gaps. Own project configuration, model tests and UI tests.', 0.88, deps=['speech-and-tracking', 'native-interface'])
-    elif 'web app' in lower or 'app' in lower or 'frontend' in lower or 'backend' in lower:
-        add('Frontend UI', 'User-facing interface, flows, forms, and visual shell.', 0.88)
-        add('Backend API', 'Server-side endpoints, business logic, and service boundaries.', 0.90)
-        add('Data/Auth Layer', 'Persistence, schema, auth/session model, and access control.', 0.83)
-        add('Testing & Integration', 'Integration tests, end-to-end checks, and quality gates.', 0.86, deps=['frontend-ui', 'backend-api'])
-        add('Deployment & Environment', 'Runtime config, deployment path, and operational setup.', 0.62, deps=['backend-api'])
-    else:
-        add('Core Implementation', 'Primary implementation lane derived from the request.', 0.80)
-        add('Verification & Testing', 'Validation and regression checks for delivered work.', 0.78, deps=['core-implementation'])
-        add('Integration & Packaging', 'Assembly, polish, and delivery readiness.', 0.68, deps=['core-implementation'])
 
     out = []
     seen = set()
@@ -295,7 +357,7 @@ def _run_operation_controller(
             from_agent_id=coordinator.get('id', ''),
             summary='Coordinator scouting workstreams',
         )
-        candidates = infer_candidate_workstreams(prompt, limit=max_workstreams_default)
+        candidates = infer_candidate_workstreams(prompt, limit=max_workstreams_default, project_root=project_root)
         save_candidate_workstreams(state_dir, operation_id, candidates)
         selected = [c for c in candidates if c.get('recommended_action') == 'execute_now'][:max_workstreams_default]
         if not selected:
