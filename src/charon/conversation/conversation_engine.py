@@ -289,12 +289,41 @@ def estimate_tokens(messages: list[Message]) -> int:
     return total_chars // 4
 
 
-def should_compact(messages: list[Message], context_window: int, threshold: float = 0.7) -> bool:
-    """Check if conversation needs compaction."""
+def prefix_overhead_tokens(system_prompt: str, tools: list[dict] | None) -> int:
+    """Estimate of the fixed part of every request: system prompt and tool schemas.
+
+    Same ~4 chars/token rule as estimate_tokens. Measured on the benchmark
+    and TUI paths this is roughly 2,100 to 3,400 tokens per request.
+    """
+    chars = len(system_prompt or '')
+    if tools:
+        chars += len(json.dumps(tools, separators=(',', ':')))
+    return chars // 4
+
+
+def should_compact(
+    messages: list[Message],
+    context_window: int,
+    threshold: float = 0.7,
+    overhead_tokens: int = 0,
+) -> bool:
+    """Check if conversation needs compaction.
+
+    The request is the messages plus the fixed prefix (``overhead_tokens``:
+    system prompt and tool schemas), so both count against the threshold.
+    Counting only the messages let a small-window model overflow before
+    compaction fired: on an 8,192-token window the trigger was 5,734 tokens
+    of messages, sent with ~2,100 more of prefix. Compaction can only shrink
+    the messages, so it is not triggered while they are a small share of the
+    window, which keeps a prefix bigger than the threshold from compacting
+    on every turn.
+    """
     if context_window <= 0:
         return False
-    estimated = estimate_tokens(messages)
-    return estimated > (context_window * threshold)
+    messages_tokens = estimate_tokens(messages)
+    if messages_tokens <= context_window * 0.1:
+        return False
+    return messages_tokens + max(0, overhead_tokens) > context_window * threshold
 
 
 def _extract_file_ops(messages: list[Message]) -> tuple[list[str], list[str], list[str]]:
@@ -1445,7 +1474,8 @@ class ConversationEngine:
                     except Exception as e:
                         yield _evt('compaction_error', error=str(e))
                 elif should_compact(
-                    self.messages, self.model.context_window, self.compact_threshold
+                    self.messages, self.model.context_window, self.compact_threshold,
+                    overhead_tokens=prefix_overhead_tokens(self._get_system_prompt(), self.tools),
                 ):
                     yield _evt('compaction_start')
                     try:

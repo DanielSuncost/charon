@@ -138,6 +138,19 @@ class TestTokenEstimation:
         msgs = [Message(role='user', content='hello')]
         assert not should_compact(msgs, context_window=100000, threshold=0.7)
 
+    def test_fixed_prefix_counts_toward_the_threshold(self):
+        # 8k local window: 4,000 tokens of messages fit under 0.7 * 8,192 alone,
+        # but not with the ~2,100-token system prompt and tool schemas.
+        msgs = [Message(role='user', content='y' * 16000)]
+        assert not should_compact(msgs, context_window=8192, threshold=0.7)
+        assert should_compact(msgs, context_window=8192, threshold=0.7, overhead_tokens=2100)
+
+    def test_prefix_alone_never_triggers_compaction(self):
+        # Compaction can only shrink messages; a big prefix must not make it
+        # fire every turn while the messages are a small share of the window.
+        msgs = [Message(role='user', content='y' * 2000)]
+        assert not should_compact(msgs, context_window=8192, threshold=0.7, overhead_tokens=6000)
+
 
 # ============================================================================
 # Engine - basic flow
