@@ -80,6 +80,7 @@ def _drain_think_buffer(text_buffer: str, in_think_block: bool) -> tuple[list[St
 
 import httpx  # noqa: E402 — deliberate layout: pure helpers above, deps below
 
+from charon.computer.destination import outgoing_capture_refusal  # noqa: E402
 from charon.providers import Message, ModelInfo, StreamDelta, ToolCall  # noqa: E402
 from charon.providers.http_client import AsyncClientPool  # noqa: E402
 from charon.providers.http_errors import exception_error, http_error  # noqa: E402
@@ -238,6 +239,11 @@ class HttpxOpenAIProvider:
         thinking_level: str = 'off',
         max_tokens: int = 16384,
     ) -> AsyncIterator[StreamDelta]:
+        # Desktop screenshots go only to the local model they were taken
+        # for (charon.computer.destination); checked before any request.
+        if refusal := outgoing_capture_refusal(messages, self, model, system_prompt):
+            yield StreamDelta(type='error', error=refusal)
+            return
 
         api_messages: list[dict[str, Any]] = [
             {'role': 'system', 'content': system_prompt},

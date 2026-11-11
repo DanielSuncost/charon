@@ -72,6 +72,7 @@ class CommandsMixin:
             {'cmd': '/persistent off', 'desc': 'Turn the persistent agent off and stop its runner if one is running'},
             {'cmd': '/persistent status', 'desc': 'Show whether the persistent agent is on and what its runner is doing'},
             {'cmd': '/persistent access', 'desc': 'Show which macOS grants the Charon Desktop helper holds for desktop control'},
+            {'cmd': '/persistent audit', 'desc': 'Check that the desktop helper\'s signed action log is intact'},
             {'cmd': '/persistent access request', 'desc': 'Ask macOS to prompt for each missing desktop grant (adds Charon Desktop to System Settings)'},
             {'cmd': '/monitor every hour <url>', 'desc': 'Create a recurring website health monitor'},
             {'cmd': '/automate every <n> <unit> check <url>', 'desc': 'Create a recurring automation for HTTP checking'},

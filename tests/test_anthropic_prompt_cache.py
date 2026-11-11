@@ -274,3 +274,35 @@ def test_unrelated_400_is_reported_not_retried(tmp_path, monkeypatch):
     _, events = asyncio.run(_engine(tmp_path).submit_and_collect('hello'))
     assert len(bodies) == 1
     assert any('max_tokens' in str(e.data) for e in events)
+
+
+def test_capture_check_runs_before_the_explicit_send_and_its_retry(monkeypatch):
+    """A local-only desktop capture never reaches the Anthropic transport,
+    including the cache_control retry path."""
+    import base64
+
+    from charon.computer import destination as d
+    from charon.providers import Message
+    from charon.providers.httpx_openai import HttpxOpenAIProvider
+
+    local = (HttpxOpenAIProvider(base_url='http://127.0.0.1:1234/v1', api_key='x'),
+             ModelInfo(provider='local', model_id='m'))
+    sealed = d.seal({'id': 'c-1', 'png_base64': base64.b64encode(b'\x89PNG cache-test').decode(),
+                     'width': 1, 'height': 1}, 'com.apple.Notes', d.destination_for(*local))
+    block = d.image_block(sealed, *local)
+    sent: list[int] = []
+
+    async def send(self, request, *args, **kwargs):
+        sent.append(1)  # a 400 naming cache_control would trigger the retry path
+        return httpx.Response(400, json={'error': {'message': 'cache_control: not permitted'}}, request=request)
+
+    monkeypatch.setattr(httpx.AsyncClient, 'send', send)
+    provider = HttpxAnthropicProvider(api_key='sk-ant-api-test')
+
+    async def run():
+        messages = [Message(role='user', content=[{'type': 'text', 'text': 'look'}, block])]
+        return [delta async for delta in provider.stream(messages, MODEL, 'system')]
+
+    deltas = asyncio.run(run())
+    assert deltas[0].type == 'error' and 'desktop screenshot' in deltas[0].error
+    assert sent == []
