@@ -32,6 +32,63 @@ ANTHROPIC_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
 ANTHROPIC_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 ANTHROPIC_VERSION = '2023-06-01'
 
+# Prompt caching. The 5-minute TTL: agent turns arrive well under 5 minutes
+# apart and every read refreshes the entry, so the 1-hour TTL would only
+# double the write cost.
+EPHEMERAL = {'type': 'ephemeral'}
+
+
+def apply_prompt_caching(body: dict[str, Any]) -> dict[str, Any]:
+    """Mark the cache breakpoints on an Anthropic Messages request body.
+
+    The API renders tools -> system -> messages and caches by exact prefix.
+    Three of the four allowed breakpoints are used:
+
+    1. the last tool definition: tools are stable across tasks even when an
+       agent's system prompt is rebuilt per task;
+    2. the last system block: the static per-session prefix;
+    3. top-level automatic caching: a breakpoint on the last cacheable block
+       that moves forward as the conversation grows, so each request reads
+       the accumulated history and writes only the latest turn.
+
+    Below the model's minimum cacheable prefix (512 to 4096 tokens depending
+    on the model) the API silently caches nothing; requests still succeed.
+    Tool dicts are copied, never mutated: they are shared with other
+    providers' payloads.
+    """
+    tools = body.get('tools')
+    if tools:
+        body['tools'] = [*tools[:-1], {**tools[-1], 'cache_control': EPHEMERAL}]
+    system = body.get('system')
+    if isinstance(system, str):
+        system = [{'type': 'text', 'text': system}] if system else []
+    if system:
+        system = [*system[:-1], {**system[-1], 'cache_control': EPHEMERAL}]
+        body['system'] = system
+    elif 'system' in body:
+        del body['system']
+    body['cache_control'] = EPHEMERAL
+    return body
+
+
+def usage_from_anthropic(usage: dict[str, Any]) -> dict[str, int]:
+    """Normalize Anthropic usage to Charon's convention.
+
+    Anthropic's ``input_tokens`` is only the uncached remainder. Everything
+    in Charon (context %, token totals) reads ``input_tokens`` as the whole
+    prompt, as OpenAI reports it, so it is reported here as the sum, with
+    the cache split alongside.
+    """
+    uncached = int(usage.get('input_tokens', 0) or 0)
+    read = int(usage.get('cache_read_input_tokens', 0) or 0)
+    write = int(usage.get('cache_creation_input_tokens', 0) or 0)
+    return {
+        'input_tokens': uncached + read + write,
+        'uncached_input_tokens': uncached,
+        'cache_read_tokens': read,
+        'cache_write_tokens': write,
+    }
+
 
 class HttpxAnthropicProvider:
     # Anthropic-style image blocks are this API's native shape and pass through.
@@ -50,6 +107,7 @@ class HttpxAnthropicProvider:
         self._auth_store_path = auth_store_path
         self._clients = AsyncClientPool(timeout=self._timeout)
         self.last_request_metrics: dict[str, Any] = {}
+        self._reported_inactive_cache = False
 
     async def aclose(self) -> None:
         await self._clients.aclose()
@@ -210,6 +268,8 @@ class HttpxAnthropicProvider:
         if tools:
             body['tools'] = tools
 
+        apply_prompt_caching(body)
+
         if thinking_level != 'off' and model.supports_thinking:
             budget = {'minimal': 1024, 'low': 4096, 'medium': 10000, 'high': 32000, 'xhigh': 100000, 'max': 100000, 'ultra': 100000}.get(thinking_level, 10000)
             body['thinking'] = {'type': 'enabled', 'budget_tokens': budget}
@@ -275,7 +335,7 @@ class HttpxAnthropicProvider:
 
                     current_tool: dict[str, Any] | None = None
                     tool_input_json = ''
-                    input_tokens = 0
+                    prompt_usage = usage_from_anthropic({})
                     output_tokens = 0
 
                     async for raw_line in response.aiter_lines():
@@ -298,7 +358,7 @@ class HttpxAnthropicProvider:
 
                         if event_type == 'message_start':
                             usage = event.get('message', {}).get('usage', {})
-                            input_tokens = usage.get('input_tokens', 0)
+                            prompt_usage = usage_from_anthropic(usage)
 
                         elif event_type == 'content_block_start':
                             block = event.get('content_block', {})
@@ -336,12 +396,29 @@ class HttpxAnthropicProvider:
                         elif event_type == 'message_delta':
                             usage = event.get('usage', {})
                             output_tokens = usage.get('output_tokens', 0)
+                            # Cumulative counts, when the delta carries them.
+                            if any(k in usage for k in ('input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')):
+                                merged = {
+                                    'input_tokens': usage.get('input_tokens', prompt_usage['uncached_input_tokens']),
+                                    'cache_read_input_tokens': usage.get('cache_read_input_tokens', prompt_usage['cache_read_tokens']),
+                                    'cache_creation_input_tokens': usage.get('cache_creation_input_tokens', prompt_usage['cache_write_tokens']),
+                                }
+                                prompt_usage = usage_from_anthropic(merged)
 
+                    if (
+                        prompt_usage['input_tokens'] and not prompt_usage['cache_read_tokens']
+                        and not prompt_usage['cache_write_tokens'] and not self._reported_inactive_cache
+                    ):
+                        # Silent in production otherwise: requests succeed at full price.
+                        self._reported_inactive_cache = True
+                        _diag('httpx_anthropic', 'prompt cache inactive: no cache read or write reported; '
+                              'the prefix may be below this model\'s minimum cacheable length',
+                              model=model.model_id, input_tokens=prompt_usage['input_tokens'])
                     yield StreamDelta(type='done', text=json.dumps({
                         'usage': {
-                            'input_tokens': input_tokens,
+                            **prompt_usage,
                             'output_tokens': output_tokens,
-                            'total_tokens': input_tokens + output_tokens,
+                            'total_tokens': prompt_usage['input_tokens'] + output_tokens,
                         },
                         'stop_reason': 'end_turn',
                     }))
@@ -384,13 +461,22 @@ def _convert_messages(messages: list[Message]) -> list[dict]:
                 result.append({'role': 'assistant', 'content': content_blocks})
         elif msg.role == 'tool_result':
             content = msg.content if isinstance(msg.content, str) else json.dumps(msg.content)
-            result.append({
-                'role': 'user',
-                'content': [{
-                    'type': 'tool_result',
-                    'tool_use_id': msg.tool_call_id,
-                    'content': content,
-                    'is_error': msg.is_error,
-                }],
-            })
+            block = {
+                'type': 'tool_result',
+                'tool_use_id': msg.tool_call_id,
+                'content': content,
+                'is_error': msg.is_error,
+            }
+            # One user message per run of results, the API's canonical shape
+            # for parallel tool use; it also keeps a long tool batch to one
+            # position for the cache's 20-block lookback.
+            previous = result[-1] if result else None
+            if (
+                previous is not None and previous['role'] == 'user'
+                and isinstance(previous['content'], list) and previous['content']
+                and all(b.get('type') == 'tool_result' for b in previous['content'])
+            ):
+                previous['content'].append(block)
+            else:
+                result.append({'role': 'user', 'content': [block]})
     return result

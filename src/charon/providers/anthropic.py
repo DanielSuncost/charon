@@ -5,7 +5,12 @@ import json
 import os
 from typing import Any, AsyncIterator
 
-from charon.providers import Message, ModelInfo, StreamDelta, ToolCall, Usage
+from charon.providers import Message, ModelInfo, StreamDelta, ToolCall
+from charon.providers.httpx_anthropic import (
+    _convert_messages as _convert_messages_shared,
+    apply_prompt_caching,
+    usage_from_anthropic,
+)
 
 try:
     import anthropic
@@ -64,6 +69,12 @@ class AnthropicProvider:
         if tools:
             kwargs['tools'] = tools
 
+        # Same breakpoints as the httpx provider. The top-level automatic
+        # breakpoint goes through extra_body so SDK versions without the
+        # parameter still send it.
+        apply_prompt_caching(kwargs)
+        kwargs['extra_body'] = {'cache_control': kwargs.pop('cache_control')}
+
         if thinking_level != 'off' and model.supports_thinking:
             budget = THINKING_BUDGET_MAP.get(thinking_level, 10000)
             kwargs['thinking'] = {'type': 'enabled', 'budget_tokens': budget}
@@ -110,18 +121,17 @@ class AnthropicProvider:
 
                 # Get final message for usage
                 final = await stream.get_final_message()
-                usage = Usage(
-                    input_tokens=final.usage.input_tokens,
-                    output_tokens=final.usage.output_tokens,
-                    cache_read_tokens=getattr(final.usage, 'cache_read_input_tokens', 0) or 0,
-                    cache_write_tokens=getattr(final.usage, 'cache_creation_input_tokens', 0) or 0,
-                    total_tokens=final.usage.input_tokens + final.usage.output_tokens,
-                )
+                # The cache fields were read here before but never emitted.
+                prompt_usage = usage_from_anthropic({
+                    'input_tokens': final.usage.input_tokens,
+                    'cache_read_input_tokens': getattr(final.usage, 'cache_read_input_tokens', 0),
+                    'cache_creation_input_tokens': getattr(final.usage, 'cache_creation_input_tokens', 0),
+                })
                 yield StreamDelta(type='done', text=json.dumps({
                     'usage': {
-                        'input_tokens': usage.input_tokens,
-                        'output_tokens': usage.output_tokens,
-                        'total_tokens': usage.total_tokens,
+                        **prompt_usage,
+                        'output_tokens': final.usage.output_tokens,
+                        'total_tokens': prompt_usage['input_tokens'] + final.usage.output_tokens,
                     },
                     'stop_reason': final.stop_reason,
                 }))
@@ -139,38 +149,5 @@ class AnthropicProvider:
 
 
 def _convert_messages(messages: list[Message]) -> list[dict]:
-    """Convert Charon messages to Anthropic API format."""
-    result = []
-    for msg in messages:
-        if msg.role == 'user':
-            if isinstance(msg.content, str):
-                result.append({'role': 'user', 'content': msg.content})
-            else:
-                result.append({'role': 'user', 'content': msg.content})
-        elif msg.role == 'assistant':
-            content_blocks = []
-            if msg.thinking:
-                content_blocks.append({'type': 'thinking', 'thinking': msg.thinking})
-            if isinstance(msg.content, str) and msg.content:
-                content_blocks.append({'type': 'text', 'text': msg.content})
-            for tc in msg.tool_calls:
-                content_blocks.append({
-                    'type': 'tool_use',
-                    'id': tc.id,
-                    'name': tc.name,
-                    'input': tc.arguments,
-                })
-            if content_blocks:
-                result.append({'role': 'assistant', 'content': content_blocks})
-        elif msg.role == 'tool_result':
-            content = msg.content if isinstance(msg.content, str) else json.dumps(msg.content)
-            result.append({
-                'role': 'user',
-                'content': [{
-                    'type': 'tool_result',
-                    'tool_use_id': msg.tool_call_id,
-                    'content': content,
-                    'is_error': msg.is_error,
-                }],
-            })
-    return result
+    """Convert Charon messages to Anthropic API format (shared with httpx)."""
+    return _convert_messages_shared(messages)
