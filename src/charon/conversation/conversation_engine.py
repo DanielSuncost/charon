@@ -28,7 +28,7 @@ from charon.providers import (
     Message, ModelInfo, Provider, ToolCall, Usage, get_provider,
 )
 from charon.tools import ALL_TOOL_DEFS, ToolContext, ToolResult, execute_tool
-from charon.tools.tool_catalog import CORE_TOOL_NAMES, PROCESS_FOLLOWUP_TOOL_NAMES
+from charon.tools.tool_catalog import CORE_TOOL_NAMES, FOLLOWUP_TOOL_NAMES, PROCESS_FOLLOWUP_TOOL_NAMES
 from charon.memory.execution_memory import record_tool_event
 from charon.conversation.task_policy import LoopGuard, TASK_GUIDANCE, NON_INTERACTIVE_GUIDANCE
 from charon.infra import config
@@ -591,6 +591,11 @@ class ConversationEngine:
         self._tool_lock = threading.RLock()
         if config.adaptive_tools():
             initial_names = set(CORE_TOOL_NAMES)
+            # Tool-loading rule (charon.tools.tool_catalog): on a caching
+            # provider, token-only deferrals are loaded now so the tool list,
+            # which leads the cached prefix, does not change mid-session.
+            if getattr(self.provider, 'caches_prompt_prefix', False):
+                initial_names.update(FOLLOWUP_TOOL_NAMES)
             domain_text = ' '.join((
                 self.operation_domain,
                 self.operation_role,

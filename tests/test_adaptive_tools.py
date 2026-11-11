@@ -129,3 +129,26 @@ def test_tool_names_activate_only_as_whole_words(tmp_path):
 
     asyncio.run(engine.submit_and_collect('use the X tool to check my bookmarks'))
     assert 'X' in provider.tool_names[-1]
+
+
+class CachingCapturingProvider(CapturingProvider):
+    caches_prompt_prefix = True
+
+
+def test_caching_provider_loads_followups_up_front_and_keeps_the_list_fixed(tmp_path, monkeypatch):
+    from charon import tools
+    from charon.tools import ToolResult
+
+    monkeypatch.setenv('CHARON_SKIP_APPROVAL', '1')
+    monkeypatch.setitem(
+        tools.TOOL_EXECUTORS, 'RunProcess', lambda params, ctx: ToolResult(content='started proc-1'),
+    )
+    provider = CachingCapturingProvider()
+    engine = ConversationEngine(provider, MODEL, project_root=tmp_path, interactive=False)
+
+    asyncio.run(engine.submit_and_collect('Fix the parser bug'))
+    first = list(provider.tool_names[0])
+    assert {'ProcessStatus', 'ProcessLogs', 'StopProcess'} <= set(first)
+    # A process-related message changes nothing: the list was already complete.
+    asyncio.run(engine.submit_and_collect('Is the dev server still running?'))
+    assert provider.tool_names[-1] == first
