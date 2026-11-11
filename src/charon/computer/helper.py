@@ -23,7 +23,6 @@ confirms that from the helper's own report and refuses otherwise.
 """
 from __future__ import annotations
 
-import base64
 import json
 import os
 import select
@@ -91,6 +90,15 @@ def verify(app: Path) -> dict:
     elif want_team and info['team'] != want_team:
         info['error'] = f'the helper is signed by team {info["team"]}, not the required {want_team}'
     return info
+
+
+def _destination_terms(destination) -> dict:
+    """The terms a capture states. Only a minted, local Destination has any;
+    everything else raises CaptureRefused before the helper is asked."""
+    from charon.computer.destination import CaptureRefused, Destination
+    if not isinstance(destination, Destination):
+        raise CaptureRefused('a capture needs a destination from destination_for(provider, model)')
+    return destination.terms()
 
 
 class DesktopHelper:
@@ -187,11 +195,14 @@ class DesktopHelper:
     # ── Grants: the caller may ask, narrow and revoke; only the user grants.
 
     def request_grant(self, action_class: str, target_bundle_id: str, minutes: float, reason: str = '',
-                      terms: dict | None = None) -> dict:
+                      destination=None) -> dict:
         """Ask the user, in the helper's own dialog, for a time-boxed grant.
         Returns the reply; ``ok`` is False unless the user clicked Allow."""
+        terms = {}
+        if destination is not None or action_class == 'desktop.observe.screen':
+            terms = _destination_terms(destination)
         return self.call('grant_request', **{'class': action_class, 'target': target_bundle_id,
-                                             'minutes': minutes, 'reason': reason, 'terms': terms or {}})
+                                             'minutes': minutes, 'reason': reason, 'terms': terms})
 
     def grants(self) -> list[dict]:
         return list(self.call('grants_list').get('grants') or [])
@@ -205,17 +216,18 @@ class DesktopHelper:
     def revoke_all(self) -> dict:
         return self.call('grants_revoke_all')
 
-    def capture(self, target_bundle_id: str, terms: dict | None = None) -> dict:
-        """A redacted screenshot of the target app's own windows, if a live
-        ``desktop.observe.screen`` grant with the same stated ``terms`` covers
-        it and every guard passes. Use ``destination.capture_for``, which
-        states the destination; the helper refuses a capture without one.
-        On success ``reply['capture']['png']`` holds the PNG bytes, in memory
-        only; this module never writes them to disk."""
-        reply = self.call('capture', target=target_bundle_id, terms=terms or {})
+    def capture(self, target_bundle_id: str, destination) -> dict:
+        """A redacted screenshot of the target app's own windows, for a
+        request to ``destination`` (from ``destination.destination_for``),
+        which must be local: otherwise the helper is not asked. On success
+        ``reply['capture']`` is a ``SealedCapture``; only
+        ``destination.image_block`` releases its pixels. Nothing is written
+        to disk."""
+        from charon.computer.destination import seal
+        reply = self.call('capture', target=target_bundle_id, terms=_destination_terms(destination))
         cap = reply.get('capture')
-        if reply.get('ok') and cap:
-            cap['png'] = base64.b64decode(cap.pop('png_base64'))
+        if reply.get('ok') and isinstance(cap, dict):
+            reply['capture'] = seal(cap, target_bundle_id, destination)
         return reply
 
     def click(self, target_bundle_id: str, capture_id: str, x: float, y: float,

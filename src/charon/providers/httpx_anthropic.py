@@ -16,6 +16,7 @@ from typing import Any, AsyncIterator
 
 import httpx
 
+from charon.computer.destination import outgoing_capture_refusal
 from charon.providers import Message, ModelInfo, StreamDelta, ToolCall
 from charon.providers.http_client import AsyncClientPool
 from charon.providers.http_errors import exception_error, http_error
@@ -178,6 +179,11 @@ class HttpxAnthropicProvider:
         thinking_level: str = 'off',
         max_tokens: int = 16384,
     ) -> AsyncIterator[StreamDelta]:
+        # Desktop screenshots go only to the local model they were taken
+        # for (charon.computer.destination); checked before any request.
+        if refusal := outgoing_capture_refusal(messages, self, model, system_prompt):
+            yield StreamDelta(type='error', error=refusal)
+            return
         # Refresh token before every request
         await self._refresh_if_needed()
 

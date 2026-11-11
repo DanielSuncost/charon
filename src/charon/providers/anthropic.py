@@ -5,6 +5,7 @@ import json
 import os
 from typing import Any, AsyncIterator
 
+from charon.computer.destination import outgoing_capture_refusal
 from charon.providers import Message, ModelInfo, StreamDelta, ToolCall, Usage
 
 try:
@@ -41,6 +42,11 @@ class AnthropicProvider:
         thinking_level: str = 'off',
         max_tokens: int = 16384,
     ) -> AsyncIterator[StreamDelta]:
+        # Desktop screenshots go only to the local model they were taken
+        # for (charon.computer.destination); checked before any request.
+        if refusal := outgoing_capture_refusal(messages, self, model, system_prompt):
+            yield StreamDelta(type='error', error=refusal)
+            return
         if not HAS_ANTHROPIC:
             yield StreamDelta(type='error', error='anthropic package not installed. Run: pip install anthropic')
             return
