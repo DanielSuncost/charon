@@ -279,10 +279,6 @@ class HttpxCodexProvider:
     # Image blocks go out as Responses API input_image items (image_content.py).
     supports_image_input = True
 
-    # Requests reuse a cached prompt prefix: see the tool-loading rule in
-    # charon.tools.tool_catalog.
-    caches_prompt_prefix = True
-
     def __init__(self, api_key: str, refresh_token: str | None = None,
                  auth_store_path: str | None = None, timeout: float = 300.0):
         self._api_key = api_key

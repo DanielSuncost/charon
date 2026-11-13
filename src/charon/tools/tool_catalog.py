@@ -12,28 +12,37 @@ CORE_TOOL_NAMES = frozenset({
 
 # Tool-loading rule: prefix stability versus deferral.
 #
-# A provider that caches the prompt prefix (``caches_prompt_prefix``) renders
-# tools first, so any change to the tool list mid-session rewrites the whole
-# cached prefix: about 1.15x the current context in extra cost (a 1.25x write
-# where a 0.1x read would have been). An extra loaded tool costs only ~0.1x
-# its size per call once cached. A provider without caching pays every tool
-# in full on every call and, on a small local window, in context space.
+# Tools are rendered at the start of the prompt, so any change to the tool
+# list mid-session invalidates every prefix the serving side has reused.
+# What that costs differs in kind by provider, not just in degree:
+#   - Anthropic (explicit cache_control): ~1.15x the current context in
+#     tokens, a 1.25x write where a 0.1x read would have been.
+#   - local llama.cpp / LM Studio (KV-cache reuse): a cold re-read of the
+#     whole context. Measured 2026-11-11 on a 27B model: 137.1 s to first
+#     token for 16k tokens cold against 1.3 s when only a turn was appended,
+#     so ~4-5 min near a 32k window. That is past the OpenAI-compatible
+#     provider's 300 s read timeout, so the turn fails outright.
+# Deferring the follow-up tools saves ~186 tokens per call (measured with
+# scripts/measure_request_overhead.py). That only pays where the provider
+# reuses nothing and re-reads the whole prompt every call anyway.
 #
-# So, by provider:
-#   - caching provider:   tools deferred only to save tokens are loaded from
-#                         the start, and the list stays fixed.
-#   - no caching:         those tools are deferred until evidence they are
-#                         needed.
+# So, by provider (``reuses_prompt_prefix``, default True):
+#   - reuses a prefix (nearly all: Anthropic, OpenAI, Codex, DeepSeek,
+#     local llama.cpp servers): tools deferred only to save tokens are
+#     loaded from the start, and the list stays fixed.
+#   - shown to reuse nothing (opt out with reuses_prompt_prefix = False):
+#     those tools are deferred until evidence they are needed.
 #
 # This covers every tool deferred only for tokens (FOLLOWUP_TOOL_NAMES). It
 # does not cover the domain tools behind intent patterns and ToolCatalog:
 # loading all of them up front is the 58-tool registry, ~12,300 schema
 # tokens of mostly irrelevant tools that also crowd the model's tool choice.
-# Those loads stay intent-driven on every provider and, on a caching
-# provider, each one costs a single prefix rewrite, cheapest early.
+# Those loads stay intent-driven on every provider, and each one costs a
+# single prefix invalidation (a cold re-read on a local server), cheapest
+# early.
 
-# Managed-process follow-ups. Useless until a process exists; deferred on
-# non-caching providers until RunProcess runs or a message talks about
+# Managed-process follow-ups. Useless until a process exists; deferred only
+# on providers that reuse no prefix, until RunProcess runs or a message talks about
 # processes, servers or logs (which covers processes left by an earlier
 # session).
 PROCESS_FOLLOWUP_TOOL_NAMES = ('ProcessStatus', 'ProcessLogs', 'StopProcess')
