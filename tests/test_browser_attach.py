@@ -2,14 +2,28 @@
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 import time
+import urllib.request
 
 import pytest
 
 from charon.infra import diagnostics, tool_approval
 from charon.tools import ToolContext, _check_scope, browser_tool as b
 from tests.browser_support import LocalSite
+
+
+def test_local_site_serves_requests_while_browser_connection_is_idle():
+    site = LocalSite({'/': '<p>ready</p>'}).start()
+    try:
+        # An established connection without an HTTP request models Chromium's
+        # speculative sockets. It must not hold up another page/frame request.
+        with socket.create_connection(('127.0.0.1', site.port), timeout=2):
+            with urllib.request.urlopen(site.url('/'), timeout=2) as response:
+                assert response.read() == b'<p>ready</p>'
+    finally:
+        site.stop()
 
 
 @pytest.fixture

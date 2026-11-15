@@ -1106,6 +1106,8 @@ def create_checkpoint_from_engine(
 
     ``state_dir`` falls back to ``engine.state_dir``; engines constructed
     without one (to keep the lossless store inactive) must pass it explicitly.
+    The system prompt is the rendered model-visible prompt, including any
+    runtime and recall guidance added by the engine.
 
     Caveat: this captures ``engine.messages`` — the raw, never-compacted
     in-memory history. For an engine whose lossless store has already
@@ -1120,10 +1122,13 @@ def create_checkpoint_from_engine(
         str(t.get('name', '')) for t in (getattr(engine, 'tools', None) or [])
         if isinstance(t, dict)
     ]
+    render_prompt = getattr(engine, '_get_system_prompt', None)
     return create_checkpoint(
         state_dir=target_dir,
         messages=list(engine.messages),
-        system_prompt=engine.system_prompt,
+        # Capture what the model sees, including runtime/recall guidance,
+        # rather than only the base prompt from before request assembly.
+        system_prompt=render_prompt() if callable(render_prompt) else engine.system_prompt,
         source_provider=getattr(engine, 'provider_name', '') or '',
         source_model=getattr(getattr(engine, 'model', None), 'model_id', '') or '',
         session_id=session_id,
@@ -1249,6 +1254,7 @@ def apply_checkpoint_to_engine(
 
     Replaces the engine's system prompt with the checkpoint's verbatim (no
     [CONTEXT TRANSFER] block is added) and restores the full message history.
+    The prompt is marked complete so runtime guidance is not appended again.
     ``system_prompt_override`` substitutes a different prompt for scaffold
     ablations (memory-off / charter-stripped conditions). Sets
     ``engine.auto_compact = False``: a full-fidelity resume is incompatible
@@ -1276,8 +1282,11 @@ def apply_checkpoint_to_engine(
         engine.system_prompt = system_prompt_override
     else:
         prompt = checkpoint.get('system_prompt', '')
-        if prompt:
+        if isinstance(prompt, str):
             engine.system_prompt = prompt
+    # The checkpoint already contains the complete prompt. Reappending
+    # runtime guidance would duplicate it or change it on the target engine.
+    engine.verbatim_system_prompt = True
 
     engine.messages = restored
     engine.auto_compact = False

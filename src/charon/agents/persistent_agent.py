@@ -177,7 +177,10 @@ def audit(state_dir: Path, event: str, **fields: Any) -> None:
 def _process_command(pid: int) -> str | None:
     """The command line of ``pid`` as ps reports it, or None if unknown."""
     try:
-        out = subprocess.run(['ps', '-o', 'command=', '-p', str(int(pid))],
+        # Linux ps can truncate even captured output to a display width,
+        # hiding the runner marker at the end of a long command line.
+        # Two -w flags request unlimited width on both Linux and macOS.
+        out = subprocess.run(['ps', '-ww', '-o', 'command=', '-p', str(int(pid))],
                              capture_output=True, text=True, timeout=5)
     except Exception:
         return None

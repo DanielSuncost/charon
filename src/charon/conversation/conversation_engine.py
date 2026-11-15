@@ -503,6 +503,7 @@ class ConversationEngine:
         agent_id: str = '',
         agent_name: str = 'Charon',
         system_prompt: str = '',
+        verbatim_system_prompt: bool = False,
         project_context: str = '',
         state_dir: str | Path | None = None,
         operation_id: str = '',
@@ -530,6 +531,10 @@ class ConversationEngine:
         self.project_root = Path(project_root).resolve()
         self.agent_id = agent_id
         self.agent_name = agent_name
+        # Controlled experiments and full-fidelity checkpoints supply the
+        # entire model-visible prompt. Ordinary sessions still add task,
+        # interactivity, budget and recall guidance at request time.
+        self.verbatim_system_prompt = verbatim_system_prompt
         self.state_dir = Path(state_dir) if state_dir else None
         self.operation_id = operation_id
         self.operation_domain = operation_domain
@@ -938,6 +943,8 @@ class ConversationEngine:
 
     def _get_system_prompt(self) -> str:
         """Get system prompt with optional recall guidance appended."""
+        if self.verbatim_system_prompt:
+            return self.system_prompt
         base = self.system_prompt + '\n\n' + TASK_GUIDANCE
         if not self.interactive:
             base += '\n' + NON_INTERACTIVE_GUIDANCE

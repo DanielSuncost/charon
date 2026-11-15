@@ -153,6 +153,9 @@ def _make_engine(backbone: Backbone, system_prompt: str, max_tokens: int) -> Con
     engine = ConversationEngine(
         backbone.provider, backbone.model,
         system_prompt=system_prompt,
+        # The supplied scaffold is the independent variable, including in
+        # scaffold-off. Runtime guidance would contaminate that comparison.
+        verbatim_system_prompt=True,
         thinking_level='off',
         auto_compact=False,
         max_tokens=max_tokens,
