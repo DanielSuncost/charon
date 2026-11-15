@@ -117,6 +117,17 @@ def test_stop_never_signals_a_pid_that_is_not_our_runner(tmp_path):
         proc.kill()
 
 
+def test_runner_identity_survives_long_command_lines(monkeypatch):
+    monkeypatch.setenv('COLUMNS', '40')
+    proc = _sleeper(marker='padding-' * 64 + MARKER)
+    try:
+        assert pa.pid_is_ours(proc.pid, MARKER) is True
+        assert pa.pid_is_ours(proc.pid, 'some-other-program') is False
+    finally:
+        proc.kill()
+        proc.wait()
+
+
 # ── Status and band ────────────────────────────────────────────────
 
 def test_status_lines_say_on_off_and_runner_state(tmp_path):

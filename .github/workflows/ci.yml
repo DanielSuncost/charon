@@ -34,12 +34,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -m pip install pytest
 
       - name: Prove the package installs and imports
         run: |
-          python -m pip install -e .
+          python -m pip install -e '.[dev]'
           cd /tmp && python -c "import charon.charon_loop, charon.memory.memory_engine, charon.infra.config"
+
+      - name: Install Chromium and its system dependencies
+        run: python -m playwright install --with-deps chromium
 
       - name: Cache embedding model
         uses: actions/cache@v4
@@ -47,10 +49,25 @@ jobs:
           path: ~/.cache/huggingface
           key: hf-${{ runner.os }}-bge-base-en-v1.5
 
+      - name: Prepare and verify the embedding model
+        run: |
+          python - <<'PY'
+          from sentence_transformers import SentenceTransformer
+          model = SentenceTransformer('BAAI/bge-base-en-v1.5', device='cpu')
+          embedding = model.encode('CI embedding cache check')
+          assert embedding.shape == (768,)
+          PY
+
       - name: Run the full Python test suite
         env:
           # In-process embedding backend — no per-test worker subprocess.
           CHARON_EMBED_BACKEND: local
+          # The preceding step must populate a usable cache, including on a miss.
+          HF_HUB_OFFLINE: '1'
+          # Small embedding batches are slower with oversized CPU thread pools.
+          OMP_NUM_THREADS: '1'
+          OPENBLAS_NUM_THREADS: '1'
+          MKL_NUM_THREADS: '1'
         run: pytest -q tests/
 
   rust-build:

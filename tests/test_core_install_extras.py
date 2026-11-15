@@ -24,6 +24,10 @@ OPTIONAL_DEPENDENCIES = {
         "python-pptx>=1.0",
     },
 }
+DESKTOP_DEPENDENCIES = {
+    "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",
+    "pyobjc-framework-ApplicationServices>=10; sys_platform == 'darwin'",
+}
 BLOCKED_IMPORTS = {
     "sentence_transformers",
     "sqlite_vec",
@@ -45,7 +49,10 @@ def test_dependency_groups_keep_core_install_lightweight():
     extras = project["optional-dependencies"]
 
     assert project["dependencies"] == CORE_DEPENDENCIES
-    assert set(extras) == {*OPTIONAL_DEPENDENCIES, "all", "dev"}
+    assert set(extras) == {*OPTIONAL_DEPENDENCIES, "desktop", "all", "dev"}
+    # Native desktop integration is an explicit macOS extra; the portable
+    # full install and core import path must stay independent of PyObjC.
+    assert set(extras["desktop"]) == DESKTOP_DEPENDENCIES
     for name, requirements in OPTIONAL_DEPENDENCIES.items():
         assert set(extras[name]) == requirements
     assert set(extras["all"]) == set().union(*OPTIONAL_DEPENDENCIES.values())

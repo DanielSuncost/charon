@@ -3,13 +3,12 @@
 Two things every browser test needs: a deterministic local site (no network,
 no fixtures on disk — pages are inline strings served by a thread) and a guard
 that *skips* rather than fails when Playwright's Chromium is not installed
-(CI installs the playwright package but never runs ``playwright install``).
+in a local environment. The full CI job installs Chromium and its libraries.
 """
 from __future__ import annotations
 
 import http.server
 import os
-import socketserver
 import threading
 from pathlib import Path
 
@@ -28,7 +27,7 @@ class LocalSite:
 
     def __init__(self, pages: dict[str, str]):
         self.pages = pages
-        self._server: socketserver.TCPServer | None = None
+        self._server: http.server.ThreadingHTTPServer | None = None
         self.port = 0
 
     def start(self) -> 'LocalSite':
@@ -48,8 +47,9 @@ class LocalSite:
             def log_message(self, *args):  # keep pytest output clean
                 return None
 
-        socketserver.TCPServer.allow_reuse_address = True
-        self._server = socketserver.TCPServer(('127.0.0.1', 0), Handler)
+        # Chromium preopens idle sockets. Serving one connection at a time
+        # can leave an iframe's request queued behind such an idle socket.
+        self._server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         self.port = self._server.server_address[1]
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
         return self

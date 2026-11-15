@@ -58,6 +58,9 @@ SYSTEM = 'You are Nyx, a release engineer. Charter: never ship on Fridays.'
 
 def _engine(provider, model, **kwargs):
     kwargs.setdefault('system_prompt', SYSTEM)
+    # Like the IPMS harness, these tests specify the complete experimental
+    # scaffold. The default runtime-guidance path is tested separately below.
+    kwargs.setdefault('verbatim_system_prompt', True)
     kwargs.setdefault('thinking_level', 'off')
     kwargs.setdefault('auto_compact', False)
     return ConversationEngine(provider, model, **kwargs)
@@ -90,6 +93,35 @@ def test_two_turn_swap_preserves_turn1_facts(tmp_path):
     # The swap is silent: identical system prompt, no transfer block.
     assert call['system_prompt'] == SYSTEM
     assert '[CONTEXT TRANSFER]' not in call['system_prompt']
+
+
+@pytest.mark.parametrize('interactive', [True, False])
+def test_checkpoint_preserves_rendered_runtime_guidance(tmp_path, monkeypatch, interactive):
+    from charon.conversation.task_policy import TASK_GUIDANCE
+
+    monkeypatch.delenv('CHARON_TASK_TIME_BUDGET_SECONDS', raising=False)
+    provider_a = ScriptedProvider('mock-a', ['noted'])
+    engine_a = ConversationEngine(
+        provider_a, MODEL_A, system_prompt=SYSTEM, project_root=tmp_path,
+        interactive=interactive, auto_compact=False,
+    )
+    engine_a._recall_guidance = 'Recall the preserved release decision.'
+    _run(engine_a.submit_and_collect('Remember canary first.'))
+    original_prompt = provider_a.calls[0]['system_prompt']
+    assert TASK_GUIDANCE in original_prompt
+    assert engine_a._recall_guidance in original_prompt
+    ckpt = create_checkpoint_from_engine(engine_a, state_dir=tmp_path)
+    assert ckpt['system_prompt'] == original_prompt
+
+    provider_b = ScriptedProvider('mock-b', ['canary first'])
+    engine_b = ConversationEngine(
+        provider_b, MODEL_B, system_prompt='placeholder', project_root=tmp_path,
+        interactive=not interactive,
+    )
+    apply_checkpoint_to_engine(engine_b, ckpt)
+    _run(engine_b.submit_and_collect('What is the release decision?'))
+    assert provider_b.calls[0]['system_prompt'] == original_prompt
+    assert provider_b.calls[0]['system_prompt'].count(TASK_GUIDANCE) == 1
 
 
 def test_checkpoint_round_trip_fidelity(tmp_path):
