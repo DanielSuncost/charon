@@ -2241,8 +2241,13 @@ impl ChatState {
                     ("claude-haiku-5-5", "Haiku 5.5 — fastest"),
                     ("claude-fable-5-1", "Fable 5.1"),
                 ],
+                // Mirrors model_catalog.STATIC_MODELS['codex'], first entry
+                // highlighted. Effort ladders are left to /setup effort.
                 "codex" => vec![
-                    ("gpt-5.4", "GPT 5.4 — most capable (recommended)"),
+                    ("gpt-6-astra", "GPT-6 Astra — most capable"),
+                    ("gpt-5.6-sol", "GPT 5.6 Sol"),
+                    ("gpt-5.5", "GPT 5.5"),
+                    ("gpt-5.4", "GPT 5.4"),
                     ("gpt-5", "GPT 5"),
                 ],
                 _ => vec![],
