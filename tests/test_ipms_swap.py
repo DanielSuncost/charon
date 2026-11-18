@@ -147,6 +147,7 @@ def test_checkpoint_round_trip_fidelity(tmp_path):
     loaded = load_checkpoint(tmp_path, ckpt['id'])
     assert loaded is not None
     assert loaded['system_prompt'] == SYSTEM
+    assert loaded['system_prompt_format'] == 'rendered-v1'
     assert loaded['source']['model'] == 'model-a'
     assert loaded['agent']['charter'] == 'never ship on Fridays'
 
@@ -161,6 +162,42 @@ def test_checkpoint_round_trip_fidelity(tmp_path):
     stripped = checkpoint_messages(loaded, strip_thinking=True)
     assert stripped[1].thinking == ''
     assert stripped[1].content == 'Running the check.'
+
+
+@pytest.mark.parametrize('prompt_format', [None, 'unknown'])
+def test_checkpoint_legacy_prompt_receives_runtime_guidance(tmp_path, prompt_format):
+    from charon.conversation.task_policy import TASK_GUIDANCE
+
+    checkpoint = {'system_prompt': SYSTEM, 'messages': []}
+    if prompt_format is not None:
+        checkpoint['system_prompt_format'] = prompt_format
+    # Resuming a base prompt must re-enable rendering even on a target that
+    # previously used a verbatim experimental scaffold.
+    engine = _engine(ScriptedProvider('mock-b', []), MODEL_B,
+                     system_prompt='placeholder', project_root=tmp_path)
+    engine._recall_guidance = 'Recall the release policy.'
+    apply_checkpoint_to_engine(engine, checkpoint)
+    assert engine.system_prompt == SYSTEM
+    assert engine.verbatim_system_prompt is False
+    rendered = engine._get_system_prompt()
+    assert rendered.startswith(SYSTEM)
+    assert rendered.count(TASK_GUIDANCE) == 1
+    assert engine._recall_guidance in rendered
+
+
+@pytest.mark.parametrize('prompt_format', [None, 'rendered-v1'])
+@pytest.mark.parametrize('verbatim', [False, True])
+def test_checkpoint_empty_prompt_preserves_target_prompt(tmp_path, prompt_format, verbatim):
+    checkpoint = {'system_prompt': '', 'messages': []}
+    if prompt_format is not None:
+        checkpoint['system_prompt_format'] = prompt_format
+    engine = _engine(ScriptedProvider('mock-b', []), MODEL_B,
+                     verbatim_system_prompt=verbatim, project_root=tmp_path)
+    original_prompt = engine._get_system_prompt()
+    apply_checkpoint_to_engine(engine, checkpoint)
+    assert engine.system_prompt == SYSTEM
+    assert engine.verbatim_system_prompt is verbatim
+    assert engine._get_system_prompt() == original_prompt
 
 
 def test_system_prompt_override_for_ablations(tmp_path):
