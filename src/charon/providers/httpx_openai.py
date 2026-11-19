@@ -5,6 +5,7 @@ Uses httpx for async streaming — the only dependency beyond stdlib.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import uuid
@@ -204,6 +205,37 @@ async def _finalize_tool_call_arguments(
     return {}
 
 
+class _InactivityStream(httpx.AsyncByteStream):
+    """Bound silence at the wire, before HTTPX buffers bytes into SSE lines."""
+
+    def __init__(self, stream, *, prefill_timeout: float, idle_timeout: float):
+        self._stream = stream
+        self._prefill_timeout = prefill_timeout
+        self._idle_timeout = idle_timeout
+        self.generation_started = False
+
+    async def __aiter__(self):
+        iterator = self._stream.__aiter__()
+        loop = asyncio.get_running_loop()
+        last_byte_at = loop.time()
+        while True:
+            limit = self._idle_timeout if self.generation_started else self._prefill_timeout
+            try:
+                async with asyncio.timeout_at(last_byte_at + limit):
+                    chunk = await anext(iterator)
+            except StopAsyncIteration:
+                return
+            except TimeoutError as exc:
+                phase = 'Stream stalled' if self.generation_started else 'Waiting for model output (model may still be prefilling)'
+                raise httpx.ReadTimeout(f'{phase}: no bytes received for {limit:g}s') from exc
+            if chunk:
+                last_byte_at = loop.time()
+            yield chunk
+
+    async def aclose(self):
+        await self._stream.aclose()
+
+
 class HttpxOpenAIProvider:
 
     # Image blocks go out as Chat Completions image_url parts (image_content.py).
@@ -212,14 +244,24 @@ class HttpxOpenAIProvider:
         self,
         base_url: str | None = None,
         api_key: str | None = None,
-        timeout: float = 300.0,
+        timeout: float = 900.0,
         provider_name: str = 'openai-compatible',
+        *,
+        stream_idle_timeout: float = 60.0,
     ):
         self._base_url = (
             base_url or config.local_base_url() or config.DEFAULT_LOCAL_BASE_URL
         ).rstrip('/')
         self._api_key = api_key or config.local_api_key()
-        self._timeout = timeout
+        # Cold local prefill can take several minutes before any response.
+        # Connection setup stays short; once generation starts, bound byte
+        # inactivity separately without imposing a total generation-time limit.
+        # ConversationEngine's default 600s no-progress guard remains the
+        # effective prefill ceiling (CHARON_TASK_IDLE_SECONDS). The provider's
+        # 900s allowance deliberately does not bind first; raising it alone
+        # cannot extend a turn beyond the engine's no-progress limit.
+        self._timeout = httpx.Timeout(timeout, connect=10.0, write=30.0, pool=10.0)
+        self._stream_idle_timeout = stream_idle_timeout
         self._provider_name = provider_name
         # Optional httpx handler for tests; when set, requests are served by
         # an in-process MockTransport instead of a real network connection.
@@ -333,6 +375,12 @@ class HttpxOpenAIProvider:
                     json=body,
                     headers=headers,
                 ) as response:
+                    guarded_stream = _InactivityStream(
+                        response.stream,
+                        prefill_timeout=self._timeout.read,
+                        idle_timeout=self._stream_idle_timeout,
+                    )
+                    response.stream = guarded_stream
                     if response.status_code != 200:
                         error_body = await response.aread()
                         error_text = error_body.decode('utf-8', errors='replace')
@@ -412,6 +460,13 @@ class HttpxOpenAIProvider:
                         choice = choices[0]
                         delta = choice.get('delta', {})
                         finish_reason = choice.get('finish_reason') or finish_reason
+                        # Role-only events and heartbeats can precede a long
+                        # prefill. Only model output (or completion) ends that
+                        # allowance; the guard still resets on every raw byte.
+                        if finish_reason or any(delta.get(key) for key in (
+                            'content', 'reasoning_content', 'reasoning', 'tool_calls',
+                        )):
+                            guarded_stream.generation_started = True
 
                         # Text content — with inline <think> block detection
                         content = delta.get('content')
@@ -487,7 +542,15 @@ class HttpxOpenAIProvider:
             yield delta
         except httpx.TimeoutException as e:
             delta = exception_error(e, prefix='Request')
-            delta.error = f'Request timed out after {self._timeout}s'
+            if isinstance(e, httpx.ConnectTimeout):
+                delta.error = f'Connection timed out after {self._timeout.connect:g}s to {self._base_url}'
+            elif isinstance(e, httpx.ReadTimeout):
+                detail = str(e) or f'no response bytes for {self._timeout.read:g}s (model may still be prefilling)'
+                delta.error = f'Read timed out: {detail}'
+            elif isinstance(e, httpx.WriteTimeout):
+                delta.error = f'Request write timed out after {self._timeout.write:g}s'
+            elif isinstance(e, httpx.PoolTimeout):
+                delta.error = f'Waiting for an HTTP connection timed out after {self._timeout.pool:g}s'
             yield delta
         except Exception as e:
             yield exception_error(e)

@@ -1033,6 +1033,9 @@ def apply_transfer_to_engine(engine: Any, bundle: dict[str, Any]) -> None:
 # acceptable for text-only trajectories, which is all IPMS v1 runs.
 
 
+_RENDERED_PROMPT_FORMAT = 'rendered-v1'
+
+
 def _checkpoint_id() -> str:
     return f"ckpt-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
 
@@ -1060,6 +1063,8 @@ def create_checkpoint(
     ``max_tokens`` and ``tools`` (tool names) record the source engine's
     generation-time scaffold so a resume can detect scaffold drift that
     would masquerade as identity drift.
+    ``system_prompt`` must be the complete model-visible prompt; its format
+    marker distinguishes it from the base prompts in older checkpoints.
     """
     state_dir = Path(state_dir)
     checkpoint = {
@@ -1077,6 +1082,7 @@ def create_checkpoint(
             'tools': sorted(tools) if tools is not None else None,
         },
         'system_prompt': system_prompt,
+        'system_prompt_format': _RENDERED_PROMPT_FORMAT,
         'messages': _serialize_messages(messages, truncate=False),
         'agent': dict(agent) if agent else {},
     }
@@ -1252,9 +1258,10 @@ def apply_checkpoint_to_engine(
 ) -> int:
     """Silent full-fidelity resume: only the backbone differs.
 
-    Replaces the engine's system prompt with the checkpoint's verbatim (no
-    [CONTEXT TRANSFER] block is added) and restores the full message history.
-    The prompt is marked complete so runtime guidance is not appended again.
+    Restores the full message history and a nonempty checkpoint prompt (no
+    [CONTEXT TRANSFER] block is added). Only prompts marked rendered-v1 are
+    complete: legacy base prompts still receive the engine's runtime guidance.
+    An empty stored prompt preserves the engine's prompt and rendering mode.
     ``system_prompt_override`` substitutes a different prompt for scaffold
     ablations (memory-off / charter-stripped conditions). Sets
     ``engine.auto_compact = False``: a full-fidelity resume is incompatible
@@ -1278,15 +1285,12 @@ def apply_checkpoint_to_engine(
     if getattr(engine, 'has_lossless_store', False) and getattr(engine, 'agent_id', ''):
         _reconcile_store_for_resume(engine, restored)
 
-    if system_prompt_override is not None:
-        engine.system_prompt = system_prompt_override
-    else:
-        prompt = checkpoint.get('system_prompt', '')
-        if isinstance(prompt, str):
-            engine.system_prompt = prompt
-    # The checkpoint already contains the complete prompt. Reappending
-    # runtime guidance would duplicate it or change it on the target engine.
-    engine.verbatim_system_prompt = True
+    prompt = system_prompt_override if system_prompt_override is not None else checkpoint.get('system_prompt', '')
+    if isinstance(prompt, str) and (prompt or system_prompt_override is not None):
+        engine.system_prompt = prompt
+        # Only the explicit format marker promises a complete prompt. Older
+        # checkpoints stored a base prompt that still needs runtime guidance.
+        engine.verbatim_system_prompt = checkpoint.get('system_prompt_format') == _RENDERED_PROMPT_FORMAT
 
     engine.messages = restored
     engine.auto_compact = False

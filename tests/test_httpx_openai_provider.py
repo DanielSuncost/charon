@@ -10,6 +10,7 @@ silent result, potentially worse than an error. These tests exercise the
 three-step recovery (parse, lenient truncation repair, grammar-constrained
 retry against the same server) end to end, plus the plain streaming path.
 """
+import asyncio
 import json
 
 import httpx
@@ -85,6 +86,97 @@ async def test_stream_plain_text_passthrough():
     assert deltas[-1].type == 'done'
 
 
+class _DelayedStream(httpx.AsyncByteStream):
+    def __init__(self, chunks):
+        self.chunks = chunks
+        self.closed = False
+        self.finished = False
+
+    async def __aiter__(self):
+        try:
+            for delay, chunk in self.chunks:
+                await asyncio.sleep(delay)
+                yield chunk
+        finally:
+            self.finished = True
+
+    async def aclose(self):
+        self.closed = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('early_role', [False, True])
+async def test_stream_timeout_allows_prefill_and_resets_on_partial_bytes(early_role):
+    payload = _sse([{'choices': [{'delta': {'content': 'hello'}, 'finish_reason': 'stop'}]}])
+    # First model output takes longer than the ongoing idle limit, even if
+    # the server sends a role event before prefill finishes. The fragmented
+    # line and whole response also take longer than their respective limits,
+    # but each subsequent byte arrives well within the idle window.
+    chunks = [(0, b'data: {"choices":[{"delta":{"role":"assistant","content":""}}]}\n\n')] if early_role else []
+    wire = _DelayedStream(chunks + [
+        (0.3, b'data: {"choices":[{"delta":{"content":"Well, "}}]}\n\n'),
+    ] + [
+        (0.05, payload[i:i + 10]) for i in range(0, len(payload), 10)
+    ])
+    provider = HttpxOpenAIProvider(timeout=0.5, stream_idle_timeout=0.2)
+    # The response status/headers arrive immediately; the delay is entirely
+    # after headers, in the body iterator, as with a cold local prefill.
+    provider._mock_handler = lambda request: httpx.Response(200, stream=wire)
+    try:
+        deltas = await _run_stream(provider)
+        assert ''.join(d.text for d in deltas if d.type == 'text') == 'Well, hello'
+        assert deltas[-1].type == 'done'
+        assert not any(d.type == 'error' for d in deltas)
+        assert wire.closed
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('started', [False, True])
+async def test_stream_timeout_bounds_silence_and_closes_response(started):
+    chunks = [(0, b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n')] if started else []
+    # Empty chunks must not reset the last-received-byte deadline.
+    wire = _DelayedStream(chunks + [(0.02, b'')] * 50)
+    provider = HttpxOpenAIProvider(timeout=0.15, stream_idle_timeout=0.1)
+    provider._mock_handler = lambda request: httpx.Response(200, stream=wire)
+    try:
+        deltas = await _run_stream(provider)
+        assert [d.type for d in deltas] == (['text', 'error'] if started else ['error'])
+        assert deltas[-1].error_code == 'timeout'
+        assert deltas[-1].retryable is True
+        phase = 'Stream stalled' if started else 'Waiting for model output'
+        assert phase in deltas[-1].error
+        assert ('0.1s' if started else '0.15s') in deltas[-1].error
+        assert wire.closed and wire.finished
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('error, description', [
+    (httpx.ConnectTimeout, 'Connection timed out after 10s'),
+    (httpx.ReadTimeout, 'no response bytes for 900s'),
+])
+async def test_stream_timeout_distinguishes_connect_from_prefill(error, description):
+    def handler(request):
+        assert request.extensions['timeout'] == {
+            'connect': 10.0, 'read': 900.0, 'write': 30.0, 'pool': 10.0,
+        }
+        raise error('', request=request)
+
+    provider = HttpxOpenAIProvider()
+    provider._mock_handler = handler
+    try:
+        deltas = await _run_stream(provider)
+        assert [d.type for d in deltas] == ['error']
+        assert description in deltas[0].error
+        assert deltas[0].error_code == 'timeout'
+        assert deltas[0].retryable is True
+    finally:
+        await provider.aclose()
+
+
 @pytest.mark.asyncio
 async def test_stream_tool_call_with_valid_json_needs_no_repair():
     calls = {'n': 0}
@@ -136,6 +228,9 @@ async def test_stream_tool_call_malformed_json_recovered_via_constrained_decodin
         body = json.loads(request.content)
         request_bodies.append(body)
         if body.get('stream') is False:
+            assert request.extensions['timeout'] == dict.fromkeys(
+                ('connect', 'read', 'write', 'pool'), 30.0,
+            )
             assert body['response_format']['json_schema']['schema'] == WRITE_FILE_TOOL['input_schema']
             return httpx.Response(200, json={
                 'choices': [{'message': {'content': json.dumps({'path': 'a.txt', 'content': 'hi'})}}],
