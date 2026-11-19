@@ -2232,21 +2232,22 @@ impl ChatState {
                 }).collect())
                 .unwrap_or_default();
             let builtin: Vec<(&str, &str)> = match provider {
+                // Mirrors the current generation in model_catalog.STATIC_MODELS,
+                // which the backend normally sends (dashboard.py, cached_models).
+                // Keep it to current ids: a retired id fails outright.
                 "claude-code" => vec![
-                    ("claude-sonnet-4-6", "Sonnet 4.6 — latest, fast"),
-                    ("claude-opus-4-6", "Opus 4.6 — latest, most capable"),
-                    ("claude-sonnet-4-5", "Sonnet 4.5"),
-                    ("claude-opus-4-5", "Opus 4.5"),
-                    ("claude-opus-4-1", "Opus 4.1"),
+                    ("claude-opus-5-5", "Opus 5.5"),
                     ("claude-sonnet-5-5", "Sonnet 5.5"),
-                    ("claude-opus-4-20250514", "Opus 4.0"),
-                    ("claude-haiku-4-5", "Haiku 4.5 — fastest"),
-                    ("claude-3-7-sonnet-20250219", "Sonnet 3.7"),
-                    ("claude-3-5-sonnet-20241022", "Sonnet 3.5 v2"),
-                    ("claude-3-5-haiku-20241022", "Haiku 3.5"),
+                    ("claude-haiku-5-5", "Haiku 5.5 — fastest"),
+                    ("claude-fable-5-1", "Fable 5.1"),
                 ],
+                // Mirrors model_catalog.STATIC_MODELS['codex'], first entry
+                // highlighted. Effort ladders are left to /setup effort.
                 "codex" => vec![
-                    ("gpt-5.4", "GPT 5.4 — most capable (recommended)"),
+                    ("gpt-6-astra", "GPT-6 Astra — most capable"),
+                    ("gpt-5.6-sol", "GPT 5.6 Sol"),
+                    ("gpt-5.5", "GPT 5.5"),
+                    ("gpt-5.4", "GPT 5.4"),
                     ("gpt-5", "GPT 5"),
                 ],
                 _ => vec![],
